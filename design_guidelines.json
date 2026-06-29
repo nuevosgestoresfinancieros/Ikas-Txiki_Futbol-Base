@@ -1,0 +1,87 @@
+{
+  "theme": "Light",
+  "archetype": "6 (Vibrant Play) combined with 2 (Performance Pro)",
+  "design_rationale": "Ikas-Txiki is a grassroots youth football school. The design needs to be highly operational for managers but retain a vibrant, youthful, and sporty identity. We blend Archetype 6 (Vibrant Play - sky blue, grass green) for approachable interaction with Archetype 2 (Performance Pro - deep athletic navy, sharp contrasts) to ensure professional data legibility and command-center efficiency.",
+  "colors": {
+    "background": "#F8FAFC",
+    "surface": "#FFFFFF",
+    "sidebar_background": "#111827",
+    "sidebar_text": "#F3F4F6",
+    "primary": "#0EA5E9",
+    "primary_hover": "#0284C7",
+    "primary_foreground": "#FFFFFF",
+    "secondary": "#FACC15",
+    "secondary_foreground": "#111827",
+    "accent": "#22C55E",
+    "accent_foreground": "#FFFFFF",
+    "destructive": "#EF4444",
+    "destructive_foreground": "#FFFFFF",
+    "text_main": "#111827",
+    "text_muted": "#6B7280",
+    "border": "#E5E7EB",
+    "ring": "#0EA5E9"
+  },
+  "typography": {
+    "font_families": {
+      "headings": "'Outfit', sans-serif",
+      "body": "'Manrope', sans-serif"
+    },
+    "font_weights": {
+      "headings": "600, 700",
+      "body": "400, 500",
+      "labels": "700"
+    },
+    "hierarchy": {
+      "h1": "text-4xl tracking-tight font-bold text-slate-900",
+      "h2": "text-2xl tracking-tight font-bold text-slate-900",
+      "h3": "text-xl tracking-tight font-semibold text-slate-800",
+      "body": "text-base leading-relaxed text-slate-700",
+      "small": "text-sm text-slate-500",
+      "overline": "text-xs font-bold uppercase tracking-[0.2em] text-slate-500"
+    }
+  },
+  "layout": {
+    "spacing_scale": "Generous spacing. Use p-6, p-8 for module containers. p-4 for internal card padding.",
+    "border_radius": "Rounded-md (6px) or rounded-lg (8px) maximum for a structured, professional feel.",
+    "sidebar": "Fixed left sidebar, dark navy background (#111827). White icons and text (opacity-80 default, opacity-100 hover). Highlight active state with a left border or sky blue background tint.",
+    "dashboard_grid": "Control Room Grid. Base grid-cols-1 md:grid-cols-3 lg:grid-cols-4 with gap-6. Summary cards span 1 col, main charts span 2 cols.",
+    "forms": "Multi-step or tabbed sections (Personal, Health, Family) to avoid long scrolls. Large tap targets for inputs (min-h-[44px])."
+  },
+  "components": {
+    "buttons": "Big, clear buttons. Primary buttons use sky blue (#0EA5E9) with hover state darkening (#0284C7). Add subtle shadow-sm. Use rounded-md.",
+    "cards": "Subtle Neumorphism or Flat Solid. Background white, 1px subtle border (#E5E7EB), no shadow by default. On hover, slight lift (-translate-y-1) and shadow-md.",
+    "inputs": "Shadcn defaults customized with 44px height for better touch/click targets. Focus ring must be sky blue (ring-sky-500).",
+    "tables": "Dense rows, left-aligned text, clear sticky headers. Status badges for players (Active, Pending, Injured) using soft backgrounds and bold text (e.g., bg-green-100 text-green-800).",
+    "tabs": "Override default height to h-auto. Add generous padding for touch targets. Active tab marked with bottom border or solid sky blue background."
+  },
+  "interaction_and_motion": {
+    "hover_states": "All interactive elements must visibly change. Buttons darken, cards lift slightly.",
+    "transitions": "transition-all duration-200 ease-in-out for buttons and cards.",
+    "accessibility": "Ensure all interactive elements have data-testid attributes."
+  },
+  "media_and_icons": {
+    "icon_library": "lucide-react",
+    "images": {
+      "login_background": {
+        "url": "https://images.pexels.com/photos/26283685/pexels-photo-26283685.jpeg",
+        "description": "Young kids playing soccer on a green field. Use with a dark overlay (bg-black/50) for the login page."
+      },
+      "dashboard_banner": {
+        "url": "https://images.pexels.com/photos/33210166/pexels-photo-33210166.jpeg",
+        "description": "Top-down view of a soccer field. Use as an accent header image for the dashboard or empty states."
+      },
+      "team_placeholder": {
+        "url": "https://images.unsplash.com/photo-1526232761682-d26e03ac148e",
+        "description": "Children playing soccer. Can be cropped for a team photo placeholder."
+      }
+    }
+  },
+  "instructions_to_main_agent": [
+    "Ensure the sidebar uses a dark theme for contrast against the light content area.",
+    "All summary cards in the dashboard should use a 1px border and a subtle hover effect. Avoid deep drop shadows to keep the UI clean.",
+    "Player profiles must be tabbed (Personal, Health, Family, etc.) rather than a single long page.",
+    "Apply `data-testid` to all forms, buttons, and navigation links. Example: data-testid='sidebar-nav-players'.",
+    "Use 'Outfit' for headers and 'Manrope' for standard text. Import via Google Fonts.",
+    "Use Lucide icons for all module navigation."
+  ]
+}
