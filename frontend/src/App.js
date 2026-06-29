@@ -12,6 +12,11 @@ import Callups from "@/pages/Callups";
 import Payments from "@/pages/Payments";
 import Authorizations from "@/pages/Authorizations";
 import Settings from "@/pages/Settings";
+import Inscriptions from "@/pages/Inscriptions";
+import Trainings from "@/pages/Trainings";
+import Stats from "@/pages/Stats";
+import Communications from "@/pages/Communications";
+import Reports from "@/pages/Reports";
 
 function App() {
   return (
@@ -20,13 +25,18 @@ function App() {
         <Layout>
           <Routes>
             <Route path="/" element={<Dashboard />} />
+            <Route path="/inscripciones" element={<Inscriptions />} />
             <Route path="/jugadores" element={<Players />} />
             <Route path="/familias" element={<Families />} />
             <Route path="/equipos" element={<Teams />} />
+            <Route path="/entrenamientos" element={<Trainings />} />
             <Route path="/partidos" element={<Matches />} />
             <Route path="/convocatorias" element={<Callups />} />
+            <Route path="/estadisticas" element={<Stats />} />
             <Route path="/pagos" element={<Payments />} />
             <Route path="/autorizaciones" element={<Authorizations />} />
+            <Route path="/comunicacion" element={<Communications />} />
+            <Route path="/informes" element={<Reports />} />
             <Route path="/configuracion" element={<Settings />} />
           </Routes>
         </Layout>

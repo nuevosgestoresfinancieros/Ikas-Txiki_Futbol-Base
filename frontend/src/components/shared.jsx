@@ -24,6 +24,14 @@ const STATUS_COLORS = {
   confirmado: "bg-green-100 text-green-800",
   no_puede: "bg-red-100 text-red-800",
   cerrado: "bg-gray-200 text-gray-700",
+  recibida: "bg-sky-100 text-sky-800",
+  revisada: "bg-indigo-100 text-indigo-800",
+  aceptada: "bg-green-100 text-green-800",
+  rechazada: "bg-red-100 text-red-800",
+  presente: "bg-green-100 text-green-800",
+  justificada: "bg-amber-100 text-amber-800",
+  injustificada: "bg-red-100 text-red-800",
+  lesion: "bg-orange-100 text-orange-800",
 };
 
 export const StatusBadge = ({ status }) => {

@@ -2,20 +2,26 @@ import React, { useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, Users, Home, Shield, CalendarDays, ClipboardList,
-  Euro, FileSignature, Settings as SettingsIcon, Menu, X, Trophy
+  Euro, FileSignature, Settings as SettingsIcon, Menu, X, Trophy,
+  UserPlus, Dumbbell, BarChart3, MessageSquare, FileText
 } from "lucide-react";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 
 const navItems = [
   { to: "/", key: "dashboard", icon: LayoutDashboard, testid: "dashboard" },
+  { to: "/inscripciones", key: "inscriptions", icon: UserPlus, testid: "inscriptions" },
   { to: "/jugadores", key: "players", icon: Users, testid: "players" },
   { to: "/familias", key: "families", icon: Home, testid: "families" },
   { to: "/equipos", key: "teams", icon: Shield, testid: "teams" },
+  { to: "/entrenamientos", key: "trainings", icon: Dumbbell, testid: "trainings" },
   { to: "/partidos", key: "matches", icon: CalendarDays, testid: "matches" },
   { to: "/convocatorias", key: "callups", icon: ClipboardList, testid: "callups" },
+  { to: "/estadisticas", key: "stats", icon: BarChart3, testid: "stats" },
   { to: "/pagos", key: "payments", icon: Euro, testid: "payments" },
   { to: "/autorizaciones", key: "authorizations", icon: FileSignature, testid: "authorizations" },
+  { to: "/comunicacion", key: "communications", icon: MessageSquare, testid: "communications" },
+  { to: "/informes", key: "reports", icon: FileText, testid: "reports" },
   { to: "/configuracion", key: "settings", icon: SettingsIcon, testid: "settings" },
 ];
 
@@ -52,7 +58,7 @@ const SidebarContent = ({ onNavigate }) => {
           <p className="text-[11px] uppercase tracking-widest text-slate-400">Manager</p>
         </div>
       </div>
-      <nav className="flex-1 space-y-1 px-3 py-2">
+      <nav className="flex-1 space-y-1 px-3 py-2 overflow-y-auto">
         {navItems.map((item) => (
           <NavLink
             key={item.to}

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Users, UserPlus, ClipboardCheck, FileWarning, Euro, CalendarDays,
-  AlertTriangle, FileSignature, Shield, Trophy, ChevronRight
+  AlertTriangle, FileSignature, Shield, Trophy, ChevronRight, Dumbbell
 } from "lucide-react";
 import api from "@/api";
 import { useI18n } from "@/i18n";
@@ -87,6 +87,7 @@ const Dashboard = () => {
             <QuickAction testid="new-player" icon={UserPlus} label={t("newPlayer")} onClick={() => nav("/jugadores?new=1")} />
             <QuickAction testid="new-match" icon={CalendarDays} label={t("newMatch")} onClick={() => nav("/partidos?new=1")} />
             <QuickAction testid="new-callup" icon={ClipboardCheck} label={t("newCallup")} onClick={() => nav("/convocatorias?new=1")} />
+            <QuickAction testid="new-training" icon={Dumbbell} label={t("trainings")} onClick={() => nav("/entrenamientos?new=1")} />
             <QuickAction testid="new-auth" icon={FileSignature} label={t("newAuthorization")} onClick={() => nav("/autorizaciones?new=1")} />
             <QuickAction testid="new-payment" icon={Euro} label={t("newPayment")} onClick={() => nav("/pagos?new=1")} />
             <QuickAction testid="new-team" icon={Shield} label={t("newTeam")} onClick={() => nav("/equipos?new=1")} />
@@ -109,6 +110,26 @@ const Dashboard = () => {
                   </div>
                 </div>
                 <StatusBadge status={m.estado} />
+              </div>
+            ))}
+          </div>
+
+          {/* Upcoming trainings */}
+          <h2 className="font-heading text-lg font-bold text-slate-900 mt-8 mb-3">{t("upcomingTrainings")}</h2>
+          <div className="rounded-xl border border-slate-200 bg-white divide-y divide-slate-100">
+            {(!data.proximos_entrenamientos || data.proximos_entrenamientos.length === 0) ? (
+              <p className="p-6 text-sm text-slate-400">{t("noUpcomingTrainings")}</p>
+            ) : data.proximos_entrenamientos.map((tr) => (
+              <div key={tr.id} data-testid={`upcoming-training-${tr.id}`} className="flex items-center justify-between p-4 hover:bg-slate-50 cursor-pointer" onClick={() => nav("/entrenamientos")}>
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-accent/10 text-accent">
+                    <Dumbbell className="h-5 w-5" />
+                  </div>
+                  <div>
+                    <p className="font-semibold text-slate-800">{tr.equipo_nombre}</p>
+                    <p className="text-xs text-slate-500">{tr.fecha} · {tr.hora || "--:--"} · {tr.campo || "—"}</p>
+                  </div>
+                </div>
               </div>
             ))}
           </div>

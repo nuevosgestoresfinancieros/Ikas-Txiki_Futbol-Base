@@ -504,6 +504,229 @@ async def remove_authorization(auth_id: str):
     return await delete_doc("authorizations", auth_id)
 
 
+# ================= INSCRIPTIONS =================
+class Inscription(BaseModel):
+    tipo: str = "alta"  # alta, renovacion
+    nombre: str
+    apellidos: Optional[str] = ""
+    fecha_nacimiento: Optional[str] = None
+    email_formulario: Optional[str] = None
+    centro_escolar: Optional[str] = None
+    progenitor1_nombre: Optional[str] = None
+    progenitor1_telefono: Optional[str] = None
+    progenitor1_email: Optional[str] = None
+    progenitor2_nombre: Optional[str] = None
+    progenitor2_telefono: Optional[str] = None
+    progenitor2_email: Optional[str] = None
+    domicilio: Optional[str] = None
+    nueva_incorporacion: bool = True
+    estado: str = "recibida"  # recibida, revisada, aceptada, pendiente, rechazada
+    categoria: Optional[str] = None
+    player_id: Optional[str] = None  # set when converted to player
+    observaciones: Optional[str] = None
+
+
+def _detect_siblings(insc: dict, players: list) -> list:
+    keys = [insc.get("progenitor1_telefono"), insc.get("progenitor2_telefono"),
+            insc.get("progenitor1_email"), insc.get("progenitor2_email"), insc.get("domicilio")]
+    keys = [k for k in keys if k]
+    matches = []
+    for p in players:
+        pvals = [p.get("progenitor1_telefono"), p.get("progenitor2_telefono"),
+                 p.get("progenitor1_email"), p.get("progenitor2_email"), p.get("domicilio")]
+        pvals = [v for v in pvals if v]
+        if any(k in pvals for k in keys):
+            matches.append({"id": p["id"], "nombre": f"{p.get('nombre','')} {p.get('apellidos','')}".strip()})
+    return matches
+
+
+@api_router.post("/inscriptions")
+async def create_inscription(insc: Inscription):
+    data = insc.model_dump()
+    if data.get("fecha_nacimiento"):
+        data["categoria"] = compute_category(data["fecha_nacimiento"])
+    return await insert_doc("inscriptions", data)
+
+
+@api_router.get("/inscriptions")
+async def get_inscriptions(estado: Optional[str] = None):
+    query = {"estado": estado} if estado else {}
+    inscs = await list_docs("inscriptions", query)
+    players = await list_docs("players")
+    for i in inscs:
+        i["posibles_hermanos"] = _detect_siblings(i, players)
+    return inscs
+
+
+@api_router.put("/inscriptions/{insc_id}")
+async def edit_inscription(insc_id: str, insc: Inscription):
+    data = insc.model_dump()
+    if data.get("fecha_nacimiento"):
+        data["categoria"] = compute_category(data["fecha_nacimiento"])
+    return await update_doc("inscriptions", insc_id, data)
+
+
+@api_router.delete("/inscriptions/{insc_id}")
+async def remove_inscription(insc_id: str):
+    return await delete_doc("inscriptions", insc_id)
+
+
+@api_router.post("/inscriptions/{insc_id}/to-player")
+async def inscription_to_player(insc_id: str):
+    insc = await get_doc("inscriptions", insc_id)
+    if insc.get("player_id"):
+        raise HTTPException(status_code=400, detail="Ya tiene ficha de jugador")
+    pdata = Player(
+        nombre=insc.get("nombre"), apellidos=insc.get("apellidos") or "",
+        fecha_nacimiento=insc.get("fecha_nacimiento"), email_formulario=insc.get("email_formulario"),
+        centro_escolar=insc.get("centro_escolar"), domicilio=insc.get("domicilio"),
+        progenitor1_nombre=insc.get("progenitor1_nombre"), progenitor1_telefono=insc.get("progenitor1_telefono"),
+        progenitor1_email=insc.get("progenitor1_email"), progenitor2_nombre=insc.get("progenitor2_nombre"),
+        progenitor2_telefono=insc.get("progenitor2_telefono"), progenitor2_email=insc.get("progenitor2_email"),
+        nueva_incorporacion=insc.get("nueva_incorporacion", True), estado="pendiente_documentacion",
+        fecha_inscripcion=insc.get("created_at"),
+    ).model_dump()
+    if pdata.get("fecha_nacimiento"):
+        pdata["categoria"] = compute_category(pdata["fecha_nacimiento"])
+    player = await insert_doc("players", pdata)
+    await db.inscriptions.update_one({"id": insc_id}, {"$set": {"player_id": player["id"], "estado": "aceptada"}})
+    return player
+
+
+# ================= TRAININGS =================
+class AsistenciaItem(BaseModel):
+    player_id: str
+    estado: str = "presente"  # presente, justificada, injustificada, lesion
+
+
+class Training(BaseModel):
+    fecha: Optional[str] = None
+    hora: Optional[str] = None
+    equipo_id: Optional[str] = None
+    campo: Optional[str] = None
+    asistencia: List[AsistenciaItem] = []
+    ejercicios: Optional[str] = None
+    observaciones: Optional[str] = None
+
+
+@api_router.post("/trainings")
+async def create_training(tr: Training):
+    return await insert_doc("trainings", tr.model_dump())
+
+
+@api_router.get("/trainings")
+async def get_trainings(equipo_id: Optional[str] = None):
+    query = {"equipo_id": equipo_id} if equipo_id else {}
+    trs = await list_docs("trainings", query)
+    teams = {t["id"]: t["nombre"] for t in await list_docs("teams")}
+    for tr in trs:
+        tr["equipo_nombre"] = teams.get(tr.get("equipo_id"), "—")
+        a = tr.get("asistencia", [])
+        tr["presentes"] = len([x for x in a if x.get("estado") == "presente"])
+        tr["total_asistencia"] = len(a)
+    return trs
+
+
+@api_router.get("/trainings/{tr_id}")
+async def get_training(tr_id: str):
+    tr = await get_doc("trainings", tr_id)
+    players = {p["id"]: p for p in await list_docs("players")}
+    for item in tr.get("asistencia", []):
+        p = players.get(item["player_id"], {})
+        item["nombre"] = f"{p.get('nombre','')} {p.get('apellidos','')}".strip()
+    return tr
+
+
+@api_router.put("/trainings/{tr_id}")
+async def edit_training(tr_id: str, tr: Training):
+    return await update_doc("trainings", tr_id, tr.model_dump())
+
+
+@api_router.delete("/trainings/{tr_id}")
+async def remove_training(tr_id: str):
+    return await delete_doc("trainings", tr_id)
+
+
+# ================= STATS =================
+class PlayerStats(BaseModel):
+    player_id: str
+    temporada: Optional[str] = None
+    partidos_convocado: Optional[int] = 0
+    partidos_jugados: Optional[int] = 0
+    minutos: Optional[int] = 0
+    goles: Optional[int] = 0
+    asistencias: Optional[int] = 0
+    amarillas: Optional[int] = 0
+    rojas: Optional[int] = 0
+    porterias_cero: Optional[int] = 0
+    posicion: Optional[str] = None
+    valoracion: Optional[int] = None
+    observaciones: Optional[str] = None
+
+
+@api_router.post("/stats")
+async def create_stats(stats: PlayerStats):
+    return await insert_doc("stats", stats.model_dump())
+
+
+@api_router.get("/stats")
+async def get_stats(player_id: Optional[str] = None):
+    query = {"player_id": player_id} if player_id else {}
+    rows = await list_docs("stats", query)
+    players = {p["id"]: f"{p.get('nombre','')} {p.get('apellidos','')}".strip() for p in await list_docs("players")}
+    for r in rows:
+        r["player_nombre"] = players.get(r.get("player_id"), "—")
+    return rows
+
+
+@api_router.put("/stats/{stats_id}")
+async def edit_stats(stats_id: str, stats: PlayerStats):
+    return await update_doc("stats", stats_id, stats.model_dump())
+
+
+@api_router.delete("/stats/{stats_id}")
+async def remove_stats(stats_id: str):
+    return await delete_doc("stats", stats_id)
+
+
+# ================= COMMUNICATIONS =================
+class Communication(BaseModel):
+    destinatario_tipo: str = "equipo"  # equipo, categoria, individual
+    destinatario_id: Optional[str] = None
+    destinatario_nombre: Optional[str] = None
+    canal: str = "email"  # email, whatsapp
+    asunto: Optional[str] = None
+    mensaje: Optional[str] = None
+    enviado: bool = False
+    fecha_envio: Optional[str] = None
+
+
+@api_router.post("/communications")
+async def create_communication(comm: Communication):
+    data = comm.model_dump()
+    if data.get("enviado") and not data.get("fecha_envio"):
+        data["fecha_envio"] = now_iso()
+    return await insert_doc("communications", data)
+
+
+@api_router.get("/communications")
+async def get_communications():
+    return await list_docs("communications")
+
+
+@api_router.put("/communications/{comm_id}")
+async def edit_communication(comm_id: str, comm: Communication):
+    data = comm.model_dump()
+    if data.get("enviado") and not data.get("fecha_envio"):
+        data["fecha_envio"] = now_iso()
+    return await update_doc("communications", comm_id, data)
+
+
+@api_router.delete("/communications/{comm_id}")
+async def remove_communication(comm_id: str):
+    return await delete_doc("communications", comm_id)
+
+
 # ================= SETTINGS / CONFIG =================
 class Settings(BaseModel):
     club_nombre: Optional[str] = "Ikas-Txiki"
@@ -560,6 +783,8 @@ async def dashboard():
     matches = await list_docs("matches")
     payments = await list_docs("payments")
     auths = await list_docs("authorizations")
+    inscriptions = await list_docs("inscriptions")
+    trainings = await list_docs("trainings")
 
     activos = [p for p in players if p.get("estado") == "activo"]
     pendientes_doc = [p for p in players if p.get("estado_documental") != "completo"]
@@ -577,6 +802,16 @@ async def dashboard():
     for m in proximos_partidos:
         m["equipo_nombre"] = teams.get(m.get("equipo_id"), "—")
 
+    proximos_entrenamientos = sorted(
+        [tr for tr in trainings if tr.get("fecha") and tr.get("fecha") >= today],
+        key=lambda tr: (tr.get("fecha"), tr.get("hora") or "")
+    )[:5]
+    for tr in proximos_entrenamientos:
+        tr["equipo_nombre"] = teams.get(tr.get("equipo_id"), "—")
+
+    insc_pendientes = [i for i in inscriptions if i.get("estado") in ("recibida", "pendiente", "revisada")]
+    nuevas_insc = [i for i in inscriptions if i.get("tipo") == "alta" and not i.get("player_id")]
+
     alertas = []
     if pagos_pendientes:
         alertas.append({"tipo": "pago", "mensaje": f"{len(pagos_pendientes)} pagos pendientes"})
@@ -584,17 +819,20 @@ async def dashboard():
         alertas.append({"tipo": "doc", "mensaje": f"{len(pendientes_doc)} jugadores con documentación incompleta"})
     if auth_pendientes:
         alertas.append({"tipo": "auth", "mensaje": f"{len(auth_pendientes)} autorizaciones pendientes de firma"})
+    if insc_pendientes:
+        alertas.append({"tipo": "inscripcion", "mensaje": f"{len(insc_pendientes)} inscripciones por revisar"})
 
     return {
         "jugadores_activos": len(activos),
         "total_jugadores": len(players),
-        "nuevas_inscripciones": len(nuevas_inscripciones),
-        "inscripciones_pendientes": len(inscripciones_pendientes),
+        "nuevas_inscripciones": len(nuevas_insc),
+        "inscripciones_pendientes": len(insc_pendientes),
         "documentacion_pendiente": len(pendientes_doc),
         "pagos_pendientes": len(pagos_pendientes),
         "importe_pendiente": round(sum((p.get("importe_final") or 0) for p in pagos_pendientes), 2),
         "autorizaciones_pendientes": len(auth_pendientes),
         "proximos_partidos": proximos_partidos,
+        "proximos_entrenamientos": proximos_entrenamientos,
         "alertas": alertas,
     }
 
