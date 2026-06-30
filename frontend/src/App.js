@@ -17,6 +17,7 @@ import Trainings from "@/pages/Trainings";
 import Stats from "@/pages/Stats";
 import Communications from "@/pages/Communications";
 import Reports from "@/pages/Reports";
+import Equipment from "@/pages/Equipment";
 import SplashScreen from "@/components/SplashScreen";
 
 function App() {
@@ -40,6 +41,7 @@ function App() {
             <Route path="/comunicacion" element={<Communications />} />
             <Route path="/informes" element={<Reports />} />
             <Route path="/configuracion" element={<Settings />} />
+            <Route path="/equipamiento" element={<Equipment />} />
           </Routes>
         </Layout>
         <Toaster position="top-right" richColors />

@@ -1109,6 +1109,56 @@ async def seed_demo():
     return {"ok": True, "teams": len(teams), "players": len(players), "matches": len(matches)}
 
 
+
+# ================= EQUIPMENT =================
+
+@api_router.get("/equipment")
+async def get_equipment(equipo_id: Optional[str] = None, entregada: Optional[str] = None):
+    """Devuelve todos los jugadores con sus datos de equipación."""
+    query: Dict[str, Any] = {}
+    if equipo_id:
+        query["equipo_id"] = equipo_id
+    if entregada is not None:
+        query["equipacion_entregada"] = (entregada.lower() == "true")
+    players = await list_docs("players", query)
+    teams = {t["id"]: t["nombre"] for t in await list_docs("teams")}
+    result = []
+    for p in players:
+        result.append({
+            "id": p["id"],
+            "nombre": p.get("nombre", ""),
+            "apellidos": p.get("apellidos", ""),
+            "categoria": p.get("categoria"),
+            "equipo_id": p.get("equipo_id"),
+            "equipo_nombre": teams.get(p.get("equipo_id"), "—"),
+            "dorsal": p.get("dorsal"),
+            "talla_camiseta": p.get("talla_camiseta"),
+            "talla_pantalon": p.get("talla_pantalon"),
+            "talla_chandal": p.get("talla_chandal"),
+            "talla_medias": p.get("talla_medias"),
+            "talla_calzado": p.get("talla_calzado"),
+            "equipacion_entregada": p.get("equipacion_entregada", False),
+            "fecha_entrega_equipacion": p.get("fecha_entrega_equipacion"),
+            "observaciones_material": p.get("observaciones_material"),
+            "estado": p.get("estado"),
+        })
+    return result
+
+
+@api_router.put("/equipment/{player_id}")
+async def update_equipment(player_id: str, data: Dict[str, Any]):
+    """Actualiza solo los campos de equipación de un jugador."""
+    allowed = {
+        "dorsal", "talla_camiseta", "talla_pantalon", "talla_chandal",
+        "talla_medias", "talla_calzado", "equipacion_entregada",
+        "fecha_entrega_equipacion", "observaciones_material"
+    }
+    update = {k: v for k, v in data.items() if k in allowed}
+    update["updated_at"] = now_iso()
+    await db["players"].update_one({"id": player_id}, {"$set": update})
+    return await get_doc("players", player_id)
+
+
 # ================= EXCEL IMPORT / EXPORT =================
 EXPORT_COLLECTIONS = ALL_COLLECTIONS + ["settings"]
 

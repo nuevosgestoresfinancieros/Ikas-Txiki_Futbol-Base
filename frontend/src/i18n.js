@@ -27,6 +27,7 @@ const translations = {
     stats: "Estadísticas",
     communications: "Comunicación",
     reports: "Informes",
+    equipment: "Equipamiento",
     upcomingTrainings: "Próximos entrenamientos",
     noUpcomingTrainings: "No hay entrenamientos próximos.",
     // Inscriptions
@@ -275,6 +276,7 @@ const translations = {
     stats: "Estatistikak",
     communications: "Komunikazioa",
     reports: "Txostenak",
+    equipment: "Ekipamendua",
     upcomingTrainings: "Hurrengo entrenamenduak",
     noUpcomingTrainings: "Ez dago hurrengo entrenamendurik.",
     inscriptionType: "Mota",

@@ -3,7 +3,7 @@ import { NavLink, useLocation } from "react-router-dom";
 import {
   LayoutDashboard, Users, Home, Shield, CalendarDays, ClipboardList,
   Euro, FileSignature, Settings as SettingsIcon, Menu, X, Trophy,
-  UserPlus, Dumbbell, BarChart3, MessageSquare, FileText, Search
+  UserPlus, Dumbbell, BarChart3, MessageSquare, FileText, Search, Shirt
 } from "lucide-react";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,7 @@ const navItems = [
   { to: "/jugadores", key: "players", icon: Users, testid: "players" },
   { to: "/familias", key: "families", icon: Home, testid: "families" },
   { to: "/equipos", key: "teams", icon: Shield, testid: "teams" },
+  { to: "/equipamiento", key: "equipment", icon: Shirt, testid: "equipment" },
   { to: "/entrenamientos", key: "trainings", icon: Dumbbell, testid: "trainings" },
   { to: "/partidos", key: "matches", icon: CalendarDays, testid: "matches" },
   { to: "/convocatorias", key: "callups", icon: ClipboardList, testid: "callups" },
