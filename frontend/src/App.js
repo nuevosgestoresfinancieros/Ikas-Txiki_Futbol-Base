@@ -17,10 +17,12 @@ import Trainings from "@/pages/Trainings";
 import Stats from "@/pages/Stats";
 import Communications from "@/pages/Communications";
 import Reports from "@/pages/Reports";
+import SplashScreen from "@/components/SplashScreen";
 
 function App() {
   return (
     <I18nProvider>
+      <SplashScreen />
       <BrowserRouter>
         <Layout>
           <Routes>
