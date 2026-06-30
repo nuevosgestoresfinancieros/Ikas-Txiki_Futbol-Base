@@ -842,6 +842,69 @@ async def dashboard():
     }
 
 
+@api_router.get("/search")
+async def global_search(q: str):
+    import unicodedata
+
+    def _norm(s):
+        s = str(s or "").lower()
+        return "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
+
+    ql = _norm(q).strip()
+    if not ql or len(ql) < 1:
+        return []
+    results = []
+
+    teams = {t["id"]: t.get("nombre", "—") for t in await list_docs("teams")}
+
+    players = await list_docs("players")
+    for p in players:
+        hay = _norm(f"{p.get('nombre','')} {p.get('apellidos','')} {p.get('dorsal','')} {p.get('posicion','')} {p.get('categoria','')} {p.get('numero_licencia','')} {p.get('progenitor1_telefono','')} {p.get('progenitor1_nombre','')} {p.get('email_formulario','')}")
+        if ql in hay:
+            results.append({"type": "player", "id": p["id"],
+                            "title": f"{p.get('nombre','')} {p.get('apellidos','')}".strip(),
+                            "subtitle": f"{p.get('categoria') or '—'} · {teams.get(p.get('equipo_id'), 'Sin equipo')}",
+                            "route": "/jugadores"})
+
+    for t in await list_docs("teams"):
+        hay = _norm(f"{t.get('nombre','')} {t.get('categoria','')} {t.get('entrenador','')} {t.get('campo','')}")
+        if ql in hay:
+            results.append({"type": "team", "id": t["id"], "title": t.get("nombre", "—"),
+                            "subtitle": f"{t.get('categoria') or '—'} · {t.get('entrenador') or ''}", "route": "/equipos"})
+
+    for m in await list_docs("matches"):
+        hay = _norm(f"{m.get('rival','')} {teams.get(m.get('equipo_id'),'')} {m.get('tipo','')} {m.get('jornada','')} {m.get('fecha','')}")
+        if ql in hay:
+            results.append({"type": "match", "id": m["id"],
+                            "title": f"{teams.get(m.get('equipo_id'),'—')} vs {m.get('rival') or '—'}",
+                            "subtitle": f"{m.get('fecha') or ''} · {m.get('hora') or ''}", "route": "/partidos"})
+
+    for f in await list_docs("families"):
+        hay = _norm(f"{f.get('progenitor1_nombre','')} {f.get('progenitor2_nombre','')} {f.get('progenitor1_telefono','')} {f.get('progenitor1_email','')} {f.get('contacto_principal','')} {f.get('domicilio','')}")
+        if ql in hay:
+            results.append({"type": "family", "id": f["id"],
+                            "title": f.get("progenitor1_nombre") or f.get("contacto_principal") or "Familia",
+                            "subtitle": f.get("progenitor1_telefono") or f.get("domicilio") or "", "route": "/familias"})
+
+    for i in await list_docs("inscriptions"):
+        hay = _norm(f"{i.get('nombre','')} {i.get('apellidos','')} {i.get('progenitor1_telefono','')} {i.get('email_formulario','')}")
+        if ql in hay:
+            results.append({"type": "inscription", "id": i["id"],
+                            "title": f"{i.get('nombre','')} {i.get('apellidos','')}".strip(),
+                            "subtitle": f"{i.get('estado','')} · {i.get('categoria') or ''}", "route": "/inscripciones"})
+
+    player_names = {p["id"]: f"{p.get('nombre','')} {p.get('apellidos','')}".strip() for p in players}
+    for pay in await list_docs("payments"):
+        pname = player_names.get(pay.get("player_id"), "")
+        hay = _norm(f"{pname} {pay.get('concepto','')} {pay.get('estado','')} {pay.get('forma_pago','')}")
+        if ql in hay:
+            results.append({"type": "payment", "id": pay["id"],
+                            "title": pname or pay.get("concepto", "Pago"),
+                            "subtitle": f"{pay.get('importe_final',0)} € · {pay.get('estado','')}", "route": "/pagos"})
+
+    return results[:40]
+
+
 @api_router.get("/")
 async def root():
     return {"message": "Ikas-Txiki Manager API"}
