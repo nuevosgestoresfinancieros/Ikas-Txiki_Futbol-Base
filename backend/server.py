@@ -1,5 +1,6 @@
 from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -8,6 +9,7 @@ import io
 import json
 import logging
 import math
+import shutil
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
@@ -17,6 +19,8 @@ from datetime import datetime, timezone, date
 
 
 ROOT_DIR = Path(__file__).parent
+UPLOADS_DIR = ROOT_DIR / "uploads"
+UPLOADS_DIR.mkdir(exist_ok=True)
 load_dotenv(ROOT_DIR / '.env')
 
 mongo_url = os.environ['MONGO_URL']
@@ -480,6 +484,7 @@ class Authorization(BaseModel):
     fecha_firma: Optional[str] = None
     fecha_caducidad: Optional[str] = None
     estado: str = "pendiente"  # pendiente, firmada, caducada
+    archivo_firmado: Optional[str] = None  # ruta relativa al PDF firmado subido
     observaciones: Optional[str] = None
 
 
@@ -507,6 +512,59 @@ async def edit_authorization(auth_id: str, auth: Authorization):
 @api_router.delete("/authorizations/{auth_id}")
 async def remove_authorization(auth_id: str):
     return await delete_doc("authorizations", auth_id)
+
+@api_router.post("/authorizations/{auth_id}/upload-signed")
+async def upload_signed_authorization(auth_id: str, file: UploadFile = File(...)):
+    """Recibe un PDF firmado, lo guarda en disco y marca la autorización como firmada."""
+    auth = await get_doc("authorizations", auth_id)
+    # Eliminar archivo anterior si existe
+    if auth.get("archivo_firmado"):
+        old_path = UPLOADS_DIR / auth["archivo_firmado"]
+        if old_path.exists():
+            old_path.unlink()
+    # Guardar nuevo archivo
+    ext = Path(file.filename).suffix if file.filename else ".pdf"
+    filename = f"auth_{auth_id}{ext}"
+    file_path = UPLOADS_DIR / filename
+    with open(file_path, "wb") as out:
+        shutil.copyfileobj(file.file, out)
+    # Actualizar documento
+    await db["authorizations"].update_one(
+        {"id": auth_id},
+        {"$set": {"archivo_firmado": filename, "estado": "firmada", "updated_at": now_iso()}}
+    )
+    return {"ok": True, "archivo_firmado": filename}
+
+
+@api_router.get("/authorizations/{auth_id}/signed-file")
+async def get_signed_authorization(auth_id: str):
+    """Devuelve el PDF firmado almacenado para una autorización."""
+    auth = await get_doc("authorizations", auth_id)
+    if not auth.get("archivo_firmado"):
+        raise HTTPException(status_code=404, detail="No hay archivo firmado para esta autorización")
+    file_path = UPLOADS_DIR / auth["archivo_firmado"]
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Archivo no encontrado en disco")
+    return FileResponse(
+        path=str(file_path),
+        media_type="application/pdf",
+        filename=f"autorizacion_firmada_{auth_id}.pdf"
+    )
+
+
+@api_router.delete("/authorizations/{auth_id}/signed-file")
+async def delete_signed_authorization(auth_id: str):
+    """Elimina el PDF firmado de una autorización y la vuelve a estado pendiente."""
+    auth = await get_doc("authorizations", auth_id)
+    if auth.get("archivo_firmado"):
+        file_path = UPLOADS_DIR / auth["archivo_firmado"]
+        if file_path.exists():
+            file_path.unlink()
+    await db["authorizations"].update_one(
+        {"id": auth_id},
+        {"$set": {"archivo_firmado": None, "estado": "pendiente", "updated_at": now_iso()}}
+    )
+    return {"ok": True}
 
 
 # ================= INSCRIPTIONS =================
@@ -1146,6 +1204,7 @@ async def import_excel(file: UploadFile = File(...)):
 
 
 app.include_router(api_router)
+app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
 
 app.add_middleware(
     CORSMiddleware,
