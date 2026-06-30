@@ -43,7 +43,7 @@ const Families = () => {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {families.map((f) => (
-            <div key={f.id} data-testid={`family-card-${f.id}`} className="rounded-xl border border-slate-200 bg-white p-5 transition-all hover:-translate-y-1 hover:shadow-md">
+            <div key={f.id} data-testid={`family-card-${f.id}`} className="rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl p-5 transition-all hover:-translate-y-1 hover:shadow-md">
               <div className="flex items-start justify-between">
                 <div>
                   <p className="font-heading font-bold text-slate-900">{f.progenitor1_nombre || f.contacto_principal || "Familia"}</p>

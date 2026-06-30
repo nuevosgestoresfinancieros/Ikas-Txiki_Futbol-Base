@@ -54,7 +54,7 @@ const Inscriptions = () => {
       ) : (
         <div className="space-y-3">
           {items.map((i) => (
-            <div key={i.id} data-testid={`inscription-card-${i.id}`} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 hover:shadow-md transition-all">
+            <div key={i.id} data-testid={`inscription-card-${i.id}`} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl p-4 hover:shadow-md transition-all">
               <div>
                 <div className="flex items-center gap-2 flex-wrap">
                   <p className="font-heading font-bold text-slate-900">{i.nombre} {i.apellidos}</p>

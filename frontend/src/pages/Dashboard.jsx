@@ -8,21 +8,22 @@ import api from "@/api";
 import { useI18n } from "@/i18n";
 import { StatusBadge } from "@/components/shared";
 
-const SummaryCard = ({ icon: Icon, label, value, sub, color, testid, onClick }) => (
+const SummaryCard = ({ icon: Icon, label, value, sub, gradient, testid, onClick }) => (
   <button
     data-testid={`summary-${testid}`}
     onClick={onClick}
-    className="group text-left rounded-xl border border-slate-200 bg-white p-5 transition-all duration-200 hover:-translate-y-1 hover:shadow-md"
+    className={`group relative overflow-hidden text-left rounded-3xl p-5 text-white shadow-xl transition-all duration-300 hover:-translate-y-2 hover:shadow-2xl active:scale-95 ${gradient}`}
   >
-    <div className="flex items-start justify-between">
-      <div className={`flex h-11 w-11 items-center justify-center rounded-lg ${color}`}>
-        <Icon className="h-5 w-5" />
+    <div className="absolute -right-6 -top-6 h-24 w-24 rounded-full bg-white/10 group-hover:scale-150 transition-transform duration-500" />
+    <div className="relative flex items-start justify-between">
+      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/20 backdrop-blur-sm">
+        <Icon className="h-6 w-6" />
       </div>
-      <ChevronRight className="h-4 w-4 text-slate-300 group-hover:text-slate-500 transition-colors" />
+      <ChevronRight className="h-5 w-5 text-white/60 group-hover:text-white group-hover:translate-x-1 transition-all" />
     </div>
-    <p className="mt-4 font-heading text-3xl font-bold text-slate-900">{value}</p>
-    <p className="text-sm font-medium text-slate-600">{label}</p>
-    {sub && <p className="text-xs text-slate-400 mt-0.5">{sub}</p>}
+    <p className="relative mt-4 font-heading text-4xl font-extrabold drop-shadow-sm">{value}</p>
+    <p className="relative text-sm font-semibold text-white/90">{label}</p>
+    {sub && <p className="relative text-xs text-white/70 mt-0.5">{sub}</p>}
   </button>
 );
 
@@ -30,12 +31,12 @@ const QuickAction = ({ icon: Icon, label, onClick, testid }) => (
   <button
     data-testid={`quick-${testid}`}
     onClick={onClick}
-    className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 py-4 text-left transition-all duration-200 hover:border-primary hover:bg-primary/5 hover:-translate-y-0.5"
+    className="flex items-center gap-3 rounded-2xl border border-white/60 bg-white/70 backdrop-blur-xl px-4 py-4 text-left transition-all duration-300 hover:-translate-y-1 hover:shadow-lg hover:border-cyan-300 active:scale-95"
   >
-    <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+    <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-cyan-400 to-emerald-500 text-white shadow-md shadow-cyan-500/30">
       <Icon className="h-5 w-5" />
     </div>
-    <span className="font-semibold text-slate-800 text-sm">{label}</span>
+    <span className="font-bold text-slate-800 text-sm">{label}</span>
   </button>
 );
 
@@ -64,19 +65,21 @@ const Dashboard = () => {
       {/* Summary cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 mb-8">
         <SummaryCard testid="active" icon={Users} label={t("activePlayers")} value={data.jugadores_activos}
-          color="bg-green-100 text-green-700" onClick={() => nav("/jugadores?estado=activo")} />
+          gradient="bg-gradient-to-br from-emerald-400 to-teal-500" delay={0} onClick={() => nav("/jugadores?estado=activo")} />
         <SummaryCard testid="new" icon={UserPlus} label={t("newInscriptions")} value={data.nuevas_inscripciones}
-          color="bg-sky-100 text-sky-700" onClick={() => nav("/jugadores")} />
+          gradient="bg-gradient-to-br from-cyan-400 to-blue-500" delay={60} onClick={() => nav("/inscripciones")} />
         <SummaryCard testid="pending-ins" icon={ClipboardCheck} label={t("pendingInscriptions")} value={data.inscripciones_pendientes}
-          color="bg-amber-100 text-amber-700" onClick={() => nav("/jugadores")} />
+          gradient="bg-gradient-to-br from-amber-400 to-orange-500" delay={120} onClick={() => nav("/inscripciones")} />
         <SummaryCard testid="docs" icon={FileWarning} label={t("pendingDocs")} value={data.documentacion_pendiente}
-          color="bg-orange-100 text-orange-700" onClick={() => nav("/jugadores")} />
+          gradient="bg-gradient-to-br from-orange-400 to-rose-500" delay={180} onClick={() => nav("/jugadores")} />
         <SummaryCard testid="payments" icon={Euro} label={t("pendingPayments")} value={data.pagos_pendientes}
-          sub={`${data.importe_pendiente} € ${t("pendingAmount")}`} color="bg-red-100 text-red-700" onClick={() => nav("/pagos")} />
+          sub={`${data.importe_pendiente} € ${t("pendingAmount")}`} gradient="bg-gradient-to-br from-fuchsia-400 to-purple-500" delay={240} onClick={() => nav("/pagos")} />
         <SummaryCard testid="auths" icon={FileSignature} label={t("authorizations")} value={data.autorizaciones_pendientes}
-          color="bg-purple-100 text-purple-700" onClick={() => nav("/autorizaciones")} />
+          gradient="bg-gradient-to-br from-violet-400 to-indigo-500" delay={300} onClick={() => nav("/autorizaciones")} />
         <SummaryCard testid="matches" icon={CalendarDays} label={t("upcomingMatches")} value={data.proximos_partidos.length}
-          color="bg-indigo-100 text-indigo-700" onClick={() => nav("/partidos")} />
+          gradient="bg-gradient-to-br from-blue-400 to-indigo-500" delay={360} onClick={() => nav("/partidos")} />
+        <SummaryCard testid="players-total" icon={Trophy} label={t("totalPlayers")} value={data.total_jugadores}
+          gradient="bg-gradient-to-br from-slate-600 to-slate-800" delay={420} onClick={() => nav("/jugadores")} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -95,7 +98,7 @@ const Dashboard = () => {
 
           {/* Upcoming matches */}
           <h2 className="font-heading text-lg font-bold text-slate-900 mt-8 mb-3">{t("upcomingMatches")}</h2>
-          <div className="rounded-xl border border-slate-200 bg-white divide-y divide-slate-100">
+          <div className="rounded-2xl border border-white/60 bg-white/70 backdrop-blur-xl divide-y divide-slate-100/70 shadow-sm">
             {data.proximos_partidos.length === 0 ? (
               <p className="p-6 text-sm text-slate-400">{t("noUpcoming")}</p>
             ) : data.proximos_partidos.map((m) => (
@@ -116,7 +119,7 @@ const Dashboard = () => {
 
           {/* Upcoming trainings */}
           <h2 className="font-heading text-lg font-bold text-slate-900 mt-8 mb-3">{t("upcomingTrainings")}</h2>
-          <div className="rounded-xl border border-slate-200 bg-white divide-y divide-slate-100">
+          <div className="rounded-2xl border border-white/60 bg-white/70 backdrop-blur-xl divide-y divide-slate-100/70 shadow-sm">
             {(!data.proximos_entrenamientos || data.proximos_entrenamientos.length === 0) ? (
               <p className="p-6 text-sm text-slate-400">{t("noUpcomingTrainings")}</p>
             ) : data.proximos_entrenamientos.map((tr) => (
@@ -138,7 +141,7 @@ const Dashboard = () => {
         {/* Alerts */}
         <div>
           <h2 className="font-heading text-lg font-bold text-slate-900 mb-3">{t("importantAlerts")}</h2>
-          <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
+          <div className="rounded-2xl border border-white/60 bg-white/70 backdrop-blur-xl p-4 space-y-3 shadow-sm">
             {data.alertas.length === 0 ? (
               <p className="text-sm text-slate-400">{t("noAlerts")}</p>
             ) : data.alertas.map((a, i) => (

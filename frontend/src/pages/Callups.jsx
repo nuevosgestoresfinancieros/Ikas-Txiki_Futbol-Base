@@ -69,7 +69,7 @@ const Callups = () => {
       ) : (
         <div className="space-y-3">
           {callups.map((c) => (
-            <div key={c.id} data-testid={`callup-card-${c.id}`} className="rounded-xl border border-slate-200 bg-white p-5 hover:shadow-md transition-all">
+            <div key={c.id} data-testid={`callup-card-${c.id}`} className="rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl p-5 hover:shadow-md transition-all">
               <div className="flex items-start justify-between">
                 <div>
                   <p className="font-heading font-bold text-slate-900">{c.match?.equipo_nombre} vs {c.match?.rival || "—"}</p>

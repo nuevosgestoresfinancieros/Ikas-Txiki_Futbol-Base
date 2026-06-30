@@ -49,7 +49,7 @@ const Matches = () => {
       ) : (
         <div className="space-y-3">
           {matches.map((m) => (
-            <div key={m.id} data-testid={`match-card-${m.id}`} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 hover:shadow-md transition-all">
+            <div key={m.id} data-testid={`match-card-${m.id}`} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl p-4 hover:shadow-md transition-all">
               <div className="flex items-center gap-4">
                 <div className="text-center min-w-[60px]">
                   <p className="font-heading text-lg font-bold text-slate-900">{m.fecha?.slice(5) || "--"}</p>

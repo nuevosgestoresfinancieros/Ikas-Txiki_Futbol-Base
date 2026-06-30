@@ -47,10 +47,10 @@ export const StatusBadge = ({ status }) => {
 };
 
 export const PageHeader = ({ title, subtitle, icon: Icon, action }) => (
-  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6 animate-fade-up">
     <div className="flex items-center gap-3">
       {Icon && (
-        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10 text-primary">
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-400 to-emerald-500 text-white shadow-lg shadow-cyan-500/30">
           <Icon className="h-6 w-6" />
         </div>
       )}
@@ -64,8 +64,12 @@ export const PageHeader = ({ title, subtitle, icon: Icon, action }) => (
 );
 
 export const EmptyState = ({ icon: Icon, message, action }) => (
-  <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white py-16 px-6 text-center">
-    {Icon && <Icon className="h-12 w-12 text-slate-300 mb-4" />}
+  <div className="flex flex-col items-center justify-center rounded-3xl border-2 border-dashed border-cyan-200 bg-white/60 backdrop-blur-xl py-16 px-6 text-center animate-fade-up">
+    {Icon && (
+      <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-100 to-emerald-100 text-cyan-500 mb-4">
+        <Icon className="h-8 w-8" />
+      </div>
+    )}
     <p className="text-slate-500 mb-4 max-w-sm">{message}</p>
     {action}
   </div>

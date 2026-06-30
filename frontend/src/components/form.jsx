@@ -16,7 +16,7 @@ export const Field = ({ label, value, onChange, type = "text", testid, placehold
       value={value ?? ""}
       placeholder={placeholder}
       onChange={(e) => onChange(type === "number" ? (e.target.value === "" ? "" : Number(e.target.value)) : e.target.value)}
-      className="h-11"
+      className="h-11 rounded-xl bg-white/80 focus-visible:ring-cyan-400/30 focus-visible:border-cyan-400"
       {...rest}
     />
   </div>
@@ -25,7 +25,7 @@ export const Field = ({ label, value, onChange, type = "text", testid, placehold
 export const Area = ({ label, value, onChange, testid, rows = 3 }) => (
   <div className="space-y-1.5">
     <Label className="text-xs font-bold text-slate-600">{label}</Label>
-    <Textarea data-testid={testid} value={value ?? ""} rows={rows} onChange={(e) => onChange(e.target.value)} />
+    <Textarea data-testid={testid} value={value ?? ""} rows={rows} onChange={(e) => onChange(e.target.value)} className="rounded-xl bg-white/80 focus-visible:ring-cyan-400/30 focus-visible:border-cyan-400" />
   </div>
 );
 
@@ -33,7 +33,7 @@ export const SelectField = ({ label, value, onChange, options, testid, placehold
   <div className="space-y-1.5">
     <Label className="text-xs font-bold text-slate-600">{label}</Label>
     <Select value={value || ""} onValueChange={onChange}>
-      <SelectTrigger className="h-11" data-testid={testid}>
+      <SelectTrigger className="h-11 rounded-xl bg-white/80 focus:ring-cyan-400/30" data-testid={testid}>
         <SelectValue placeholder={placeholder || "—"} />
       </SelectTrigger>
       <SelectContent>
@@ -46,7 +46,7 @@ export const SelectField = ({ label, value, onChange, options, testid, placehold
 );
 
 export const SwitchField = ({ label, checked, onChange, testid }) => (
-  <div className="flex items-center justify-between rounded-lg border border-slate-200 px-4 py-3">
+  <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white/70 px-4 py-3">
     <Label className="text-sm font-medium text-slate-700">{label}</Label>
     <Switch data-testid={testid} checked={!!checked} onCheckedChange={onChange} />
   </div>

@@ -62,7 +62,7 @@ const Trainings = () => {
       ) : (
         <div className="space-y-3">
           {items.map((i) => (
-            <div key={i.id} data-testid={`training-card-${i.id}`} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-4 hover:shadow-md transition-all">
+            <div key={i.id} data-testid={`training-card-${i.id}`} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl p-4 hover:shadow-md transition-all">
               <div className="flex items-center gap-4">
                 <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary/10 text-primary"><Dumbbell className="h-5 w-5" /></div>
                 <div>

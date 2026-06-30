@@ -112,7 +112,7 @@ const Settings = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Club data */}
-        <div className="rounded-xl border border-slate-200 bg-white p-6 space-y-4">
+        <div className="rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl p-6 space-y-4">
           <h2 className="font-heading text-lg font-bold text-slate-900">{t("clubData")}</h2>
           <div className="flex items-center gap-4">
             <div className="relative">
@@ -134,7 +134,7 @@ const Settings = () => {
         </div>
 
         {/* Lists */}
-        <div className="rounded-xl border border-slate-200 bg-white p-6 space-y-5">
+        <div className="rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl p-6 space-y-5">
           <h2 className="font-heading text-lg font-bold text-slate-900">{t("settings")}</h2>
           <TagList label={t("seasons")} items={s.temporadas} onAdd={(v) => addTo("temporadas", v)} onRemove={(i) => removeFrom("temporadas", i)} testid="seasons" />
           <TagList label={t("fields")} items={s.campos} onAdd={(v) => addTo("campos", v)} onRemove={(i) => removeFrom("campos", i)} testid="fields" />
@@ -146,7 +146,7 @@ const Settings = () => {
         </div>
 
         {/* Categories */}
-        <div className="rounded-xl border border-slate-200 bg-white p-6 lg:col-span-2">
+        <div className="rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl p-6 lg:col-span-2">
           <h2 className="font-heading text-lg font-bold text-slate-900 mb-4">{t("categoriesByAge")}</h2>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             {(s.categories || []).map((c) => (
@@ -159,7 +159,7 @@ const Settings = () => {
         </div>
 
         {/* Data management */}
-        <div className="rounded-xl border border-slate-200 bg-white p-6 lg:col-span-2" data-testid="data-management">
+        <div className="rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl p-6 lg:col-span-2" data-testid="data-management">
           <div className="flex items-center gap-2 mb-4">
             <Database className="h-5 w-5 text-primary" />
             <h2 className="font-heading text-lg font-bold text-slate-900">{t("dataManagement")}</h2>

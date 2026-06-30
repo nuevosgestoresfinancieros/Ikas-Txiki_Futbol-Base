@@ -58,7 +58,7 @@ const Communications = () => {
       ) : (
         <div className="space-y-3">
           {items.map((i) => (
-            <div key={i.id} data-testid={`comm-card-${i.id}`} className="rounded-xl border border-slate-200 bg-white p-4 hover:shadow-md transition-all">
+            <div key={i.id} data-testid={`comm-card-${i.id}`} className="rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl p-4 hover:shadow-md transition-all">
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-start gap-3">
                   <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${i.canal==="whatsapp"?"bg-green-100 text-green-700":"bg-sky-100 text-sky-700"}`}>

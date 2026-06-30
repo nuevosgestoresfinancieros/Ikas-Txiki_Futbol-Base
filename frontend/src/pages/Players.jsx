@@ -97,7 +97,7 @@ const Players = () => {
         <EmptyState icon={Users} message={t("quickStart")}
           action={<Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("newPlayer")}</Button>} />
       ) : (
-        <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+        <div className="rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-left text-xs font-bold uppercase tracking-wider text-slate-500">

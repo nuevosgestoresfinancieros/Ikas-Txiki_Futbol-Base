@@ -48,7 +48,7 @@ const Teams = () => {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {teams.map((tm) => (
-            <div key={tm.id} data-testid={`team-card-${tm.id}`} className="rounded-xl border border-slate-200 bg-white p-5 transition-all hover:-translate-y-1 hover:shadow-md">
+            <div key={tm.id} data-testid={`team-card-${tm.id}`} className="rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl p-5 transition-all hover:-translate-y-1 hover:shadow-md">
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-3">
                   <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary/10 text-primary"><Shield className="h-5 w-5" /></div>

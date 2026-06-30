@@ -101,7 +101,7 @@ const Reports = () => {
         </div>
       </div>
 
-      <div className="rounded-xl border border-slate-200 bg-white overflow-hidden print-area">
+      <div className="rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl overflow-hidden print-area">
         <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
           <h2 className="font-heading font-bold text-slate-900">{data.title}</h2>
           <span className="text-xs text-slate-400 no-print">{data.rows.length} {t("rows")}</span>
