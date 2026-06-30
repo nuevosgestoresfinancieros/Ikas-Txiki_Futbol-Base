@@ -1,4 +1,4 @@
-# ⚽ Ikas-Txiki Manager
+# ⚽ Ikas-Txiki - Futbol Base
 
 Aplicación web integral para la **gestión de una escuela de fútbol base juvenil**. Permite dar de alta jugadores, gestionar familias, equipos, partidos, convocatorias, entrenamientos, pagos, autorizaciones y mucho más, desde un panel visual, rápido y fácil de usar en **móvil, tablet y ordenador**.
 
