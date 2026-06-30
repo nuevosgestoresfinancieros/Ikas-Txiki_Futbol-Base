@@ -123,12 +123,40 @@ const Authorizations = () => {
   }, []);
 
   const set = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
-  const openNew = () => { setForm({ tipo: "general", estado: "pendiente" }); setDialog(true); };
-  const openEdit = (a) => { setForm(a); setDialog(true); };
+  const [bulkMode, setBulkMode] = useState(false);
+  const [bulkForm, setBulkForm] = useState({ player_id: "", firmante: "" });
+  const [bulkDialog, setBulkDialog] = useState(false);
+  const openNew = () => { setBulkForm({ player_id: "", firmante: "" }); setBulkDialog(true); };
+  const openEdit = (a) => { setBulkMode(false); setForm(a); setDialog(true); };
   const save = async () => {
     if (form.id) await api.put(`/authorizations/${form.id}`, form);
     else await api.post("/authorizations", form);
     toast.success(t("saved")); setDialog(false); load();
+  };
+
+  const saveBulk = async () => {
+    if (!bulkForm.player_id) { toast.error("Selecciona un jugador"); return; }
+    // Verificar cuáles ya existen para este jugador
+    const existing = auths.filter((a) => a.player_id === bulkForm.player_id).map((a) => a.tipo);
+    const tipos = Object.keys(AUTH_TYPES);
+    const toCreate = tipos.filter((t) => !existing.includes(t));
+    if (toCreate.length === 0) {
+      toast.error("Este jugador ya tiene las 6 autorizaciones creadas");
+      return;
+    }
+    await Promise.all(
+      toCreate.map((tipo) =>
+        api.post("/authorizations", {
+          player_id: bulkForm.player_id,
+          firmante: bulkForm.firmante,
+          tipo,
+          estado: "pendiente",
+        })
+      )
+    );
+    toast.success(`${toCreate.length} autorización(es) creadas`);
+    setBulkDialog(false);
+    load();
   };
   const remove = async (a) => {
     if (!window.confirm(t("confirmDelete"))) return;
@@ -317,6 +345,47 @@ const Authorizations = () => {
           dangerouslySetInnerHTML={{ __html: buildAuthHTML(printItem, getPlayer(printItem.player_id), settings, lang) }}
         />
       )}
+
+      {/* Dialog creación masiva (6 autorizaciones de una vez) */}
+      <Dialog open={bulkDialog} onOpenChange={setBulkDialog}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="font-heading">Nueva autorización — jugador</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 pt-2">
+            <p className="text-sm text-slate-500">
+              Se crearán automáticamente las <strong>6 autorizaciones</strong> para el jugador seleccionado
+              (solo las que no existan todavía).
+            </p>
+            <SelectField label={t("name")} value={bulkForm.player_id}
+              onChange={(v) => setBulkForm((f) => ({ ...f, player_id: v }))}
+              options={playerOptions} testid="bulk-auth-player" />
+            <Field label={t("signer")} value={bulkForm.firmante}
+              onChange={(v) => setBulkForm((f) => ({ ...f, firmante: v }))}
+              testid="bulk-auth-firmante" />
+            {/* Preview de los 6 tipos */}
+            <div className="rounded-lg border border-slate-100 bg-slate-50 p-3">
+              <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">Autorizaciones que se crearán</p>
+              <div className="space-y-1">
+                {Object.entries(AUTH_TYPES).map(([key, labels]) => {
+                  const yaExiste = auths.some((a) => a.player_id === bulkForm.player_id && a.tipo === key);
+                  return (
+                    <div key={key} className={`flex items-center gap-2 text-sm ${yaExiste ? "text-slate-300 line-through" : "text-slate-700"}`}>
+                      <span className={`h-2 w-2 rounded-full flex-shrink-0 ${yaExiste ? "bg-slate-200" : "bg-emerald-400"}`} />
+                      {labels[lang]}
+                      {yaExiste && <span className="text-xs text-slate-400 no-underline" style={{textDecoration:"none"}}>(ya existe)</span>}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBulkDialog(false)}>{t("cancel")}</Button>
+            <Button onClick={saveBulk} className="h-11 px-6">Crear autorizaciones</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={dialog} onOpenChange={setDialog}>
         <DialogContent className="max-w-2xl max-h-[92vh] overflow-y-auto">
