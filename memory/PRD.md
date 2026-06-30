@@ -24,7 +24,6 @@ App web profesional para gestionar una escuela de fútbol base juvenil (Ikas-Txi
 - P3: Pulido a11y (DialogDescription) y date pickers shadcn en lugar de inputs nativos.
 
 ## Próximas acciones
-- Confirmar con usuario qué módulo de la fase 2 priorizar (Inscripciones / Entrenamientos / Estadísticas).
 
 ## Fase 3 (29 jun 2026)
 - **Datos de ejemplo**: botón "Cargar datos de ejemplo" en Configuración (POST /api/seed-demo) crea 3 equipos, 8 jugadores, partidos, entrenamientos, convocatoria, pagos, autorizaciones, inscripciones, estadísticas y un aviso. Botón "Vaciar todo" (POST /api/clear-all).
