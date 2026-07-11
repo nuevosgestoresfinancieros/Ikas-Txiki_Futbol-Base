@@ -203,19 +203,19 @@ const Authorizations = () => {
       </div>
       <div className="flex-1" />
       <div className="flex gap-1">
-        <Button variant="ghost" size="icon" className="h-7 w-7 text-blue-600" title="Descargar PDF" onClick={() => doDownloadPdf(a)}><Download className="h-3.5 w-3.5" /></Button>
-        <Button variant="ghost" size="icon" className="h-7 w-7 text-primary" title="Imprimir" onClick={() => doPrint(a)}><Printer className="h-3.5 w-3.5" /></Button>
-        <Button variant="ghost" size="icon" className="h-7 w-7 text-orange-500" title="Subir firmada" onClick={() => uploadRefs.current[a.id]?.click()}><Upload className="h-3.5 w-3.5" /></Button>
+        <Button variant="ghost" size="icon" className="text-blue-600" aria-label="Descargar PDF" title="Descargar PDF" onClick={() => doDownloadPdf(a)}><Download className="h-4 w-4" /></Button>
+        <Button variant="ghost" size="icon" className="text-primary" aria-label={t("print")} title={t("print")} onClick={() => doPrint(a)}><Printer className="h-4 w-4" /></Button>
+        <Button variant="ghost" size="icon" className="text-orange-500" aria-label="Subir autorización firmada" title="Subir firmada" onClick={() => uploadRefs.current[a.id]?.click()}><Upload className="h-4 w-4" /></Button>
         <input type="file" accept=".pdf,image/*" ref={(el) => (uploadRefs.current[a.id] = el)} style={{ display: "none" }}
           onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) doUploadSigned(a.id, f); }} />
         {a.archivo_firmado && (
           <>
-            <Button variant="ghost" size="icon" className="h-7 w-7 text-emerald-600" title="Ver firmada" onClick={() => doViewSigned(a)}><FileCheck className="h-3.5 w-3.5" /></Button>
-            <Button variant="ghost" size="icon" className="h-7 w-7 text-red-400" title="Eliminar firmada" onClick={() => doDeleteSigned(a)}><X className="h-3.5 w-3.5" /></Button>
+            <Button variant="ghost" size="icon" className="text-emerald-600" aria-label="Ver autorización firmada" title="Ver firmada" onClick={() => doViewSigned(a)}><FileCheck className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" className="text-red-400" aria-label="Eliminar archivo firmado" title="Eliminar firmada" onClick={() => doDeleteSigned(a)}><X className="h-4 w-4" /></Button>
           </>
         )}
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => openEdit(a)}><Pencil className="h-3.5 w-3.5" /></Button>
-        <Button variant="ghost" size="icon" className="h-7 w-7 text-red-500" onClick={() => remove(a)}><Trash2 className="h-3.5 w-3.5" /></Button>
+        <Button variant="ghost" size="icon" aria-label={t("edit")} onClick={() => openEdit(a)}><Pencil className="h-4 w-4" /></Button>
+        <Button variant="ghost" size="icon" aria-label={t("delete")} className="text-red-500 hover:bg-red-50" onClick={() => remove(a)}><Trash2 className="h-4 w-4" /></Button>
       </div>
     </div>
   );
@@ -241,7 +241,7 @@ const Authorizations = () => {
             const pendientes = group.items.filter((a) => a.estado === "pendiente").length;
             const total = group.items.length;
             return (
-              <div key={group.player_id} className="rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl overflow-hidden">
+              <div key={group.player_id} className="surface-card overflow-hidden">
                 {/* Cabecera del grupo — fila del jugador */}
                 <button
                   onClick={() => toggleExpand(group.player_id)}
@@ -292,7 +292,7 @@ const Authorizations = () => {
                           <div className="w-48 text-slate-400 italic">{AUTH_TYPES[tipo]?.[lang]}</div>
                           <div className="w-24 text-xs text-slate-300">Sin crear</div>
                           <div className="flex-1" />
-                          <Button variant="ghost" size="sm" className="h-7 text-xs text-slate-400 hover:text-primary"
+                          <Button variant="ghost" size="sm" className="text-xs text-slate-500 hover:text-primary"
                             onClick={() => { setForm({ player_id: group.player_id, tipo, estado: "pendiente" }); setDialog(true); }}>
                             + Crear
                           </Button>

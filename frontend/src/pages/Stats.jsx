@@ -46,7 +46,7 @@ const Stats = () => {
       {items.length === 0 ? (
         <EmptyState icon={BarChart3} message={t("noData")} action={<Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("add")}</Button>} />
       ) : (
-        <div className="rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl overflow-hidden">
+        <div className="surface-card overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
@@ -65,8 +65,8 @@ const Stats = () => {
                     {cols.map(([lbl, key]) => <td key={key} className="px-3 py-3 text-center text-slate-700">{i[key] ?? 0}</td>)}
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-1">
-                        <Button variant="ghost" size="icon" data-testid={`edit-stats-${i.id}`} onClick={() => openEdit(i)}><Pencil className="h-4 w-4" /></Button>
-                        <Button variant="ghost" size="icon" data-testid={`delete-stats-${i.id}`} onClick={() => remove(i)} className="text-red-500"><Trash2 className="h-4 w-4" /></Button>
+                        <Button variant="ghost" size="icon" aria-label={`${t("edit")} ${i.player_nombre || t("stats")}`} data-testid={`edit-stats-${i.id}`} onClick={() => openEdit(i)}><Pencil className="h-4 w-4" /></Button>
+                        <Button variant="ghost" size="icon" aria-label={`${t("delete")} ${i.player_nombre || t("stats")}`} data-testid={`delete-stats-${i.id}`} onClick={() => remove(i)} className="text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button>
                       </div>
                     </td>
                   </tr>

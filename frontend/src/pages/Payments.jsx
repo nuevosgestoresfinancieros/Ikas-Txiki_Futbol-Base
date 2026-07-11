@@ -49,7 +49,7 @@ const Payments = () => {
       {payments.length === 0 ? (
         <EmptyState icon={Euro} message={t("noData")} action={<Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("newPayment")}</Button>} />
       ) : (
-        <div className="rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl overflow-hidden">
+        <div className="surface-card overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
@@ -72,8 +72,8 @@ const Payments = () => {
                     <td className="px-4 py-3"><StatusBadge status={p.estado} /></td>
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-1">
-                        <Button variant="ghost" size="icon" data-testid={`edit-payment-${p.id}`} onClick={() => openEdit(p)}><Pencil className="h-4 w-4" /></Button>
-                        <Button variant="ghost" size="icon" data-testid={`delete-payment-${p.id}`} onClick={() => remove(p)} className="text-red-500"><Trash2 className="h-4 w-4" /></Button>
+                        <Button variant="ghost" size="icon" aria-label={`${t("edit")} ${p.player_nombre || t("payments")}`} data-testid={`edit-payment-${p.id}`} onClick={() => openEdit(p)}><Pencil className="h-4 w-4" /></Button>
+                        <Button variant="ghost" size="icon" aria-label={`${t("delete")} ${p.player_nombre || t("payments")}`} data-testid={`delete-payment-${p.id}`} onClick={() => remove(p)} className="text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button>
                       </div>
                     </td>
                   </tr>

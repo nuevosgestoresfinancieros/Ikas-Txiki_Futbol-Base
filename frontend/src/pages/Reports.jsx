@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { FileText, Download, Printer } from "lucide-react";
 import api from "@/api";
 import { useI18n } from "@/i18n";
@@ -21,9 +21,9 @@ const Reports = () => {
     Promise.all([api.get("/teams"), api.get("/categories")]).then(([tm, c]) => { setTeams(tm.data); setCategories(c.data); });
   }, []);
 
-  const teamName = (id) => teams.find((x) => x.id === id)?.nombre || "—";
+  const teamName = useCallback((id) => teams.find((x) => x.id === id)?.nombre || "—", [teams]);
 
-  const build = async () => {
+  const build = useCallback(async () => {
     let headers = [], rows = [], title = t(report);
     if (report === "playersList") {
       let players = (await api.get("/players")).data;
@@ -53,9 +53,9 @@ const Reports = () => {
       rows = stats.map(s => [s.player_nombre, s.temporada||"—", s.partidos_jugados??0, s.goles??0, s.asistencias??0, s.valoracion??"—"]);
     }
     setData({ headers, rows, title });
-  };
+  }, [fCat, fTeam, report, t, teamName]);
 
-  useEffect(() => { build(); /* eslint-disable-next-line */ }, [report, fTeam, fCat, teams]);
+  useEffect(() => { build(); }, [build]);
 
   const exportCSV = () => {
     const csv = [data.headers.join(";"), ...data.rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(";"))].join("\n");
@@ -101,7 +101,7 @@ const Reports = () => {
         </div>
       </div>
 
-      <div className="rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl overflow-hidden print-area">
+      <div className="surface-card overflow-hidden print-area">
         <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
           <h2 className="font-heading font-bold text-slate-900">{data.title}</h2>
           <span className="text-xs text-slate-400 no-print">{data.rows.length} {t("rows")}</span>

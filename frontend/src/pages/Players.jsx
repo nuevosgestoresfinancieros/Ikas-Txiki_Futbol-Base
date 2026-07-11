@@ -1,9 +1,9 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Users, Plus, Search, Pencil, Trash2 } from "lucide-react";
+import { Users, Plus, Search, Pencil, Trash2, AlertTriangle, ChevronLeft, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
-import { useI18n } from "@/i18n";
+import { STATUS_LABELS, useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -13,27 +13,40 @@ import { PageHeader, StatusBadge, EmptyState, initials } from "@/components/shar
 import PlayerDialog from "@/pages/PlayerDialog";
 
 const Players = () => {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const [params, setParams] = useSearchParams();
   const [players, setPlayers] = useState([]);
   const [teams, setTeams] = useState([]);
   const [categories, setCategories] = useState([]);
   const [q, setQ] = useState("");
+  const [debouncedQ, setDebouncedQ] = useState("");
   const [fEstado, setFEstado] = useState(params.get("estado") || "all");
   const [fEquipo, setFEquipo] = useState("all");
   const [fCat, setFCat] = useState("all");
   const [dialog, setDialog] = useState(false);
   const [editing, setEditing] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const [page, setPage] = useState(1);
+  const pageSize = 20;
 
-  const load = async () => {
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(false);
     const query = {};
     if (fEstado !== "all") query.estado = fEstado;
     if (fEquipo !== "all") query.equipo_id = fEquipo;
     if (fCat !== "all") query.categoria = fCat;
-    if (q) query.q = q;
-    const res = await api.get("/players", { params: query });
-    setPlayers(res.data);
-  };
+    if (debouncedQ) query.q = debouncedQ;
+    try {
+      const res = await api.get("/players", { params: query });
+      setPlayers(res.data);
+    } catch {
+      setError(true);
+    } finally {
+      setLoading(false);
+    }
+  }, [debouncedQ, fCat, fEquipo, fEstado]);
 
   const loadMeta = async () => {
     const [tm, cat] = await Promise.all([api.get("/teams"), api.get("/categories")]);
@@ -42,7 +55,11 @@ const Players = () => {
   };
 
   useEffect(() => { loadMeta(); }, []);
-  useEffect(() => { load(); /* eslint-disable-next-line */ }, [fEstado, fEquipo, fCat, q]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedQ(q.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [q]);
+  useEffect(() => { setPage(1); load(); }, [load]);
   useEffect(() => {
     if (params.get("new")) { openNew(); params.delete("new"); setParams(params); }
     // eslint-disable-next-line
@@ -58,6 +75,9 @@ const Players = () => {
   };
 
   const teamName = (id) => teams.find((x) => x.id === id)?.nombre || "—";
+  const statusLabel = (status) => STATUS_LABELS[lang]?.[status] || status;
+  const totalPages = Math.max(1, Math.ceil(players.length / pageSize));
+  const visiblePlayers = players.slice((page - 1) * pageSize, page * pageSize);
 
   return (
     <div data-testid="players-page">
@@ -74,7 +94,7 @@ const Players = () => {
           <SelectTrigger className="h-11 sm:w-44" data-testid="filter-estado"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">{t("status")}: {t("all")}</SelectItem>
-            {["activo","baja","lesionado","pendiente_documentacion","en_prueba"].map(s=><SelectItem key={s} value={s}>{s}</SelectItem>)}
+            {["activo","baja","lesionado","pendiente_documentacion","en_prueba"].map(s=><SelectItem key={s} value={s}>{statusLabel(s)}</SelectItem>)}
           </SelectContent>
         </Select>
         <Select value={fEquipo} onValueChange={setFEquipo}>
@@ -93,11 +113,22 @@ const Players = () => {
         </Select>
       </div>
 
-      {players.length === 0 ? (
+      {loading ? (
+        <div className="surface-card space-y-3 p-5" role="status" aria-label={t("loading")}>
+          {[0,1,2,3,4].map((item) => <div key={item} className="h-14 animate-pulse rounded-xl bg-slate-100" />)}
+        </div>
+      ) : error ? (
+        <div className="surface-card flex flex-col items-center px-6 py-14 text-center">
+          <AlertTriangle className="mb-3 h-8 w-8 text-red-500" aria-hidden="true" />
+          <p className="font-semibold text-slate-800">{t("loadError")}</p>
+          <Button onClick={load} variant="outline" className="mt-4">{t("retry")}</Button>
+        </div>
+      ) : players.length === 0 ? (
         <EmptyState icon={Users} message={t("quickStart")}
           action={<Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("newPlayer")}</Button>} />
       ) : (
-        <div className="rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl overflow-hidden">
+        <>
+        <div className="surface-card hidden overflow-hidden md:block">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
@@ -111,12 +142,12 @@ const Players = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {players.map((p) => (
+                {visiblePlayers.map((p) => (
                   <tr key={p.id} data-testid={`player-row-${p.id}`} className="hover:bg-slate-50">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
                         {p.foto ? (
-                          <img src={p.foto} alt="" className="h-9 w-9 rounded-full object-cover" />
+                          <img src={p.foto} alt={`${p.nombre} ${p.apellidos || ""}`.trim()} className="h-9 w-9 rounded-full object-cover" />
                         ) : (
                           <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 text-primary text-xs font-bold">
                             {initials(p.nombre, p.apellidos)}
@@ -131,8 +162,8 @@ const Players = () => {
                     <td className="px-4 py-3"><StatusBadge status={p.estado} /></td>
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-1">
-                        <Button variant="ghost" size="icon" data-testid={`edit-player-${p.id}`} onClick={() => openEdit(p)}><Pencil className="h-4 w-4" /></Button>
-                        <Button variant="ghost" size="icon" data-testid={`delete-player-${p.id}`} onClick={() => remove(p)} className="text-red-500 hover:text-red-700"><Trash2 className="h-4 w-4" /></Button>
+                        <Button variant="ghost" size="icon" aria-label={`${t("edit")} ${p.nombre}`} data-testid={`edit-player-${p.id}`} onClick={() => openEdit(p)}><Pencil className="h-4 w-4" /></Button>
+                        <Button variant="ghost" size="icon" aria-label={`${t("delete")} ${p.nombre}`} data-testid={`delete-player-${p.id}`} onClick={() => remove(p)} className="text-red-500 hover:bg-red-50 hover:text-red-700"><Trash2 className="h-4 w-4" /></Button>
                       </div>
                     </td>
                   </tr>
@@ -141,6 +172,39 @@ const Players = () => {
             </table>
           </div>
         </div>
+        <div className="space-y-3 md:hidden">
+          {visiblePlayers.map((p) => (
+            <article key={p.id} className="surface-card p-4" data-testid={`player-card-${p.id}`}>
+              <div className="flex items-start gap-3">
+                {p.foto ? (
+                  <img src={p.foto} alt={`${p.nombre} ${p.apellidos || ""}`.trim()} className="h-12 w-12 shrink-0 rounded-2xl object-cover" />
+                ) : (
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-sm font-bold text-primary">{initials(p.nombre, p.apellidos)}</div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <h2 className="truncate font-heading text-lg font-bold text-slate-900">{p.nombre} {p.apellidos}</h2>
+                  <p className="mt-0.5 truncate text-xs text-slate-500">{p.categoria || "—"} · {teamName(p.equipo_id)}</p>
+                </div>
+                <StatusBadge status={p.estado} />
+              </div>
+              <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3">
+                <span className="text-xs font-semibold text-slate-500">{t("number")}: {p.dorsal || "—"}</span>
+                <div className="flex gap-1">
+                  <Button variant="ghost" size="icon" aria-label={`${t("edit")} ${p.nombre}`} onClick={() => openEdit(p)}><Pencil className="h-4 w-4" /></Button>
+                  <Button variant="ghost" size="icon" aria-label={`${t("delete")} ${p.nombre}`} onClick={() => remove(p)} className="text-red-500 hover:bg-red-50 hover:text-red-700"><Trash2 className="h-4 w-4" /></Button>
+                </div>
+              </div>
+            </article>
+          ))}
+        </div>
+        {totalPages > 1 && (
+          <nav className="mt-5 flex items-center justify-between rounded-2xl border border-slate-200 bg-white p-2 shadow-sm" aria-label="Paginación">
+            <Button variant="ghost" size="sm" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={page === 1} aria-label={t("previous")}><ChevronLeft className="h-4 w-4" />{t("previous")}</Button>
+            <span className="px-3 text-xs font-bold text-slate-500">{page} / {totalPages}</span>
+            <Button variant="ghost" size="sm" onClick={() => setPage((current) => Math.min(totalPages, current + 1))} disabled={page === totalPages} aria-label={t("next")}>{t("next")}<ChevronRight className="h-4 w-4" /></Button>
+          </nav>
+        )}
+        </>
       )}
 
       <PlayerDialog open={dialog} onClose={() => setDialog(false)} player={editing} teams={teams} onSaved={load} />

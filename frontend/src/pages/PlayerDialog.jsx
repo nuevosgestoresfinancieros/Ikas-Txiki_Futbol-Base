@@ -6,9 +6,10 @@ import { Label } from "@/components/ui/label";
 import { Camera } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
-import { useI18n } from "@/i18n";
+import { STATUS_LABELS, useI18n } from "@/i18n";
 import { Field, Area, SelectField, SwitchField } from "@/components/form";
 import { initials } from "@/components/shared";
+import { optimizeImage } from "@/lib/image";
 
 const empty = {
   nombre: "", apellidos: "", estado: "pendiente_documentacion", estado_documental: "pendiente",
@@ -16,41 +17,67 @@ const empty = {
 };
 
 const PlayerDialog = ({ open, onClose, player, teams, onSaved }) => {
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const [form, setForm] = useState(empty);
   const [tab, setTab] = useState("personal");
+  const [nameError, setNameError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
 
   useEffect(() => {
     setForm(player ? { ...empty, ...player } : empty);
     setTab("personal");
+    setNameError("");
+    setDirty(false);
   }, [player, open]);
 
-  const set = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
+  const set = (k) => (v) => {
+    setDirty(true);
+    if (k === "nombre") setNameError("");
+    setForm((f) => ({ ...f, [k]: v }));
+  };
 
-  const handlePhoto = (e) => {
+  const handlePhoto = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => set("foto")(reader.result);
-    reader.readAsDataURL(file);
+    try {
+      set("foto")(await optimizeImage(file, { maxSize: 900, quality: 0.82 }));
+    } catch {
+      toast.error(lang === "eu" ? "Ezin izan da irudia prozesatu" : "No se ha podido procesar la imagen");
+    }
   };
 
   const save = async () => {
-    if (!form.nombre?.trim()) { toast.error("El nombre es obligatorio"); setTab("personal"); return; }
+    if (!form.nombre?.trim()) {
+      setNameError(lang === "eu" ? "Izena nahitaezkoa da." : "El nombre es obligatorio.");
+      setTab("personal");
+      return;
+    }
+    setSaving(true);
     try {
       if (player?.id) await api.put(`/players/${player.id}`, form);
       else await api.post("/players", form);
       toast.success(t("saved"));
+      setDirty(false);
       onSaved();
       onClose();
-    } catch (e) { toast.error("Error al guardar"); }
+    } catch (e) {
+      toast.error(lang === "eu" ? "Errorea gordetzean" : "Error al guardar");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const requestClose = () => {
+    if (dirty && !window.confirm(lang === "eu" ? "Gorde gabeko aldaketak galdu nahi dituzu?" : "¿Quieres descartar los cambios sin guardar?")) return;
+    onClose();
   };
 
   const teamOptions = [{ value: "none", label: t("none") }, ...teams.map((tm) => ({ value: tm.id, label: tm.nombre }))];
-  const estadoOptions = ["activo", "baja", "lesionado", "pendiente_documentacion", "en_prueba"].map((s) => ({ value: s, label: t(`tabPersonal`) && s }));
+  const statusLabel = (status) => STATUS_LABELS[lang]?.[status] || status;
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={(o) => !o && requestClose()}>
       <DialogContent className="max-w-3xl max-h-[92vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="font-heading text-xl">
@@ -60,7 +87,7 @@ const PlayerDialog = ({ open, onClose, player, teams, onSaved }) => {
         </DialogHeader>
 
         <Tabs value={tab} onValueChange={setTab}>
-          <TabsList className="grid grid-cols-3 sm:grid-cols-6 h-auto gap-1">
+          <TabsList className="grid h-auto grid-cols-3 gap-1 sm:grid-cols-6">
             <TabsTrigger value="personal" data-testid="tab-personal">{t("tabPersonal")}</TabsTrigger>
             <TabsTrigger value="sport" data-testid="tab-sport">{t("tabSport")}</TabsTrigger>
             <TabsTrigger value="family" data-testid="tab-family">{t("tabFamily")}</TabsTrigger>
@@ -79,7 +106,7 @@ const PlayerDialog = ({ open, onClose, player, teams, onSaved }) => {
                     {initials(form.nombre, form.apellidos)}
                   </div>
                 )}
-                <label className="absolute -bottom-1 -right-1 flex h-7 w-7 items-center justify-center rounded-full bg-primary text-white cursor-pointer shadow">
+                <label title={t("photo")} className="absolute -bottom-2 -right-2 flex h-11 w-11 cursor-pointer items-center justify-center rounded-xl bg-primary text-white shadow-md transition-colors hover:bg-primary/90">
                   <Camera className="h-4 w-4" />
                   <input data-testid="player-photo-input" type="file" accept="image/*" className="hidden" onChange={handlePhoto} />
                 </label>
@@ -90,7 +117,7 @@ const PlayerDialog = ({ open, onClose, player, teams, onSaved }) => {
               </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Field label={t("name")} value={form.nombre} onChange={set("nombre")} testid="player-nombre" />
+              <Field label={t("name")} value={form.nombre} onChange={set("nombre")} testid="player-nombre" required error={nameError} />
               <Field label={t("surname")} value={form.apellidos} onChange={set("apellidos")} testid="player-apellidos" />
               <Field label={t("birthdate")} type="date" value={form.fecha_nacimiento} onChange={set("fecha_nacimiento")} testid="player-fecha-nacimiento" />
               <Field label={t("school")} value={form.centro_escolar} onChange={set("centro_escolar")} testid="player-centro" />
@@ -106,7 +133,7 @@ const PlayerDialog = ({ open, onClose, player, teams, onSaved }) => {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <SelectField label={t("team")} value={form.equipo_id || "none"} onChange={(v) => set("equipo_id")(v === "none" ? "" : v)} options={teamOptions} testid="player-equipo" />
               <SelectField label={t("status")} value={form.estado} onChange={set("estado")}
-                options={["activo","baja","lesionado","pendiente_documentacion","en_prueba"].map(s=>({value:s,label:s}))} testid="player-estado" />
+                options={["activo","baja","lesionado","pendiente_documentacion","en_prueba"].map(s=>({value:s,label:statusLabel(s)}))} testid="player-estado" />
               <Field label={t("number")} value={form.dorsal} onChange={set("dorsal")} testid="player-dorsal" />
               <Field label={t("position")} value={form.posicion} onChange={set("posicion")} testid="player-posicion" />
               <Field label={t("license")} value={form.numero_licencia} onChange={set("numero_licencia")} testid="player-licencia" />
@@ -149,7 +176,7 @@ const PlayerDialog = ({ open, onClose, player, teams, onSaved }) => {
           </TabsContent>
 
           <TabsContent value="kit" className="space-y-4 pt-4">
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 gap-4 min-[430px]:grid-cols-2 sm:grid-cols-3">
               <Field label={t("shirtSize")} value={form.talla_camiseta} onChange={set("talla_camiseta")} testid="kit-camiseta" />
               <Field label={t("pantsSize")} value={form.talla_pantalon} onChange={set("talla_pantalon")} testid="kit-pantalon" />
               <Field label={t("tracksuitSize")} value={form.talla_chandal} onChange={set("talla_chandal")} testid="kit-chandal" />
@@ -171,14 +198,14 @@ const PlayerDialog = ({ open, onClose, player, teams, onSaved }) => {
               <SwitchField label="Ficha federativa" checked={form.doc_ficha_federativa} onChange={set("doc_ficha_federativa")} testid="doc-federativa" />
             </div>
             <SelectField label={t("docStatus")} value={form.estado_documental} onChange={set("estado_documental")}
-              options={["completo","pendiente","incompleto"].map(s=>({value:s,label:s}))} testid="doc-estado" />
+              options={["completo","pendiente","incompleto"].map(s=>({value:s,label:statusLabel(s)}))} testid="doc-estado" />
             <Area label={t("notes")} value={form.observaciones_doc} onChange={set("observaciones_doc")} testid="doc-obs" />
           </TabsContent>
         </Tabs>
 
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose} data-testid="player-cancel-btn">{t("cancel")}</Button>
-          <Button onClick={save} data-testid="player-save-btn" className="h-11 px-6">{t("save")}</Button>
+        <DialogFooter className="sticky -bottom-5 z-10 -mx-5 -mb-5 border-t border-slate-200 bg-white/95 px-5 py-4 backdrop-blur-xl sm:-bottom-6 sm:-mx-6 sm:-mb-6 sm:px-6">
+          <Button variant="outline" onClick={requestClose} disabled={saving} data-testid="player-cancel-btn">{t("cancel")}</Button>
+          <Button onClick={save} disabled={saving} data-testid="player-save-btn" className="px-6">{saving ? t("loading") : t("save")}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

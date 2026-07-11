@@ -40,23 +40,23 @@ export const StatusBadge = ({ status }) => {
   const label = STATUS_LABELS[lang]?.[status] || status;
   const color = STATUS_COLORS[status] || "bg-slate-100 text-slate-700";
   return (
-    <span data-testid={`status-badge-${status}`} className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-bold ${color}`}>
+    <span data-testid={`status-badge-${status}`} className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-bold ring-1 ring-inset ring-black/5 ${color}`}>
       {label}
     </span>
   );
 };
 
 export const PageHeader = ({ title, subtitle, icon: Icon, action }) => (
-  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6 animate-fade-up">
+  <div className="mb-7 flex flex-col gap-4 animate-fade-up sm:flex-row sm:items-center sm:justify-between">
     <div className="flex items-center gap-3">
       {Icon && (
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-400 to-emerald-500 text-white shadow-lg shadow-cyan-500/30">
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-teal-100 bg-teal-50 text-primary shadow-sm">
           <Icon className="h-6 w-6" />
         </div>
       )}
       <div>
-        <h1 className="font-heading text-2xl sm:text-3xl font-bold tracking-tight text-slate-900">{title}</h1>
-        {subtitle && <p className="text-sm text-slate-500">{subtitle}</p>}
+        <h1 className="font-heading text-3xl font-bold tracking-tight text-[#102a43] sm:text-4xl">{title}</h1>
+        {subtitle && <p className="mt-1 text-sm text-slate-500">{subtitle}</p>}
       </div>
     </div>
     {action}
@@ -64,9 +64,9 @@ export const PageHeader = ({ title, subtitle, icon: Icon, action }) => (
 );
 
 export const EmptyState = ({ icon: Icon, message, action }) => (
-  <div className="flex flex-col items-center justify-center rounded-3xl border-2 border-dashed border-cyan-200 bg-white/60 backdrop-blur-xl py-16 px-6 text-center animate-fade-up">
+  <div className="flex flex-col items-center justify-center rounded-3xl border-2 border-dashed border-teal-200 bg-white py-16 px-6 text-center animate-fade-up">
     {Icon && (
-      <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-cyan-100 to-emerald-100 text-cyan-500 mb-4">
+      <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-teal-50 text-primary">
         <Icon className="h-8 w-8" />
       </div>
     )}

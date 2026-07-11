@@ -13,6 +13,8 @@ import json
 import logging
 import math
 import shutil
+import time
+from collections import defaultdict, deque
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
@@ -31,12 +33,21 @@ client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
 # ── Auth config ──────────────────────────────────────────────
-JWT_SECRET = os.environ.get("JWT_SECRET", "changeme-please-set-in-env")
+JWT_SECRET = os.environ.get("JWT_SECRET")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = 8
-ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin")
+ADMIN_USER = os.environ.get("ADMIN_USER")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD")
+
+if not JWT_SECRET or len(JWT_SECRET) < 32:
+    raise RuntimeError("JWT_SECRET debe existir y tener al menos 32 caracteres")
+if not ADMIN_USER or not ADMIN_PASSWORD or ADMIN_PASSWORD.lower() == "admin":
+    raise RuntimeError("Configura ADMIN_USER y una ADMIN_PASSWORD segura en el entorno")
+
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+LOGIN_WINDOW_SECONDS = 10 * 60
+LOGIN_MAX_ATTEMPTS = 6
+login_attempts = defaultdict(deque)
 
 def create_access_token(data: dict) -> str:
     expire = datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRE_HOURS)
@@ -59,9 +70,18 @@ app = FastAPI(title="Ikas-Txiki Manager API")
 
 # ── Auth endpoints ────────────────────────────────────────────
 @app.post("/api/auth/login")
-async def login(response: Response, data: Dict[str, Any]):
-    username = data.get("username", "")
+async def login(request: Request, response: Response, data: Dict[str, Any]):
+    username = data.get("username", "").strip()
     password = data.get("password", "")
+    client_ip = request.client.host if request.client else "unknown"
+    attempt_key = f"{client_ip}:{username.lower()}"
+    now = time.monotonic()
+    attempts = login_attempts[attempt_key]
+    while attempts and now - attempts[0] > LOGIN_WINDOW_SECONDS:
+        attempts.popleft()
+    if len(attempts) >= LOGIN_MAX_ATTEMPTS:
+        raise HTTPException(status_code=429, detail="Demasiados intentos. Espera unos minutos e inténtalo de nuevo")
+
     # Verificar contra usuario admin del .env
     valid_user = username == ADMIN_USER and password == ADMIN_PASSWORD
     # También buscar en colección users de MongoDB
@@ -70,7 +90,9 @@ async def login(response: Response, data: Dict[str, Any]):
         if db_user and pwd_context.verify(password, db_user.get("password_hash", "")):
             valid_user = True
     if not valid_user:
+        attempts.append(now)
         raise HTTPException(status_code=401, detail="Usuario o contraseña incorrectos")
+    login_attempts.pop(attempt_key, None)
     token = create_access_token({"sub": username})
     response.set_cookie(
         key="ikastxiki_session",
@@ -93,6 +115,21 @@ async def logout(response: Response):
 @app.get("/api/auth/me")
 async def me(current_user: str = Depends(get_current_user)):
     return {"username": current_user}
+
+
+@app.get("/api/public/branding")
+async def public_branding(response: Response):
+    """Expone solo la identidad visual necesaria antes de iniciar sesión."""
+    doc = await db.settings.find_one(
+        {"id": "global"},
+        {"_id": 0, "club_nombre": 1, "club_logo": 1, "temporada_actual": 1},
+    )
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return doc or {
+        "club_nombre": "Ikas-Txiki",
+        "club_logo": None,
+        "temporada_actual": None,
+    }
 
 
 api_router = APIRouter(prefix="/api")

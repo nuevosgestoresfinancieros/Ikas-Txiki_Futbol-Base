@@ -95,7 +95,7 @@ const Matches = () => {
 
             return (
               <div key={m.id} data-testid={`match-card-${m.id}`}
-                className="rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl overflow-hidden hover:shadow-md transition-all">
+                className="surface-card interactive-card overflow-hidden">
 
                 {/* Fila principal */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4">
@@ -153,16 +153,16 @@ const Matches = () => {
 
                     {/* Expandir jugadores */}
                     {convocados.length > 0 && (
-                      <Button variant="ghost" size="icon" className="h-8 w-8"
+                      <Button variant="ghost" size="icon" aria-label={isExpanded ? "Ocultar jugadores convocados" : "Mostrar jugadores convocados"}
                         onClick={() => setExpanded(isExpanded ? null : m.id)}>
                         {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                       </Button>
                     )}
 
-                    <Button variant="ghost" size="icon" data-testid={`edit-match-${m.id}`} onClick={() => openEdit(m)}>
+                    <Button variant="ghost" size="icon" aria-label={`${t("edit")} ${m.rival || t("matches")}`} data-testid={`edit-match-${m.id}`} onClick={() => openEdit(m)}>
                       <Pencil className="h-4 w-4" />
                     </Button>
-                    <Button variant="ghost" size="icon" data-testid={`delete-match-${m.id}`} onClick={() => remove(m)} className="text-red-500">
+                    <Button variant="ghost" size="icon" aria-label={`${t("delete")} ${m.rival || t("matches")}`} data-testid={`delete-match-${m.id}`} onClick={() => remove(m)} className="text-red-500 hover:bg-red-50">
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>

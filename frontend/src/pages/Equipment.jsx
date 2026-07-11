@@ -152,7 +152,7 @@ const Equipment = () => {
           { label: "Pendiente de entregar", value: pendientes, color: "text-amber-600" },
           { label: "Sin talla registrada", value: sinTalla, color: "text-red-500" },
         ].map((s) => (
-          <div key={s.label} className="rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl p-4 text-center">
+          <div key={s.label} className="surface-card p-4 text-center">
             <p className={`text-2xl font-bold font-heading ${s.color}`}>{s.value}</p>
             <p className="text-xs text-slate-500 mt-1">{s.label}</p>
           </div>
@@ -177,7 +177,7 @@ const Equipment = () => {
       </div>
 
       {/* Tabla */}
-      <div className="rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl overflow-hidden">
+      <div className="surface-card overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm min-w-[900px]">
             <thead className="bg-slate-50 text-left text-xs font-bold uppercase tracking-wider text-slate-500 sticky top-0">
@@ -245,15 +245,15 @@ const Equipment = () => {
                     <td className="px-3 py-2.5 text-right">
                       {isEditing ? (
                         <div className="flex justify-end gap-1">
-                          <Button size="icon" variant="ghost" className="h-7 w-7 text-slate-400 hover:text-slate-600" onClick={cancelEdit} disabled={saving}>
+                          <Button size="icon" variant="ghost" aria-label={t("cancel")} className="text-slate-400 hover:text-slate-600" onClick={cancelEdit} disabled={saving}>
                             <X className="h-3.5 w-3.5" />
                           </Button>
-                          <Button size="icon" className="h-7 w-7 bg-primary text-white" onClick={() => saveEdit(p.id)} disabled={saving}>
+                          <Button size="icon" aria-label={t("save")} className="bg-primary text-white" onClick={() => saveEdit(p.id)} disabled={saving}>
                             <Save className="h-3.5 w-3.5" />
                           </Button>
                         </div>
                       ) : (
-                        <Button size="icon" variant="ghost" className="h-7 w-7 text-slate-400 hover:text-primary" onClick={() => startEdit(p)}>
+                        <Button size="icon" variant="ghost" aria-label={`${t("edit")} ${p.nombre}`} className="text-slate-400 hover:text-primary" onClick={() => startEdit(p)}>
                           <Pencil className="h-3.5 w-3.5" />
                         </Button>
                       )}

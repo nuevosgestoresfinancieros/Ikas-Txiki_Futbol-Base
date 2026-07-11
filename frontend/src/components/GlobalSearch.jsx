@@ -46,7 +46,10 @@ const GlobalSearch = ({ open, setOpen }) => {
   useEffect(() => {
     const onKey = (e) => { if (e.key === "Escape") setOpen(false); };
     if (open) window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      clearTimeout(timer.current);
+    };
   }, [open, setOpen]);
 
   if (!open) return null;
@@ -58,10 +61,11 @@ const GlobalSearch = ({ open, setOpen }) => {
     .filter((g) => g.items.length > 0);
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-start justify-center p-4 pt-[12vh]" data-testid="global-search-dialog">
-      <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={() => setOpen(false)} />
-      <div className="relative w-full max-w-xl rounded-2xl bg-white shadow-2xl ring-1 ring-black/5 overflow-hidden animate-fade-up">
-        <div className="flex items-center gap-3 border-b border-slate-100 px-4">
+    <div className="fixed inset-0 z-[100] flex items-start justify-center p-3 pt-[8vh] sm:p-4 sm:pt-[12vh]" data-testid="global-search-dialog" role="dialog" aria-modal="true" aria-labelledby="global-search-title">
+      <div className="absolute inset-0 bg-slate-950/55 backdrop-blur-sm" onClick={() => setOpen(false)} />
+      <div className="relative w-full max-w-xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl animate-fade-up">
+        <h2 id="global-search-title" className="sr-only">{t("globalSearch")}</h2>
+        <div className="flex items-center gap-3 border-b border-slate-100 px-3 sm:px-4">
           <Search className="h-5 w-5 text-cyan-500 shrink-0" />
           <input
             ref={inputRef}
@@ -69,9 +73,10 @@ const GlobalSearch = ({ open, setOpen }) => {
             value={q}
             onChange={(e) => { setQ(e.target.value); doSearch(e.target.value); }}
             placeholder={t("globalSearchPlaceholder")}
-            className="flex-1 h-14 bg-transparent text-base outline-none placeholder:text-slate-400"
+            aria-label={t("globalSearch")}
+            className="h-16 min-w-0 flex-1 bg-transparent text-base outline-none placeholder:text-slate-400"
           />
-          <button onClick={() => setOpen(false)} data-testid="close-global-search" className="text-slate-400 hover:text-slate-700">
+          <button type="button" aria-label={t("dismiss")} onClick={() => setOpen(false)} data-testid="close-global-search" className="flex h-11 w-11 items-center justify-center rounded-xl text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700">
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -95,7 +100,7 @@ const GlobalSearch = ({ open, setOpen }) => {
                     key={`${r.type}-${r.id}`}
                     data-testid={`search-result-${r.id}`}
                     onClick={() => go(r)}
-                    className="group flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-cyan-50 transition-colors"
+                    className="group flex min-h-14 w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-teal-50 focus-visible:bg-teal-50"
                   >
                     <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${Meta.color}`}>
                       <Icon className="h-4 w-4" />

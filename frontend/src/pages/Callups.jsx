@@ -138,7 +138,7 @@ const Callups = () => {
             const convocados = c.convocados || [];
             return (
               <div key={c.id} data-testid={`callup-card-${c.id}`}
-                className="rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl p-5 hover:shadow-md transition-all">
+                className="surface-card interactive-card p-5">
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex-1 min-w-0">
                     <p className="font-heading font-bold text-slate-900">
@@ -153,15 +153,15 @@ const Callups = () => {
                   <div className="flex gap-1 flex-shrink-0">
                     {/* Ir al partido */}
                     {match && (
-                      <Button variant="ghost" size="icon" title="Ver partido"
-                        onClick={() => navigate(`/matches`)} className="text-primary">
+                      <Button variant="ghost" size="icon" aria-label="Ver partido" title="Ver partido"
+                        onClick={() => navigate("/partidos")} className="text-primary">
                         <CalendarDays className="h-4 w-4" />
                       </Button>
                     )}
-                    <Button variant="ghost" size="icon" data-testid={`edit-callup-${c.id}`} onClick={() => openEdit(c)}>
+                    <Button variant="ghost" size="icon" aria-label={t("edit")} data-testid={`edit-callup-${c.id}`} onClick={() => openEdit(c)}>
                       <Pencil className="h-4 w-4" />
                     </Button>
-                    <Button variant="ghost" size="icon" data-testid={`delete-callup-${c.id}`} onClick={() => remove(c)} className="text-red-500">
+                    <Button variant="ghost" size="icon" aria-label={t("delete")} data-testid={`delete-callup-${c.id}`} onClick={() => remove(c)} className="text-red-500 hover:bg-red-50">
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>

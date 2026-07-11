@@ -5,6 +5,7 @@ export const API = `${BACKEND_URL}/api`;
 
 const api = axios.create({
   baseURL: API,
+  timeout: 20_000,
   withCredentials: true, // envía y recibe cookies HttpOnly
 });
 

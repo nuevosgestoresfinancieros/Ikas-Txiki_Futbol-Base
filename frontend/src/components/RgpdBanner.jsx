@@ -1,10 +1,12 @@
 import React, { useState } from "react";
 import { Shield, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useI18n } from "@/i18n";
 
 const STORAGE_KEY = "ikastxiki_rgpd_accepted";
 
 const RgpdBanner = () => {
+  const { t } = useI18n();
   const [visible, setVisible] = useState(() => !localStorage.getItem(STORAGE_KEY));
 
   const accept = () => {
@@ -15,33 +17,27 @@ const RgpdBanner = () => {
   if (!visible) return null;
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-50 p-4 sm:p-6">
-      <div className="max-w-4xl mx-auto rounded-2xl border border-slate-200 bg-white/95 backdrop-blur-xl shadow-2xl p-5 flex flex-col sm:flex-row items-start sm:items-center gap-4">
+    <aside className="rgpd-banner fixed bottom-0 left-0 right-0 z-50 p-3 sm:p-5" aria-label={t("privacyTitle")}>
+      <div className="mx-auto flex max-w-3xl flex-col items-start gap-4 rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-2xl backdrop-blur-xl sm:flex-row sm:items-center sm:p-5">
         <div className="flex items-start gap-3 flex-1 min-w-0">
-          <div className="h-10 w-10 rounded-xl bg-primary/10 flex items-center justify-center flex-shrink-0">
+          <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-primary/10">
             <Shield className="h-5 w-5 text-primary" />
           </div>
           <div className="min-w-0">
-            <p className="text-sm font-semibold text-slate-800 mb-1">Privacidad y cookies</p>
-            <p className="text-xs text-slate-500 leading-relaxed">
-              Esta aplicación utiliza únicamente una <strong>cookie de sesión</strong> estrictamente necesaria para
-              mantener tu acceso seguro (HttpOnly, duración 8 horas). No utilizamos cookies de seguimiento
-              ni compartimos datos con terceros. El tratamiento de datos se realiza conforme al{" "}
-              <strong>RGPD (UE) 2016/679</strong> y la <strong>LOPDGDD 3/2018</strong>.
-              Los datos gestionados son de uso exclusivo del club.
-            </p>
+            <p className="mb-1 text-sm font-bold text-slate-800">{t("privacyTitle")}</p>
+            <p className="text-xs leading-relaxed text-slate-600">{t("privacyBody")}</p>
           </div>
         </div>
-        <div className="flex items-center gap-2 flex-shrink-0 w-full sm:w-auto">
-          <Button onClick={accept} className="h-9 px-5 text-sm flex-1 sm:flex-none">
-            Entendido
+        <div className="flex w-full flex-shrink-0 items-center gap-2 sm:w-auto">
+          <Button onClick={accept} className="flex-1 px-5 text-sm sm:flex-none">
+            {t("understood")}
           </Button>
-          <button onClick={accept} className="text-slate-400 hover:text-slate-600 p-1">
+          <button type="button" onClick={accept} aria-label={t("dismiss")} className="flex h-11 w-11 items-center justify-center rounded-xl text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700">
             <X className="h-4 w-4" />
           </button>
         </div>
       </div>
-    </div>
+    </aside>
   );
 };
 

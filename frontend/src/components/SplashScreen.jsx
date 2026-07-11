@@ -1,71 +1,77 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import { ArrowRight, Trophy } from "lucide-react";
+import { useI18n } from "@/i18n";
 import "./splash.css";
 
+const STORAGE_KEY = "ikastxiki_splash_seen";
+
+const hasBeenSeen = () => {
+  try {
+    return sessionStorage.getItem(STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+};
+
+const markAsSeen = () => {
+  try {
+    sessionStorage.setItem(STORAGE_KEY, "1");
+  } catch {}
+};
+
 const SplashScreen = () => {
-  const [hide, setHide] = useState(false);
-  const [gone, setGone] = useState(false);
-  const autoClose = useRef();
+  const { t } = useI18n();
+  const [hidden, setHidden] = useState(hasBeenSeen);
+  const [leaving, setLeaving] = useState(false);
+  const timer = useRef();
 
   const close = () => {
-    clearTimeout(autoClose.current);
-    setHide(true);
-    setTimeout(() => setGone(true), 700);
-    window.dispatchEvent(new Event("ikasTxikiSplashFinished"));
+    clearTimeout(timer.current);
+    markAsSeen();
+    setLeaving(true);
+    window.setTimeout(() => setHidden(true), 320);
   };
 
   useEffect(() => {
+    if (hidden) return undefined;
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     document.body.style.overflow = "hidden";
-    autoClose.current = setTimeout(close, 4000);
+    timer.current = window.setTimeout(close, reduceMotion ? 120 : 1450);
     return () => {
-      clearTimeout(autoClose.current);
+      clearTimeout(timer.current);
       document.body.style.overflow = "";
     };
-    // eslint-disable-next-line
+    // Solo se programa al montar la bienvenida.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    if (gone) document.body.style.overflow = "";
-  }, [gone]);
+    if (hidden) document.body.style.overflow = "";
+  }, [hidden]);
 
-  if (gone) return null;
+  if (hidden) return null;
 
   return (
-    <section
-      className={`splash-screen${hide ? " hide" : ""}`}
-      data-testid="splash-screen"
-      aria-label="Animación inicial Ikas-Txiki Fútbol Base"
-    >
-      <div className="field-lines">
-        <div className="center-circle"></div>
-        <div className="goal-left"></div>
-        <div className="goal-right"></div>
+    <section className={`brand-splash${leaving ? " is-leaving" : ""}`} data-testid="splash-screen" aria-label={t("appName")}>
+      <div className="brand-splash__pitch" aria-hidden="true">
+        <span className="brand-splash__midline" />
+        <span className="brand-splash__circle" />
       </div>
+      <div className="brand-splash__glow brand-splash__glow--one" aria-hidden="true" />
+      <div className="brand-splash__glow brand-splash__glow--two" aria-hidden="true" />
 
-      <div className="splash-card">
-        <div className="badge">⚽ App de gestión deportiva</div>
-
-        <div className="ball-track" aria-hidden="true">
-          <div className="football"></div>
-          <div className="ball-shadow"></div>
+      <div className="brand-splash__content">
+        <div className="brand-splash__mark" aria-hidden="true">
+          <Trophy />
         </div>
-
-        <h1 className="title">Ikas-Txiki</h1>
-        <div className="subtitle">Fútbol Base</div>
-
-        <p className="description">
-          Jugadores, familias, equipos y partidos en un solo lugar.
-        </p>
-
-        <div className="actions">
-          <button className="enter-button" data-testid="splash-enter-btn" type="button" onClick={close}>
-            Entrar
-          </button>
-          <span className="small-note">Inicio automático en unos segundos</span>
-        </div>
-
-        <div className="loading-bar" aria-hidden="true">
-          <span></span>
-        </div>
+        <p className="brand-splash__eyebrow">{t("splashBadge")}</p>
+        <h1>Ikas-Txiki</h1>
+        <p className="brand-splash__description">{t("splashDescription")}</p>
+        <button type="button" onClick={close} data-testid="splash-enter-btn">
+          {t("enter")}
+          <ArrowRight aria-hidden="true" />
+        </button>
+        <div className="brand-splash__progress" aria-hidden="true"><span /></div>
       </div>
     </section>
   );

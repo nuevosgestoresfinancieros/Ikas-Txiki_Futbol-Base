@@ -48,7 +48,7 @@ const Teams = () => {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {teams.map((tm) => (
-            <div key={tm.id} data-testid={`team-card-${tm.id}`} className="rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl p-5 transition-all hover:-translate-y-1 hover:shadow-md">
+            <div key={tm.id} data-testid={`team-card-${tm.id}`} className="surface-card interactive-card p-5">
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-3">
                   <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary/10 text-primary"><Shield className="h-5 w-5" /></div>
@@ -67,8 +67,8 @@ const Teams = () => {
               <div className="mt-4 flex items-center justify-between">
                 <span className="inline-flex items-center gap-1.5 text-sm text-slate-500"><Users className="h-4 w-4" />{tm.num_jugadores}/{tm.limite_jugadores} {t("playersCount")}</span>
                 <div className="flex gap-1">
-                  <Button variant="ghost" size="icon" data-testid={`edit-team-${tm.id}`} onClick={() => openEdit(tm)}><Pencil className="h-4 w-4" /></Button>
-                  <Button variant="ghost" size="icon" data-testid={`delete-team-${tm.id}`} onClick={() => remove(tm)} className="text-red-500"><Trash2 className="h-4 w-4" /></Button>
+                  <Button variant="ghost" size="icon" aria-label={`${t("edit")} ${tm.nombre}`} data-testid={`edit-team-${tm.id}`} onClick={() => openEdit(tm)}><Pencil className="h-4 w-4" /></Button>
+                  <Button variant="ghost" size="icon" aria-label={`${t("delete")} ${tm.nombre}`} data-testid={`delete-team-${tm.id}`} onClick={() => remove(tm)} className="text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button>
                 </div>
               </div>
             </div>

@@ -62,7 +62,7 @@ const Trainings = () => {
       ) : (
         <div className="space-y-3">
           {items.map((i) => (
-            <div key={i.id} data-testid={`training-card-${i.id}`} className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl p-4 hover:shadow-md transition-all">
+            <div key={i.id} data-testid={`training-card-${i.id}`} className="surface-card interactive-card flex flex-col justify-between gap-3 p-4 sm:flex-row sm:items-center">
               <div className="flex items-center gap-4">
                 <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary/10 text-primary"><Dumbbell className="h-5 w-5" /></div>
                 <div>
@@ -72,8 +72,8 @@ const Trainings = () => {
               </div>
               <div className="flex items-center gap-3">
                 <span className="inline-flex items-center gap-1.5 text-sm text-green-600"><Check className="h-4 w-4" />{i.presentes}/{i.total_asistencia} {t("present_short").toLowerCase()}</span>
-                <Button variant="ghost" size="icon" data-testid={`edit-training-${i.id}`} onClick={() => openEdit(i)}><Pencil className="h-4 w-4" /></Button>
-                <Button variant="ghost" size="icon" data-testid={`delete-training-${i.id}`} onClick={() => remove(i)} className="text-red-500"><Trash2 className="h-4 w-4" /></Button>
+                <Button variant="ghost" size="icon" aria-label={`${t("edit")} ${i.fecha || t("trainings")}`} data-testid={`edit-training-${i.id}`} onClick={() => openEdit(i)}><Pencil className="h-4 w-4" /></Button>
+                <Button variant="ghost" size="icon" aria-label={`${t("delete")} ${i.fecha || t("trainings")}`} data-testid={`delete-training-${i.id}`} onClick={() => remove(i)} className="text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button>
               </div>
             </div>
           ))}

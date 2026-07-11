@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/shared";
 import { Field } from "@/components/form";
+import { optimizeImage } from "@/lib/image";
 
 const TagList = ({ label, items, onAdd, onRemove, testid }) => {
   const { t } = useI18n();
@@ -24,7 +25,7 @@ const TagList = ({ label, items, onAdd, onRemove, testid }) => {
         {(items || []).map((it, i) => (
           <span key={i} className="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1 text-sm text-slate-700">
             {it}
-            <button data-testid={`${testid}-remove-${i}`} onClick={() => onRemove(i)} className="text-slate-400 hover:text-red-500"><X className="h-3.5 w-3.5" /></button>
+            <button type="button" aria-label={`${t("delete")} ${it}`} data-testid={`${testid}-remove-${i}`} onClick={() => onRemove(i)} className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-red-50 hover:text-red-500"><X className="h-3.5 w-3.5" /></button>
           </span>
         ))}
       </div>
@@ -41,9 +42,13 @@ const Settings = () => {
   const addTo = (k, v) => setS((p) => ({ ...p, [k]: [...(p[k] || []), v] }));
   const removeFrom = (k, i) => setS((p) => ({ ...p, [k]: p[k].filter((_, idx) => idx !== i) }));
 
-  const handleLogo = (e) => {
+  const handleLogo = async (e) => {
     const file = e.target.files?.[0]; if (!file) return;
-    const reader = new FileReader(); reader.onload = () => set("club_logo")(reader.result); reader.readAsDataURL(file);
+    try {
+      set("club_logo")(await optimizeImage(file, { maxSize: 512, quality: 0.86 }));
+    } catch {
+      toast.error("No se ha podido procesar el logotipo");
+    }
   };
 
   const save = async () => {
@@ -112,13 +117,13 @@ const Settings = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Club data */}
-        <div className="rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl p-6 space-y-4">
+        <div className="surface-card space-y-4 p-6">
           <h2 className="font-heading text-lg font-bold text-slate-900">{t("clubData")}</h2>
           <div className="flex items-center gap-4">
             <div className="relative">
               {s.club_logo ? <img src={s.club_logo} alt="" className="h-20 w-20 rounded-lg object-contain border border-slate-200" /> :
                 <div className="flex h-20 w-20 items-center justify-center rounded-lg bg-primary/10 text-primary font-bold">LOGO</div>}
-              <label className="absolute -bottom-1 -right-1 flex h-7 w-7 items-center justify-center rounded-full bg-primary text-white cursor-pointer shadow">
+              <label title={t("photo")} className="absolute -bottom-2 -right-2 flex h-11 w-11 cursor-pointer items-center justify-center rounded-xl bg-primary text-white shadow-md transition-colors hover:bg-primary/90">
                 <Camera className="h-4 w-4" />
                 <input data-testid="club-logo-input" type="file" accept="image/*" className="hidden" onChange={handleLogo} />
               </label>
@@ -126,7 +131,7 @@ const Settings = () => {
           </div>
           <Field label={t("clubName")} value={s.club_nombre} onChange={set("club_nombre")} testid="club-nombre" />
           <Field label={t("clubAddress")} value={s.club_direccion} onChange={set("club_direccion")} testid="club-direccion" />
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field label={t("clubEmail")} value={s.club_email} onChange={set("club_email")} testid="club-email" />
             <Field label={t("clubPhone")} value={s.club_telefono} onChange={set("club_telefono")} testid="club-telefono" />
           </div>
@@ -134,19 +139,19 @@ const Settings = () => {
         </div>
 
         {/* Lists */}
-        <div className="rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl p-6 space-y-5">
+        <div className="surface-card space-y-5 p-6">
           <h2 className="font-heading text-lg font-bold text-slate-900">{t("settings")}</h2>
           <TagList label={t("seasons")} items={s.temporadas} onAdd={(v) => addTo("temporadas", v)} onRemove={(i) => removeFrom("temporadas", i)} testid="seasons" />
           <TagList label={t("fields")} items={s.campos} onAdd={(v) => addTo("campos", v)} onRemove={(i) => removeFrom("campos", i)} testid="fields" />
           <TagList label={t("coaches")} items={s.entrenadores} onAdd={(v) => addTo("entrenadores", v)} onRemove={(i) => removeFrom("entrenadores", i)} testid="coaches" />
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field label={t("baseFee")} type="number" value={s.cuota_base} onChange={set("cuota_base")} testid="cuota-base" />
             <Field label={t("siblingDiscountCfg")} type="number" value={s.descuento_hermano} onChange={set("descuento_hermano")} testid="descuento-hermano" />
           </div>
         </div>
 
         {/* Categories */}
-        <div className="rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl p-6 lg:col-span-2">
+        <div className="surface-card p-6 lg:col-span-2">
           <h2 className="font-heading text-lg font-bold text-slate-900 mb-4">{t("categoriesByAge")}</h2>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             {(s.categories || []).map((c) => (
@@ -159,7 +164,7 @@ const Settings = () => {
         </div>
 
         {/* Data management */}
-        <div className="rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl p-6 lg:col-span-2" data-testid="data-management">
+        <div className="surface-card p-6 lg:col-span-2" data-testid="data-management">
           <div className="flex items-center gap-2 mb-4">
             <Database className="h-5 w-5 text-primary" />
             <h2 className="font-heading text-lg font-bold text-slate-900">{t("dataManagement")}</h2>

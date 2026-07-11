@@ -58,7 +58,7 @@ const Communications = () => {
       ) : (
         <div className="space-y-3">
           {items.map((i) => (
-            <div key={i.id} data-testid={`comm-card-${i.id}`} className="rounded-xl border border-white/60 bg-white/70 backdrop-blur-xl p-4 hover:shadow-md transition-all">
+            <div key={i.id} data-testid={`comm-card-${i.id}`} className="surface-card interactive-card p-4">
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-start gap-3">
                   <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${i.canal==="whatsapp"?"bg-green-100 text-green-700":"bg-sky-100 text-sky-700"}`}>
@@ -72,8 +72,8 @@ const Communications = () => {
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   {i.enviado ? <span className="inline-flex items-center gap-1 text-xs font-bold text-green-600"><Check className="h-4 w-4" />{t("sent")}</span> : <span className="text-xs text-amber-600">{t("pendingPayments").split(" ")[0]}</span>}
-                  <Button variant="ghost" size="icon" data-testid={`edit-comm-${i.id}`} onClick={() => openEdit(i)}><Pencil className="h-4 w-4" /></Button>
-                  <Button variant="ghost" size="icon" data-testid={`delete-comm-${i.id}`} onClick={() => remove(i)} className="text-red-500"><Trash2 className="h-4 w-4" /></Button>
+                  <Button variant="ghost" size="icon" aria-label={`${t("edit")} ${i.asunto || t("communications")}`} data-testid={`edit-comm-${i.id}`} onClick={() => openEdit(i)}><Pencil className="h-4 w-4" /></Button>
+                  <Button variant="ghost" size="icon" aria-label={`${t("delete")} ${i.asunto || t("communications")}`} data-testid={`delete-comm-${i.id}`} onClick={() => remove(i)} className="text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button>
                 </div>
               </div>
             </div>

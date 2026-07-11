@@ -28,6 +28,9 @@ Aplicación web integral para la **gestión de una escuela de fútbol base juven
 - **Pantalla de bienvenida** animada con la temática del club.
 - **Bilingüe**: cambia entre castellano y euskera con un clic (se recuerda tu preferencia).
 - **Diseño responsive** y colorido, pensado para usarse sin estrés desde el móvil en el campo.
+- **Acceso seguro** mediante cookie HttpOnly, protección frente a intentos repetidos y rutas privadas.
+- **Navegación adaptativa**: menú agrupado en escritorio y accesos principales en la parte inferior del móvil.
+- **Interfaz accesible** con foco visible, controles táctiles amplios, movimiento reducido y mensajes de error claros.
 - **Exportar / importar** toda la base de datos en **Excel (.xlsx)** y **datos de ejemplo** para probar.
 - **Vistas imprimibles / PDF** para autorizaciones e informes.
 
@@ -123,7 +126,10 @@ cd /app/frontend && yarn install
 ```
 MONGO_URL=...        # Conexión a MongoDB (no cambiar)
 DB_NAME=...          # Nombre de la base de datos (no cambiar)
-CORS_ORIGINS=*       # Orígenes permitidos
+CORS_ORIGINS=...     # Orígenes permitidos, separados por comas
+JWT_SECRET=...       # Clave aleatoria de al menos 32 caracteres
+ADMIN_USER=...       # Usuario administrador inicial
+ADMIN_PASSWORD=...   # Contraseña segura; nunca debe ser "admin"
 ```
 
 `frontend/.env`
@@ -203,7 +209,7 @@ curl -s "$API/api/search?q=benjamin"
 
 **¿Cómo empiezo de cero tras probar?** Configuración → **Vaciar todo**.
 
-**¿Necesito usuario y contraseña?** En esta versión no hay inicio de sesión: se accede directamente al panel.
+**¿Necesito usuario y contraseña?** Sí. Todas las rutas de gestión están protegidas y la sesión se mantiene mediante una cookie HttpOnly durante 8 horas.
 
 ---
 
