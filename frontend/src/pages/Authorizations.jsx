@@ -89,7 +89,6 @@ const Authorizations = () => {
   const [settings, setSettings] = useState({});
   const [dialog, setDialog] = useState(false);
   const [form, setForm] = useState({ tipo: "general", estado: "pendiente" });
-  const [printItem, setPrintItem] = useState(null);
   const [bulkForm, setBulkForm] = useState({ player_id: "", firmante: "" });
   const [bulkDialog, setBulkDialog] = useState(false);
   const [expanded, setExpanded] = useState({}); // { player_id: true/false }
@@ -133,26 +132,109 @@ const Authorizations = () => {
   };
 
   const getPlayer = (id) => players.find((p) => p.id === id);
-  const doPrint = (a) => { setPrintItem(a); setTimeout(() => window.print(), 300); };
+  const doPrint = async (a) => {
+    const printWindow = window.open("", "_blank", "width=900,height=1000");
+    if (!printWindow) {
+      toast.error("Permite las ventanas emergentes para imprimir la autorización");
+      return;
+    }
+
+    printWindow.opener = null;
+    printWindow.document.open();
+    printWindow.document.write(`<!doctype html>
+      <html lang="${lang}">
+        <head>
+          <meta charset="utf-8" />
+          <meta name="viewport" content="width=device-width,initial-scale=1" />
+          <title>${AUTH_TYPES[a.tipo]?.[lang] || "Autorización"}</title>
+          <style>
+            @page { size: A4 portrait; margin: 10mm; }
+            html, body { margin: 0; padding: 0; background: #fff; }
+            body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            @media print { html, body { width: 100%; min-height: 100%; } }
+          </style>
+        </head>
+        <body>${buildAuthHTML(a, getPlayer(a.player_id), settings, lang)}</body>
+      </html>`);
+    printWindow.document.close();
+
+    try {
+      if (printWindow.document.fonts?.ready) await printWindow.document.fonts.ready;
+      const images = Array.from(printWindow.document.images);
+      await Promise.all(images.map((img) => {
+        if (img.complete) return Promise.resolve();
+        return new Promise((resolve) => {
+          img.addEventListener("load", resolve, { once: true });
+          img.addEventListener("error", resolve, { once: true });
+        });
+      }));
+      printWindow.focus();
+      printWindow.print();
+    } catch (error) {
+      console.error("Error al preparar la impresión", error);
+      printWindow.close();
+      toast.error("No se pudo preparar la impresión");
+    }
+  };
 
   const doDownloadPdf = async (a) => {
     const player = getPlayer(a.player_id);
     const html = buildAuthHTML(a, player, settings, lang);
     const container = document.createElement("div");
     container.innerHTML = html;
-    container.style.cssText = "position:fixed;left:-9999px;top:0;";
+    // html2canvas necesita que el nodo esté dentro del viewport y pintado. Se
+    // muestra como una capa A4 durante la captura y se elimina inmediatamente.
+    container.setAttribute("aria-hidden", "true");
+    container.style.cssText = [
+      "position:fixed",
+      "left:0",
+      "top:0",
+      "width:794px",
+      "min-height:1123px",
+      "background:#fff",
+      "pointer-events:none",
+      "z-index:2147483647",
+      "box-shadow:none",
+      "overflow:visible",
+    ].join(";");
     document.body.appendChild(container);
     const tipoSlug = (AUTH_TYPES[a.tipo]?.[lang] || a.tipo).toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
     const jugadorSlug = player ? `${player.nombre}_${player.apellidos || ""}`.toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "") : "jugador";
-    if (window.html2pdf) {
+    try {
+      if (!window.html2pdf) throw new Error("El generador PDF no está disponible");
+
+      if (document.fonts?.ready) await document.fonts.ready;
+      const images = Array.from(container.querySelectorAll("img"));
+      await Promise.all(images.map((img) => {
+        if (img.complete) return Promise.resolve();
+        return new Promise((resolve) => {
+          img.addEventListener("load", resolve, { once: true });
+          img.addEventListener("error", resolve, { once: true });
+        });
+      }));
+
       await window.html2pdf().set({
-        margin: [10,10,10,10], filename: `autorizacion_${tipoSlug}_${jugadorSlug}.pdf`,
+        margin: [10, 10, 10, 10],
+        filename: `autorizacion_${tipoSlug}_${jugadorSlug}.pdf`,
         image: { type: "jpeg", quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true },
+        html2canvas: {
+          scale: 2,
+          useCORS: true,
+          backgroundColor: "#ffffff",
+          scrollX: 0,
+          scrollY: 0,
+          windowWidth: 794,
+        },
         jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-      }).from(container).save();
-    } else { toast.error("Error al generar PDF. Usa imprimir."); }
-    document.body.removeChild(container);
+        pagebreak: { mode: ["avoid-all", "css", "legacy"] },
+      }).from(container.firstElementChild || container).save();
+      toast.success("Autorización descargada correctamente");
+    } catch (error) {
+      console.error("Error al generar la autorización PDF", error);
+      toast.error("No se pudo generar el PDF. Prueba la opción Imprimir / PDF.");
+    } finally {
+      container.remove();
+    }
   };
 
   const doUploadSigned = async (authId, file) => {
@@ -304,12 +386,6 @@ const Authorizations = () => {
             );
           })}
         </div>
-      )}
-
-      {/* Área imprimible */}
-      {printItem && (
-        <div className="hidden print-area"
-          dangerouslySetInnerHTML={{ __html: buildAuthHTML(printItem, getPlayer(printItem.player_id), settings, lang) }} />
       )}
 
       {/* Dialog creación masiva */}
