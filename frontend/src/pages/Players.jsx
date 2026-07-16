@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { Users, Plus, Search, Pencil, Trash2, AlertTriangle, ChevronLeft, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
+import { PermissionGate, usePermission } from "@/auth";
 import { STATUS_LABELS, useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,6 +14,7 @@ import { PageHeader, StatusBadge, EmptyState, initials } from "@/components/shar
 import PlayerDialog from "@/pages/PlayerDialog";
 
 const Players = () => {
+  const canCreate = usePermission("players", "create");
   const { t, lang } = useI18n();
   const [params, setParams] = useSearchParams();
   const [players, setPlayers] = useState([]);
@@ -61,7 +63,7 @@ const Players = () => {
   }, [q]);
   useEffect(() => { setPage(1); load(); }, [load]);
   useEffect(() => {
-    if (params.get("new")) { openNew(); params.delete("new"); setParams(params); }
+    if (params.get("new") && canCreate) { openNew(); params.delete("new"); setParams(params); }
     // eslint-disable-next-line
   }, []);
 
@@ -82,7 +84,7 @@ const Players = () => {
   return (
     <div data-testid="players-page">
       <PageHeader title={t("players")} icon={Users}
-        action={<Button data-testid="add-player-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("newPlayer")}</Button>} />
+        action={canCreate ? <Button data-testid="add-player-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("newPlayer")}</Button> : null} />
 
       {/* Filters */}
       <div className="flex flex-col sm:flex-row gap-3 mb-5">
@@ -125,7 +127,7 @@ const Players = () => {
         </div>
       ) : players.length === 0 ? (
         <EmptyState icon={Users} message={t("quickStart")}
-          action={<Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("newPlayer")}</Button>} />
+          action={canCreate ? <Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("newPlayer")}</Button> : null} />
       ) : (
         <>
         <div className="surface-card hidden overflow-hidden md:block">
@@ -162,8 +164,8 @@ const Players = () => {
                     <td className="px-4 py-3"><StatusBadge status={p.estado} /></td>
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-1">
-                        <Button variant="ghost" size="icon" aria-label={`${t("edit")} ${p.nombre}`} data-testid={`edit-player-${p.id}`} onClick={() => openEdit(p)}><Pencil className="h-4 w-4" /></Button>
-                        <Button variant="ghost" size="icon" aria-label={`${t("delete")} ${p.nombre}`} data-testid={`delete-player-${p.id}`} onClick={() => remove(p)} className="text-red-500 hover:bg-red-50 hover:text-red-700"><Trash2 className="h-4 w-4" /></Button>
+                        <PermissionGate resource="players" action="edit"><Button variant="ghost" size="icon" aria-label={`${t("edit")} ${p.nombre}`} data-testid={`edit-player-${p.id}`} onClick={() => openEdit(p)}><Pencil className="h-4 w-4" /></Button></PermissionGate>
+                        <PermissionGate resource="players" action="delete"><Button variant="ghost" size="icon" aria-label={`${t("delete")} ${p.nombre}`} data-testid={`delete-player-${p.id}`} onClick={() => remove(p)} className="text-red-500 hover:bg-red-50 hover:text-red-700"><Trash2 className="h-4 w-4" /></Button></PermissionGate>
                       </div>
                     </td>
                   </tr>
@@ -190,8 +192,8 @@ const Players = () => {
               <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3">
                 <span className="text-xs font-semibold text-slate-500">{t("number")}: {p.dorsal || "—"}</span>
                 <div className="flex gap-1">
-                  <Button variant="ghost" size="icon" aria-label={`${t("edit")} ${p.nombre}`} onClick={() => openEdit(p)}><Pencil className="h-4 w-4" /></Button>
-                  <Button variant="ghost" size="icon" aria-label={`${t("delete")} ${p.nombre}`} onClick={() => remove(p)} className="text-red-500 hover:bg-red-50 hover:text-red-700"><Trash2 className="h-4 w-4" /></Button>
+                  <PermissionGate resource="players" action="edit"><Button variant="ghost" size="icon" aria-label={`${t("edit")} ${p.nombre}`} onClick={() => openEdit(p)}><Pencil className="h-4 w-4" /></Button></PermissionGate>
+                  <PermissionGate resource="players" action="delete"><Button variant="ghost" size="icon" aria-label={`${t("delete")} ${p.nombre}`} onClick={() => remove(p)} className="text-red-500 hover:bg-red-50 hover:text-red-700"><Trash2 className="h-4 w-4" /></Button></PermissionGate>
                 </div>
               </div>
             </article>

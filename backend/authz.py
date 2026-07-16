@@ -39,7 +39,6 @@ ROLE_PERMISSIONS: Dict[str, Dict[str, Set[str]]] = {
         "stats": _actions("read", "create", "edit", "export"),
         "search": _actions("read"),
         "equipment": _actions("read", "edit", "export"),
-        "settings": _actions("read"),
     },
     "coach": {
         "dashboard": _actions("read"),
@@ -93,7 +92,7 @@ PATH_RESOURCES = {
     "inscriptions": "inscriptions", "communications": "communications",
     "reports": "reports", "stats": "stats", "search": "search",
     "equipment": "equipment", "settings": "settings", "dashboard": "dashboard",
-    "users": "users", "categories": "settings", "compute-category": "settings",
+    "users": "users", "categories": "teams", "compute-category": "players",
     "export-excel": "data", "import-excel": "data", "clear-all": "data",
     "seed-demo": "data",
 }
@@ -160,3 +159,25 @@ def merge_query(query: Optional[dict], scope: Optional[dict]) -> dict:
 
 def ids(values: Iterable[Any]) -> list[str]:
     return [str(value) for value in values if value]
+
+
+def enforce_related_scope(
+    collection: str, data: Mapping[str, Any], team_ids: Set[str], player_ids: Set[str]
+) -> None:
+    """Impide introducir referencias ajenas dentro de un recurso autorizado."""
+    if collection == "trainings":
+        referenced = {item.get("player_id") for item in data.get("asistencia", []) if item.get("player_id")}
+        if not referenced.issubset(player_ids):
+            raise HTTPException(status_code=403, detail="La asistencia contiene jugadores fuera de tu ámbito")
+    if collection == "callups":
+        referenced = {item.get("player_id") for item in data.get("convocados", []) if item.get("player_id")}
+        if not referenced.issubset(player_ids):
+            raise HTTPException(status_code=403, detail="La convocatoria contiene jugadores fuera de tu ámbito")
+    if collection == "communications":
+        target_type = data.get("destinatario_tipo")
+        target_id = data.get("destinatario_id")
+        if not (
+            (target_type == "equipo" and target_id in team_ids)
+            or (target_type == "individual" and target_id in player_ids)
+        ):
+            raise HTTPException(status_code=403, detail="El destinatario no pertenece a tu ámbito")

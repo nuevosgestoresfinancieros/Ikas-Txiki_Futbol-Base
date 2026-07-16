@@ -3,6 +3,7 @@ import { useSearchParams, useNavigate } from "react-router-dom";
 import { ClipboardList, Plus, Pencil, Trash2, Check, X, Clock, Users, CalendarDays, ArrowRight } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
+import { PermissionGate, usePermission } from "@/auth";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -11,6 +12,8 @@ import { PageHeader, EmptyState, initials } from "@/components/shared";
 import { Field, Area, SelectField } from "@/components/form";
 
 const Callups = () => {
+  const canCreate = usePermission("callups", "create");
+  const canEdit = usePermission("callups", "edit");
   const { t } = useI18n();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
@@ -35,7 +38,7 @@ const Callups = () => {
   useEffect(() => {
     load().then(({ callups: cl, matches: ml }) => {
       // Crear nueva convocatoria con partido preseleccionado
-      if (params.get("new")) {
+      if (params.get("new") && canCreate) {
         const matchId = params.get("match_id") || "";
         const match = ml.find((m) => m.id === matchId);
         setForm({ match_id: matchId, equipo_id: match?.equipo_id || "", convocados: [] });
@@ -43,7 +46,7 @@ const Callups = () => {
         params.delete("new"); params.delete("match_id"); setParams(params);
       }
       // Editar convocatoria existente
-      if (params.get("edit")) {
+      if (params.get("edit") && canEdit) {
         const editId = params.get("edit");
         const existing = cl.find((c) => c.id === editId);
         if (existing) { setForm({ ...existing, convocados: existing.convocados || [] }); setDialog(true); }
@@ -126,11 +129,11 @@ const Callups = () => {
   return (
     <div data-testid="callups-page">
       <PageHeader title={t("callups")} icon={ClipboardList}
-        action={<Button data-testid="add-callup-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("newCallup")}</Button>} />
+        action={canCreate ? <Button data-testid="add-callup-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("newCallup")}</Button> : null} />
 
       {callups.length === 0 ? (
         <EmptyState icon={ClipboardList} message={t("noData")}
-          action={<Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("newCallup")}</Button>} />
+          action={canCreate ? <Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("newCallup")}</Button> : null} />
       ) : (
         <div className="space-y-3">
           {callups.map((c) => {
@@ -158,12 +161,12 @@ const Callups = () => {
                         <CalendarDays className="h-4 w-4" />
                       </Button>
                     )}
-                    <Button variant="ghost" size="icon" aria-label={t("edit")} data-testid={`edit-callup-${c.id}`} onClick={() => openEdit(c)}>
+                    <PermissionGate resource="callups" action="edit"><Button variant="ghost" size="icon" aria-label={t("edit")} data-testid={`edit-callup-${c.id}`} onClick={() => openEdit(c)}>
                       <Pencil className="h-4 w-4" />
-                    </Button>
-                    <Button variant="ghost" size="icon" aria-label={t("delete")} data-testid={`delete-callup-${c.id}`} onClick={() => remove(c)} className="text-red-500 hover:bg-red-50">
+                    </Button></PermissionGate>
+                    <PermissionGate resource="callups" action="delete"><Button variant="ghost" size="icon" aria-label={t("delete")} data-testid={`delete-callup-${c.id}`} onClick={() => remove(c)} className="text-red-500 hover:bg-red-50">
                       <Trash2 className="h-4 w-4" />
-                    </Button>
+                    </Button></PermissionGate>
                   </div>
                 </div>
 

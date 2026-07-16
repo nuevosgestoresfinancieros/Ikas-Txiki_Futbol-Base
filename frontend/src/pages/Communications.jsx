@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { MessageSquare, Plus, Pencil, Trash2, Mail, Send, Check } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
+import { PermissionGate, usePermission } from "@/auth";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -12,6 +13,7 @@ import { Field, Area, SelectField, SwitchField } from "@/components/form";
 const empty = { destinatario_tipo: "equipo", canal: "email", enviado: false };
 
 const Communications = () => {
+  const canCreate = usePermission("communications", "create");
   const { t } = useI18n();
   const [params, setParams] = useSearchParams();
   const [items, setItems] = useState([]);
@@ -25,7 +27,7 @@ const Communications = () => {
   useEffect(() => {
     load();
     Promise.all([api.get("/teams"), api.get("/categories"), api.get("/players")]).then(([tm, c, p]) => { setTeams(tm.data); setCategories(c.data); setPlayers(p.data); });
-    if (params.get("new")) { setForm(empty); setDialog(true); params.delete("new"); setParams(params); }
+    if (params.get("new") && canCreate) { setForm(empty); setDialog(true); params.delete("new"); setParams(params); }
     // eslint-disable-next-line
   }, []);
 
@@ -51,10 +53,10 @@ const Communications = () => {
   return (
     <div data-testid="communications-page">
       <PageHeader title={t("communications")} icon={MessageSquare}
-        action={<Button data-testid="add-comm-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("add")}</Button>} />
+        action={canCreate ? <Button data-testid="add-comm-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("add")}</Button> : null} />
 
       {items.length === 0 ? (
-        <EmptyState icon={MessageSquare} message={t("noData")} action={<Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("add")}</Button>} />
+        <EmptyState icon={MessageSquare} message={t("noData")} action={canCreate ? <Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("add")}</Button> : null} />
       ) : (
         <div className="space-y-3">
           {items.map((i) => (
@@ -72,8 +74,8 @@ const Communications = () => {
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   {i.enviado ? <span className="inline-flex items-center gap-1 text-xs font-bold text-green-600"><Check className="h-4 w-4" />{t("sent")}</span> : <span className="text-xs text-amber-600">{t("pendingPayments").split(" ")[0]}</span>}
-                  <Button variant="ghost" size="icon" aria-label={`${t("edit")} ${i.asunto || t("communications")}`} data-testid={`edit-comm-${i.id}`} onClick={() => openEdit(i)}><Pencil className="h-4 w-4" /></Button>
-                  <Button variant="ghost" size="icon" aria-label={`${t("delete")} ${i.asunto || t("communications")}`} data-testid={`delete-comm-${i.id}`} onClick={() => remove(i)} className="text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button>
+                  <PermissionGate resource="communications" action="edit"><Button variant="ghost" size="icon" aria-label={`${t("edit")} ${i.asunto || t("communications")}`} data-testid={`edit-comm-${i.id}`} onClick={() => openEdit(i)}><Pencil className="h-4 w-4" /></Button></PermissionGate>
+                  <PermissionGate resource="communications" action="delete"><Button variant="ghost" size="icon" aria-label={`${t("delete")} ${i.asunto || t("communications")}`} data-testid={`delete-comm-${i.id}`} onClick={() => remove(i)} className="text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button></PermissionGate>
                 </div>
               </div>
             </div>

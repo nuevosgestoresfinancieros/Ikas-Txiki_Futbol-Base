@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { Euro, Plus, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
+import { PermissionGate, usePermission } from "@/auth";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -12,6 +13,7 @@ import { Field, Area, SelectField, SwitchField } from "@/components/form";
 const empty = { concepto: "Cuota temporada", estado: "pendiente", importe_base: 0, descuento_hermano: 0, iban_validado: false, recibo_generado: false };
 
 const Payments = () => {
+  const canCreate = usePermission("payments", "create");
   const { t } = useI18n();
   const [params, setParams] = useSearchParams();
   const [payments, setPayments] = useState([]);
@@ -23,7 +25,7 @@ const Payments = () => {
   useEffect(() => {
     load();
     api.get("/players").then((r) => setPlayers(r.data));
-    if (params.get("new")) { setForm(empty); setDialog(true); params.delete("new"); setParams(params); }
+    if (params.get("new") && canCreate) { setForm(empty); setDialog(true); params.delete("new"); setParams(params); }
     // eslint-disable-next-line
   }, []);
 
@@ -44,10 +46,10 @@ const Payments = () => {
   return (
     <div data-testid="payments-page">
       <PageHeader title={t("payments")} icon={Euro} subtitle={`${totalPend.toFixed(2)} € ${t("pendingAmount")}`}
-        action={<Button data-testid="add-payment-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("newPayment")}</Button>} />
+        action={canCreate ? <Button data-testid="add-payment-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("newPayment")}</Button> : null} />
 
       {payments.length === 0 ? (
-        <EmptyState icon={Euro} message={t("noData")} action={<Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("newPayment")}</Button>} />
+        <EmptyState icon={Euro} message={t("noData")} action={canCreate ? <Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("newPayment")}</Button> : null} />
       ) : (
         <div className="surface-card overflow-hidden">
           <div className="overflow-x-auto">
@@ -72,8 +74,8 @@ const Payments = () => {
                     <td className="px-4 py-3"><StatusBadge status={p.estado} /></td>
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-1">
-                        <Button variant="ghost" size="icon" aria-label={`${t("edit")} ${p.player_nombre || t("payments")}`} data-testid={`edit-payment-${p.id}`} onClick={() => openEdit(p)}><Pencil className="h-4 w-4" /></Button>
-                        <Button variant="ghost" size="icon" aria-label={`${t("delete")} ${p.player_nombre || t("payments")}`} data-testid={`delete-payment-${p.id}`} onClick={() => remove(p)} className="text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button>
+                        <PermissionGate resource="payments" action="edit"><Button variant="ghost" size="icon" aria-label={`${t("edit")} ${p.player_nombre || t("payments")}`} data-testid={`edit-payment-${p.id}`} onClick={() => openEdit(p)}><Pencil className="h-4 w-4" /></Button></PermissionGate>
+                        <PermissionGate resource="payments" action="delete"><Button variant="ghost" size="icon" aria-label={`${t("delete")} ${p.player_nombre || t("payments")}`} data-testid={`delete-payment-${p.id}`} onClick={() => remove(p)} className="text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button></PermissionGate>
                       </div>
                     </td>
                   </tr>

@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Home, Plus, Pencil, Trash2, Phone, Mail } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
+import { PermissionGate, usePermission } from "@/auth";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -11,6 +12,7 @@ import { Field, Area, SelectField } from "@/components/form";
 const empty = { preferencia_comunicacion: "email" };
 
 const Families = () => {
+  const canCreate = usePermission("families", "create");
   const { t } = useI18n();
   const [families, setFamilies] = useState([]);
   const [dialog, setDialog] = useState(false);
@@ -36,10 +38,10 @@ const Families = () => {
   return (
     <div data-testid="families-page">
       <PageHeader title={t("families")} icon={Home}
-        action={<Button data-testid="add-family-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("add")}</Button>} />
+        action={canCreate ? <Button data-testid="add-family-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("add")}</Button> : null} />
 
       {families.length === 0 ? (
-        <EmptyState icon={Home} message={t("noData")} action={<Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("add")}</Button>} />
+        <EmptyState icon={Home} message={t("noData")} action={canCreate ? <Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("add")}</Button> : null} />
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {families.map((f) => (
@@ -61,8 +63,8 @@ const Families = () => {
                 </div>
               )}
               <div className="mt-4 flex justify-end gap-1">
-                <Button variant="ghost" size="icon" aria-label={`${t("edit")} ${f.contacto_principal || t("families")}`} data-testid={`edit-family-${f.id}`} onClick={() => openEdit(f)}><Pencil className="h-4 w-4" /></Button>
-                <Button variant="ghost" size="icon" aria-label={`${t("delete")} ${f.contacto_principal || t("families")}`} data-testid={`delete-family-${f.id}`} onClick={() => remove(f)} className="text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button>
+                <PermissionGate resource="families" action="edit"><Button variant="ghost" size="icon" aria-label={`${t("edit")} ${f.contacto_principal || t("families")}`} data-testid={`edit-family-${f.id}`} onClick={() => openEdit(f)}><Pencil className="h-4 w-4" /></Button></PermissionGate>
+                <PermissionGate resource="families" action="delete"><Button variant="ghost" size="icon" aria-label={`${t("delete")} ${f.contacto_principal || t("families")}`} data-testid={`delete-family-${f.id}`} onClick={() => remove(f)} className="text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button></PermissionGate>
               </div>
             </div>
           ))}

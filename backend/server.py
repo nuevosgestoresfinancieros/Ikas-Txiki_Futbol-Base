@@ -1,7 +1,6 @@
 from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Depends, Cookie, Response, Request
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.responses import StreamingResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -31,7 +30,8 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from datetime import datetime, timezone, date, timedelta
 
 from authz import (
-    ROLES, ROLE_PERMISSIONS, current_user_context, enforce_permission, ids,
+    ROLES, ROLE_PERMISSIONS, current_user_context, enforce_permission, enforce_related_scope,
+    has_permission, ids,
     merge_query, public_user, route_permission,
 )
 
@@ -300,8 +300,19 @@ async def ensure_data_scope(coll: str, data: dict) -> None:
         target = data.get("id") if coll == "teams" else data.get("equipo_id")
         if target not in team_ids:
             raise HTTPException(status_code=403, detail="El elemento no pertenece a tus equipos asignados")
+    player_ids = set(await user_player_ids(user))
+    if coll == "players" and data.get("familia_id"):
+        family_scope = await scope_for_collection("families", user)
+        if not await db.families.find_one(merge_query({"id": data["familia_id"]}, family_scope)):
+            raise HTTPException(status_code=403, detail="La familia no pertenece a tu ámbito")
+    enforce_related_scope(coll, data, team_ids, player_ids)
+    if coll == "callups":
+        if data.get("match_id") and not await db.matches.find_one({
+            "id": data["match_id"], "equipo_id": {"$in": list(team_ids)},
+        }):
+            raise HTTPException(status_code=403, detail="El partido no pertenece a tu ámbito")
     if coll in PLAYER_SCOPED_COLLECTIONS and data.get("player_id"):
-        if data["player_id"] not in set(await user_player_ids(user)):
+        if data["player_id"] not in player_ids:
             raise HTTPException(status_code=403, detail="El jugador no pertenece a tu ámbito")
 
 
@@ -1353,12 +1364,17 @@ async def api_compute_category(fecha_nacimiento: str):
 # ================= DASHBOARD =================
 @api_router.get("/dashboard")
 async def dashboard():
-    players = await list_docs("players")
-    matches = await list_docs("matches")
-    payments = await list_docs("payments")
-    auths = await list_docs("authorizations")
-    inscriptions = await list_docs("inscriptions")
-    trainings = await list_docs("trainings")
+    user = current_user_context.get() or {}
+
+    async def permitted_docs(collection: str, resource: str):
+        return await list_docs(collection) if has_permission(user, resource, "read") else []
+
+    players = await permitted_docs("players", "players")
+    matches = await permitted_docs("matches", "matches")
+    payments = await permitted_docs("payments", "payments")
+    auths = await permitted_docs("authorizations", "authorizations")
+    inscriptions = await permitted_docs("inscriptions", "inscriptions")
+    trainings = await permitted_docs("trainings", "trainings")
 
     activos = [p for p in players if p.get("estado") == "activo"]
     pendientes_doc = [p for p in players if p.get("estado_documental") != "completo"]
@@ -1372,7 +1388,7 @@ async def dashboard():
         [m for m in matches if m.get("fecha") and m.get("fecha") >= today and m.get("estado") == "programado"],
         key=lambda m: (m.get("fecha"), m.get("hora") or "")
     )[:5]
-    teams = {t["id"]: t["nombre"] for t in await list_docs("teams")}
+    teams = {t["id"]: t["nombre"] for t in await permitted_docs("teams", "teams")}
     for m in proximos_partidos:
         m["equipo_nombre"] = teams.get(m.get("equipo_id"), "—")
 
@@ -1665,9 +1681,7 @@ async def update_equipment(player_id: str, data: Dict[str, Any]):
         "fecha_entrega_equipacion", "observaciones_material"
     }
     update = {k: v for k, v in data.items() if k in allowed}
-    update["updated_at"] = now_iso()
-    await db["players"].update_one({"id": player_id}, {"$set": update})
-    return await get_doc("players", player_id)
+    return await update_doc("players", player_id, update)
 
 
 # ================= EXCEL IMPORT / EXPORT =================
@@ -1765,7 +1779,6 @@ async def import_excel(file: UploadFile = File(...)):
 
 
 app.include_router(api_router, dependencies=[Depends(authorize_request)])
-app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
 
 cors_origins = os.environ.get('CORS_ORIGINS', 'https://ikasfutbase.cibermedida.es').split(',')
 app.add_middleware(

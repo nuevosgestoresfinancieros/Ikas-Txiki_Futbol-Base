@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { FileSignature, Plus, Pencil, Trash2, Printer, Download, Upload, FileCheck, X, ChevronDown, ChevronUp, Check, Clock } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
+import { PermissionGate, usePermission } from "@/auth";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -102,6 +103,7 @@ const buildAuthHTML = (auth, player, settings, lang) => {
 };
 
 const Authorizations = () => {
+  const canCreate = usePermission("authorizations", "create");
   const { t, lang } = useI18n();
   const [params, setParams] = useSearchParams();
   const [auths, setAuths] = useState([]);
@@ -119,7 +121,7 @@ const Authorizations = () => {
     load();
     api.get("/players").then((r) => setPlayers(r.data));
     api.get("/settings").then((r) => setSettings(r.data));
-    if (params.get("new")) { setBulkDialog(true); params.delete("new"); setParams(params); }
+    if (params.get("new") && canCreate) { setBulkDialog(true); params.delete("new"); setParams(params); }
     // eslint-disable-next-line
   }, []);
 
@@ -258,19 +260,19 @@ const Authorizations = () => {
       </div>
       <div className="flex-1" />
       <div className="flex gap-1">
-        <Button variant="ghost" size="icon" className="text-blue-600" aria-label="Descargar PDF" title="Descargar PDF" onClick={() => doDownloadPdf(a)}><Download className="h-4 w-4" /></Button>
-        <Button variant="ghost" size="icon" className="text-primary" aria-label={t("print")} title={t("print")} onClick={() => doPrint(a)}><Printer className="h-4 w-4" /></Button>
-        <Button variant="ghost" size="icon" className="text-orange-500" aria-label="Subir autorización firmada" title="Subir firmada" onClick={() => uploadRefs.current[a.id]?.click()}><Upload className="h-4 w-4" /></Button>
+        <PermissionGate resource="authorizations" action="export"><Button variant="ghost" size="icon" className="text-blue-600" aria-label="Descargar PDF" title="Descargar PDF" onClick={() => doDownloadPdf(a)}><Download className="h-4 w-4" /></Button></PermissionGate>
+        <PermissionGate resource="authorizations" action="export"><Button variant="ghost" size="icon" className="text-primary" aria-label={t("print")} title={t("print")} onClick={() => doPrint(a)}><Printer className="h-4 w-4" /></Button></PermissionGate>
+        <PermissionGate resource="authorizations" action="edit"><Button variant="ghost" size="icon" className="text-orange-500" aria-label="Subir autorización firmada" title="Subir firmada" onClick={() => uploadRefs.current[a.id]?.click()}><Upload className="h-4 w-4" /></Button></PermissionGate>
         <input type="file" accept=".pdf,image/*" ref={(el) => (uploadRefs.current[a.id] = el)} style={{ display: "none" }}
           onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) doUploadSigned(a.id, f); }} />
         {a.archivo_firmado && (
           <>
-            <Button variant="ghost" size="icon" className="text-emerald-600" aria-label="Ver autorización firmada" title="Ver firmada" onClick={() => doViewSigned(a)}><FileCheck className="h-4 w-4" /></Button>
-            <Button variant="ghost" size="icon" className="text-red-400" aria-label="Eliminar archivo firmado" title="Eliminar firmada" onClick={() => doDeleteSigned(a)}><X className="h-4 w-4" /></Button>
+            <PermissionGate resource="authorizations" action="export"><Button variant="ghost" size="icon" className="text-emerald-600" aria-label="Ver autorización firmada" title="Ver firmada" onClick={() => doViewSigned(a)}><FileCheck className="h-4 w-4" /></Button></PermissionGate>
+            <PermissionGate resource="authorizations" action="edit"><Button variant="ghost" size="icon" className="text-red-400" aria-label="Eliminar archivo firmado" title="Eliminar firmada" onClick={() => doDeleteSigned(a)}><X className="h-4 w-4" /></Button></PermissionGate>
           </>
         )}
-        <Button variant="ghost" size="icon" aria-label={t("edit")} onClick={() => openEdit(a)}><Pencil className="h-4 w-4" /></Button>
-        <Button variant="ghost" size="icon" aria-label={t("delete")} className="text-red-500 hover:bg-red-50" onClick={() => remove(a)}><Trash2 className="h-4 w-4" /></Button>
+        <PermissionGate resource="authorizations" action="edit"><Button variant="ghost" size="icon" aria-label={t("edit")} onClick={() => openEdit(a)}><Pencil className="h-4 w-4" /></Button></PermissionGate>
+        <PermissionGate resource="authorizations" action="delete"><Button variant="ghost" size="icon" aria-label={t("delete")} className="text-red-500 hover:bg-red-50" onClick={() => remove(a)}><Trash2 className="h-4 w-4" /></Button></PermissionGate>
       </div>
     </div>
   );
@@ -278,16 +280,16 @@ const Authorizations = () => {
   return (
     <div data-testid="authorizations-page">
       <PageHeader title={t("authorizations")} icon={FileSignature}
-        action={
+        action={canCreate ?
           <Button data-testid="add-auth-btn" onClick={() => { setBulkForm({ player_id: "", firmante: "" }); setBulkDialog(true); }} className="h-11 px-5">
             <Plus className="h-5 w-5" />{t("newAuthorization")}
-          </Button>
+          </Button> : null
         }
       />
 
       {playerGroups.length === 0 ? (
         <EmptyState icon={FileSignature} message={t("noData")}
-          action={<Button onClick={() => setBulkDialog(true)} className="h-11"><Plus className="h-5 w-5" />{t("newAuthorization")}</Button>} />
+          action={canCreate ? <Button onClick={() => setBulkDialog(true)} className="h-11"><Plus className="h-5 w-5" />{t("newAuthorization")}</Button> : null} />
       ) : (
         <div className="space-y-2 no-print">
           {playerGroups.map((group) => {
@@ -347,10 +349,10 @@ const Authorizations = () => {
                           <div className="w-48 text-slate-400 italic">{AUTH_TYPES[tipo]?.[lang]}</div>
                           <div className="w-24 text-xs text-slate-300">Sin crear</div>
                           <div className="flex-1" />
-                          <Button variant="ghost" size="sm" className="text-xs text-slate-500 hover:text-primary"
+                          <PermissionGate resource="authorizations" action="create"><Button variant="ghost" size="sm" className="text-xs text-slate-500 hover:text-primary"
                             onClick={() => { setForm({ player_id: group.player_id, tipo, estado: "pendiente" }); setDialog(true); }}>
                             + Crear
-                          </Button>
+                          </Button></PermissionGate>
                         </div>
                       ))}
                   </div>

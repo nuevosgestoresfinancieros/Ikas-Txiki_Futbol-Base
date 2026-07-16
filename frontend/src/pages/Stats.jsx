@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { BarChart3, Plus, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
+import { PermissionGate, usePermission } from "@/auth";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -11,6 +12,7 @@ import { Field, Area, SelectField } from "@/components/form";
 const empty = { partidos_convocado: 0, partidos_jugados: 0, minutos: 0, goles: 0, asistencias: 0, amarillas: 0, rojas: 0, porterias_cero: 0 };
 
 const Stats = () => {
+  const canCreate = usePermission("stats", "create");
   const { t } = useI18n();
   const [items, setItems] = useState([]);
   const [players, setPlayers] = useState([]);
@@ -41,10 +43,10 @@ const Stats = () => {
   return (
     <div data-testid="stats-page">
       <PageHeader title={t("stats")} icon={BarChart3}
-        action={<Button data-testid="add-stats-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("add")}</Button>} />
+        action={canCreate ? <Button data-testid="add-stats-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("add")}</Button> : null} />
 
       {items.length === 0 ? (
-        <EmptyState icon={BarChart3} message={t("noData")} action={<Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("add")}</Button>} />
+        <EmptyState icon={BarChart3} message={t("noData")} action={canCreate ? <Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("add")}</Button> : null} />
       ) : (
         <div className="surface-card overflow-hidden">
           <div className="overflow-x-auto">
@@ -65,8 +67,8 @@ const Stats = () => {
                     {cols.map(([lbl, key]) => <td key={key} className="px-3 py-3 text-center text-slate-700">{i[key] ?? 0}</td>)}
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-1">
-                        <Button variant="ghost" size="icon" aria-label={`${t("edit")} ${i.player_nombre || t("stats")}`} data-testid={`edit-stats-${i.id}`} onClick={() => openEdit(i)}><Pencil className="h-4 w-4" /></Button>
-                        <Button variant="ghost" size="icon" aria-label={`${t("delete")} ${i.player_nombre || t("stats")}`} data-testid={`delete-stats-${i.id}`} onClick={() => remove(i)} className="text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button>
+                        <PermissionGate resource="stats" action="edit"><Button variant="ghost" size="icon" aria-label={`${t("edit")} ${i.player_nombre || t("stats")}`} data-testid={`edit-stats-${i.id}`} onClick={() => openEdit(i)}><Pencil className="h-4 w-4" /></Button></PermissionGate>
+                        <PermissionGate resource="stats" action="delete"><Button variant="ghost" size="icon" aria-label={`${t("delete")} ${i.player_nombre || t("stats")}`} data-testid={`delete-stats-${i.id}`} onClick={() => remove(i)} className="text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button></PermissionGate>
                       </div>
                     </td>
                   </tr>

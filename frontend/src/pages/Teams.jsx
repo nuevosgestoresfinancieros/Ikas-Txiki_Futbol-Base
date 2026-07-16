@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { Shield, Plus, Pencil, Trash2, Users } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
+import { PermissionGate, usePermission } from "@/auth";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -12,6 +13,7 @@ import { Field, SelectField } from "@/components/form";
 const empty = { nombre: "", estado: "activo", limite_jugadores: 20 };
 
 const Teams = () => {
+  const canCreate = usePermission("teams", "create");
   const { t } = useI18n();
   const [params, setParams] = useSearchParams();
   const [teams, setTeams] = useState([]);
@@ -23,7 +25,7 @@ const Teams = () => {
   useEffect(() => {
     load();
     api.get("/categories").then((r) => setCategories(r.data));
-    if (params.get("new")) { setForm(empty); setDialog(true); params.delete("new"); setParams(params); }
+    if (params.get("new") && canCreate) { setForm(empty); setDialog(true); params.delete("new"); setParams(params); }
     // eslint-disable-next-line
   }, []);
 
@@ -41,10 +43,10 @@ const Teams = () => {
   return (
     <div data-testid="teams-page">
       <PageHeader title={t("teams")} icon={Shield}
-        action={<Button data-testid="add-team-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("newTeam")}</Button>} />
+        action={canCreate ? <Button data-testid="add-team-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("newTeam")}</Button> : null} />
 
       {teams.length === 0 ? (
-        <EmptyState icon={Shield} message={t("noData")} action={<Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("newTeam")}</Button>} />
+        <EmptyState icon={Shield} message={t("noData")} action={canCreate ? <Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("newTeam")}</Button> : null} />
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {teams.map((tm) => (
@@ -67,8 +69,8 @@ const Teams = () => {
               <div className="mt-4 flex items-center justify-between">
                 <span className="inline-flex items-center gap-1.5 text-sm text-slate-500"><Users className="h-4 w-4" />{tm.num_jugadores}/{tm.limite_jugadores} {t("playersCount")}</span>
                 <div className="flex gap-1">
-                  <Button variant="ghost" size="icon" aria-label={`${t("edit")} ${tm.nombre}`} data-testid={`edit-team-${tm.id}`} onClick={() => openEdit(tm)}><Pencil className="h-4 w-4" /></Button>
-                  <Button variant="ghost" size="icon" aria-label={`${t("delete")} ${tm.nombre}`} data-testid={`delete-team-${tm.id}`} onClick={() => remove(tm)} className="text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button>
+                  <PermissionGate resource="teams" action="edit"><Button variant="ghost" size="icon" aria-label={`${t("edit")} ${tm.nombre}`} data-testid={`edit-team-${tm.id}`} onClick={() => openEdit(tm)}><Pencil className="h-4 w-4" /></Button></PermissionGate>
+                  <PermissionGate resource="teams" action="delete"><Button variant="ghost" size="icon" aria-label={`${t("delete")} ${tm.nombre}`} data-testid={`delete-team-${tm.id}`} onClick={() => remove(tm)} className="text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button></PermissionGate>
                 </div>
               </div>
             </div>

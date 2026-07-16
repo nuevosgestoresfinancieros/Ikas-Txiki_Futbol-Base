@@ -6,6 +6,7 @@ import {
   Trophy, UserPlus, Users,
 } from "lucide-react";
 import api from "@/api";
+import { PermissionGate } from "@/auth";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/shared";
@@ -141,29 +142,29 @@ const Dashboard = () => {
           <span className="text-xs font-semibold text-slate-400">{t("needsAttention")}: {alerts.length}</span>
         </div>
         <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <MetricCard testid="active" icon={Users} label={t("activePlayers")} value={data.jugadores_activos} tone="teal" onClick={() => navigate("/jugadores?estado=activo")} />
-          <MetricCard testid="docs" icon={FileWarning} label={t("pendingDocs")} value={data.documentacion_pendiente} tone="amber" onClick={() => navigate("/jugadores")} />
-          <MetricCard testid="payments" icon={Euro} label={t("pendingPayments")} value={data.pagos_pendientes} detail={`${data.importe_pendiente} € ${t("pendingAmount")}`} tone="rose" onClick={() => navigate("/pagos")} />
-          <MetricCard testid="matches" icon={CalendarDays} label={t("upcomingMatches")} value={matches.length} tone="blue" onClick={() => navigate("/partidos")} />
+          <PermissionGate resource="players"><MetricCard testid="active" icon={Users} label={t("activePlayers")} value={data.jugadores_activos} tone="teal" onClick={() => navigate("/jugadores?estado=activo")} /></PermissionGate>
+          <PermissionGate resource="players"><MetricCard testid="docs" icon={FileWarning} label={t("pendingDocs")} value={data.documentacion_pendiente} tone="amber" onClick={() => navigate("/jugadores")} /></PermissionGate>
+          <PermissionGate resource="payments"><MetricCard testid="payments" icon={Euro} label={t("pendingPayments")} value={data.pagos_pendientes} detail={`${data.importe_pendiente} € ${t("pendingAmount")}`} tone="rose" onClick={() => navigate("/pagos")} /></PermissionGate>
+          <PermissionGate resource="matches"><MetricCard testid="matches" icon={CalendarDays} label={t("upcomingMatches")} value={matches.length} tone="blue" onClick={() => navigate("/partidos")} /></PermissionGate>
         </div>
 
         <div className="mb-8 grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <CompactMetric icon={UserPlus} label={t("newInscriptions")} value={data.nuevas_inscripciones} onClick={() => navigate("/inscripciones")} />
-          <CompactMetric icon={ClipboardCheck} label={t("pendingInscriptions")} value={data.inscripciones_pendientes} onClick={() => navigate("/inscripciones")} />
-          <CompactMetric icon={FileSignature} label={t("authorizations")} value={data.autorizaciones_pendientes} onClick={() => navigate("/autorizaciones")} />
-          <CompactMetric icon={Trophy} label={t("totalPlayers")} value={data.total_jugadores} onClick={() => navigate("/jugadores")} />
+          <PermissionGate resource="inscriptions"><CompactMetric icon={UserPlus} label={t("newInscriptions")} value={data.nuevas_inscripciones} onClick={() => navigate("/inscripciones")} /></PermissionGate>
+          <PermissionGate resource="inscriptions"><CompactMetric icon={ClipboardCheck} label={t("pendingInscriptions")} value={data.inscripciones_pendientes} onClick={() => navigate("/inscripciones")} /></PermissionGate>
+          <PermissionGate resource="authorizations"><CompactMetric icon={FileSignature} label={t("authorizations")} value={data.autorizaciones_pendientes} onClick={() => navigate("/autorizaciones")} /></PermissionGate>
+          <PermissionGate resource="players"><CompactMetric icon={Trophy} label={t("totalPlayers")} value={data.total_jugadores} onClick={() => navigate("/jugadores")} /></PermissionGate>
         </div>
       </section>
 
       <section className="mb-8" aria-labelledby="quick-actions-title">
         <h2 id="quick-actions-title" className="mb-3 font-heading text-xl font-bold text-slate-900">{t("quickActions")}</h2>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-          <QuickAction testid="new-player" icon={UserPlus} label={t("newPlayer")} onClick={() => navigate("/jugadores?new=1")} />
-          <QuickAction testid="new-match" icon={CalendarDays} label={t("newMatch")} onClick={() => navigate("/partidos?new=1")} />
-          <QuickAction testid="new-callup" icon={ClipboardCheck} label={t("newCallup")} onClick={() => navigate("/convocatorias?new=1")} />
-          <QuickAction testid="new-training" icon={Dumbbell} label={t("trainings")} onClick={() => navigate("/entrenamientos?new=1")} />
-          <QuickAction testid="new-payment" icon={Euro} label={t("newPayment")} onClick={() => navigate("/pagos?new=1")} />
-          <QuickAction testid="new-team" icon={Shield} label={t("newTeam")} onClick={() => navigate("/equipos?new=1")} />
+          <PermissionGate resource="players" action="create"><QuickAction testid="new-player" icon={UserPlus} label={t("newPlayer")} onClick={() => navigate("/jugadores?new=1")} /></PermissionGate>
+          <PermissionGate resource="matches" action="create"><QuickAction testid="new-match" icon={CalendarDays} label={t("newMatch")} onClick={() => navigate("/partidos?new=1")} /></PermissionGate>
+          <PermissionGate resource="callups" action="create"><QuickAction testid="new-callup" icon={ClipboardCheck} label={t("newCallup")} onClick={() => navigate("/convocatorias?new=1")} /></PermissionGate>
+          <PermissionGate resource="trainings" action="create"><QuickAction testid="new-training" icon={Dumbbell} label={t("trainings")} onClick={() => navigate("/entrenamientos?new=1")} /></PermissionGate>
+          <PermissionGate resource="payments" action="create"><QuickAction testid="new-payment" icon={Euro} label={t("newPayment")} onClick={() => navigate("/pagos?new=1")} /></PermissionGate>
+          <PermissionGate resource="teams" action="create"><QuickAction testid="new-team" icon={Shield} label={t("newTeam")} onClick={() => navigate("/equipos?new=1")} /></PermissionGate>
         </div>
       </section>
 

@@ -3,6 +3,7 @@ import { useSearchParams, useNavigate } from "react-router-dom";
 import { CalendarDays, Plus, Pencil, Trash2, MapPin, Users, Check, X, Clock, ChevronDown, ChevronUp, ClipboardList } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
+import { PermissionGate, usePermission } from "@/auth";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -12,6 +13,8 @@ import { Field, Area, SelectField } from "@/components/form";
 const empty = { condicion: "local", tipo: "liga", estado: "programado" };
 
 const Matches = () => {
+  const canCreate = usePermission("matches", "create");
+  const canCreateCallup = usePermission("callups", "create");
   const { t } = useI18n();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
@@ -38,7 +41,7 @@ const Matches = () => {
 
   useEffect(() => {
     load();
-    if (params.get("new")) { setForm(empty); setDialog(true); params.delete("new"); setParams(params); }
+    if (params.get("new") && canCreate) { setForm(empty); setDialog(true); params.delete("new"); setParams(params); }
     // eslint-disable-next-line
   }, []);
 
@@ -78,11 +81,11 @@ const Matches = () => {
   return (
     <div data-testid="matches-page">
       <PageHeader title={t("matches")} icon={CalendarDays}
-        action={<Button data-testid="add-match-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("newMatch")}</Button>} />
+        action={canCreate ? <Button data-testid="add-match-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("newMatch")}</Button> : null} />
 
       {matches.length === 0 ? (
         <EmptyState icon={CalendarDays} message={t("noData")}
-          action={<Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("newMatch")}</Button>} />
+          action={canCreate ? <Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("newMatch")}</Button> : null} />
       ) : (
         <div className="space-y-3">
           {matches.map((m) => {
@@ -145,11 +148,11 @@ const Matches = () => {
                     )}
 
                     {/* Botón convocatoria */}
-                    <Button variant="outline" size="sm" onClick={() => goToCallup(m)}
+                    {(callup || canCreateCallup) && <Button variant="outline" size="sm" onClick={() => goToCallup(m)}
                       className="h-8 px-3 text-xs gap-1.5 border-primary/30 text-primary hover:bg-primary/5">
                       <ClipboardList className="h-3.5 w-3.5" />
                       {callup ? "Ver convocatoria" : "Crear convocatoria"}
-                    </Button>
+                    </Button>}
 
                     {/* Expandir jugadores */}
                     {convocados.length > 0 && (
@@ -159,12 +162,12 @@ const Matches = () => {
                       </Button>
                     )}
 
-                    <Button variant="ghost" size="icon" aria-label={`${t("edit")} ${m.rival || t("matches")}`} data-testid={`edit-match-${m.id}`} onClick={() => openEdit(m)}>
+                    <PermissionGate resource="matches" action="edit"><Button variant="ghost" size="icon" aria-label={`${t("edit")} ${m.rival || t("matches")}`} data-testid={`edit-match-${m.id}`} onClick={() => openEdit(m)}>
                       <Pencil className="h-4 w-4" />
-                    </Button>
-                    <Button variant="ghost" size="icon" aria-label={`${t("delete")} ${m.rival || t("matches")}`} data-testid={`delete-match-${m.id}`} onClick={() => remove(m)} className="text-red-500 hover:bg-red-50">
+                    </Button></PermissionGate>
+                    <PermissionGate resource="matches" action="delete"><Button variant="ghost" size="icon" aria-label={`${t("delete")} ${m.rival || t("matches")}`} data-testid={`delete-match-${m.id}`} onClick={() => remove(m)} className="text-red-500 hover:bg-red-50">
                       <Trash2 className="h-4 w-4" />
-                    </Button>
+                    </Button></PermissionGate>
                   </div>
                 </div>
 

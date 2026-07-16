@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { Dumbbell, Plus, Pencil, Trash2, Check } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
+import { PermissionGate, usePermission } from "@/auth";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -15,6 +16,7 @@ import { Field, Area, SelectField } from "@/components/form";
 const ATT_STATES = ["presente", "justificada", "injustificada", "lesion"];
 
 const Trainings = () => {
+  const canCreate = usePermission("trainings", "create");
   const { t } = useI18n();
   const [params, setParams] = useSearchParams();
   const [items, setItems] = useState([]);
@@ -27,7 +29,7 @@ const Trainings = () => {
   useEffect(() => {
     load();
     Promise.all([api.get("/teams"), api.get("/players")]).then(([tm, p]) => { setTeams(tm.data); setPlayers(p.data); });
-    if (params.get("new")) { openNew(); params.delete("new"); setParams(params); }
+    if (params.get("new") && canCreate) { openNew(); params.delete("new"); setParams(params); }
     // eslint-disable-next-line
   }, []);
 
@@ -55,10 +57,10 @@ const Trainings = () => {
   return (
     <div data-testid="trainings-page">
       <PageHeader title={t("trainings")} icon={Dumbbell}
-        action={<Button data-testid="add-training-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("add")}</Button>} />
+        action={canCreate ? <Button data-testid="add-training-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("add")}</Button> : null} />
 
       {items.length === 0 ? (
-        <EmptyState icon={Dumbbell} message={t("noData")} action={<Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("add")}</Button>} />
+        <EmptyState icon={Dumbbell} message={t("noData")} action={canCreate ? <Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("add")}</Button> : null} />
       ) : (
         <div className="space-y-3">
           {items.map((i) => (
@@ -72,8 +74,8 @@ const Trainings = () => {
               </div>
               <div className="flex items-center gap-3">
                 <span className="inline-flex items-center gap-1.5 text-sm text-green-600"><Check className="h-4 w-4" />{i.presentes}/{i.total_asistencia} {t("present_short").toLowerCase()}</span>
-                <Button variant="ghost" size="icon" aria-label={`${t("edit")} ${i.fecha || t("trainings")}`} data-testid={`edit-training-${i.id}`} onClick={() => openEdit(i)}><Pencil className="h-4 w-4" /></Button>
-                <Button variant="ghost" size="icon" aria-label={`${t("delete")} ${i.fecha || t("trainings")}`} data-testid={`delete-training-${i.id}`} onClick={() => remove(i)} className="text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button>
+                <PermissionGate resource="trainings" action="edit"><Button variant="ghost" size="icon" aria-label={`${t("edit")} ${i.fecha || t("trainings")}`} data-testid={`edit-training-${i.id}`} onClick={() => openEdit(i)}><Pencil className="h-4 w-4" /></Button></PermissionGate>
+                <PermissionGate resource="trainings" action="delete"><Button variant="ghost" size="icon" aria-label={`${t("delete")} ${i.fecha || t("trainings")}`} data-testid={`delete-training-${i.id}`} onClick={() => remove(i)} className="text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button></PermissionGate>
               </div>
             </div>
           ))}

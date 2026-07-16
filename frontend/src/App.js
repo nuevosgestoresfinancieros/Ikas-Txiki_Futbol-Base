@@ -8,7 +8,7 @@ import Layout from "@/components/Layout";
 import RgpdBanner from "@/components/RgpdBanner";
 import Login from "@/pages/Login";
 import SplashScreen from "@/components/SplashScreen";
-import { can } from "@/auth";
+import { AuthProvider, can } from "@/auth";
 
 const Dashboard = lazy(() => import("@/pages/Dashboard"));
 const Players = lazy(() => import("@/pages/Players"));
@@ -86,7 +86,7 @@ function App() {
             user === undefined
               ? <AppLoader fullPage />
               : <ProtectedRoute user={user}>
-              <Layout onLogout={handleLogout} user={user}>
+              <AuthProvider user={user}><Layout onLogout={handleLogout} user={user}>
                 <Suspense fallback={<AppLoader />}>
                   <Routes>
                     <Route path="/" element={<Dashboard />} />
@@ -107,7 +107,7 @@ function App() {
                     <Route path="/usuarios" element={<AuthorizedRoute user={user} resource="users"><Users /></AuthorizedRoute>} />
                   </Routes>
                 </Suspense>
-              </Layout>
+              </Layout></AuthProvider>
             </ProtectedRoute>
           }
         />

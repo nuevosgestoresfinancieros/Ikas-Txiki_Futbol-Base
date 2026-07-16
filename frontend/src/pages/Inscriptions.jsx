@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { UserPlus, Plus, Pencil, Trash2, UserCheck, Users } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
+import { PermissionGate, usePermission } from "@/auth";
 import { STATUS_LABELS, useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -12,6 +13,7 @@ import { Field, Area, SelectField } from "@/components/form";
 const empty = { tipo: "alta", estado: "recibida", nueva_incorporacion: true, nombre: "" };
 
 const Inscriptions = () => {
+  const canCreate = usePermission("inscriptions", "create");
   const { t, lang } = useI18n();
   const nav = useNavigate();
   const [params, setParams] = useSearchParams();
@@ -29,7 +31,7 @@ const Inscriptions = () => {
   };
   useEffect(() => {
     load();
-    if (params.get("new")) { setForm(empty); setDialog(true); params.delete("new"); setParams(params); }
+    if (params.get("new") && canCreate) { setForm(empty); setDialog(true); params.delete("new"); setParams(params); }
     // eslint-disable-next-line
   }, []);
 
@@ -61,12 +63,12 @@ const Inscriptions = () => {
   return (
     <div data-testid="inscriptions-page">
       <PageHeader title={t("inscriptions")} icon={UserPlus}
-        action={<Button data-testid="add-inscription-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("alta")}</Button>} />
+        action={canCreate ? <Button data-testid="add-inscription-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("alta")}</Button> : null} />
 
       {loading ? (
         <div className="surface-card space-y-3 p-5" role="status" aria-label={t("loading")}>{[0,1,2,3].map((item) => <div key={item} className="h-20 animate-pulse rounded-xl bg-slate-100" />)}</div>
       ) : items.length === 0 ? (
-        <EmptyState icon={UserPlus} message={t("noData")} action={<Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("alta")}</Button>} />
+        <EmptyState icon={UserPlus} message={t("noData")} action={canCreate ? <Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("alta")}</Button> : null} />
       ) : (
         <div className="space-y-3">
           {items.map((i) => (
@@ -87,10 +89,10 @@ const Inscriptions = () => {
                 {i.player_id ? (
                   <span className="text-xs font-bold text-green-600 inline-flex items-center gap-1"><UserCheck className="h-4 w-4" />{t("convertedPlayer")}</span>
                 ) : (
-                  <Button size="sm" variant="secondary" data-testid={`to-player-${i.id}`} onClick={() => toPlayer(i)}><UserCheck className="h-4 w-4" />{t("createPlayerFromInscription")}</Button>
+                  <PermissionGate resource="inscriptions" action="create"><Button size="sm" variant="secondary" data-testid={`to-player-${i.id}`} onClick={() => toPlayer(i)}><UserCheck className="h-4 w-4" />{t("createPlayerFromInscription")}</Button></PermissionGate>
                 )}
-                <Button variant="ghost" size="icon" aria-label={`${t("edit")} ${i.nombre}`} data-testid={`edit-inscription-${i.id}`} onClick={() => openEdit(i)}><Pencil className="h-4 w-4" /></Button>
-                <Button variant="ghost" size="icon" aria-label={`${t("delete")} ${i.nombre}`} data-testid={`delete-inscription-${i.id}`} onClick={() => remove(i)} className="text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button>
+                <PermissionGate resource="inscriptions" action="edit"><Button variant="ghost" size="icon" aria-label={`${t("edit")} ${i.nombre}`} data-testid={`edit-inscription-${i.id}`} onClick={() => openEdit(i)}><Pencil className="h-4 w-4" /></Button></PermissionGate>
+                <PermissionGate resource="inscriptions" action="delete"><Button variant="ghost" size="icon" aria-label={`${t("delete")} ${i.nombre}`} data-testid={`delete-inscription-${i.id}`} onClick={() => remove(i)} className="text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button></PermissionGate>
               </div>
             </div>
           ))}
