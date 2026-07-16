@@ -4,6 +4,8 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any, Iterable, Optional
 
+from callup_service import normalize_status
+
 
 ATTENDANCE_STATES = ("presente", "justificada", "injustificada", "lesion")
 
@@ -71,7 +73,7 @@ def pending_callups(callups: Iterable[dict], player_ids: Optional[set[str]] = No
     for callup in callups:
         pending = [
             item for item in callup.get("convocados", [])
-            if item.get("estado", "pendiente") == "pendiente"
+            if normalize_status(item.get("estado")) == "pending"
             and (player_ids is None or item.get("player_id") in player_ids)
         ]
         if pending:
@@ -90,7 +92,7 @@ def player_callup_status(callups: Iterable[dict], player_ids: set[str]) -> list[
             if item.get("player_id") in player_ids:
                 result.append({
                     "callup_id": callup.get("id"), "match_id": callup.get("match_id"),
-                    "player_id": item.get("player_id"), "estado": item.get("estado", "pendiente"),
+                    "player_id": item.get("player_id"), "estado": normalize_status(item.get("estado")),
                 })
     return result
 

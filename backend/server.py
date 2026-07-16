@@ -38,6 +38,10 @@ from dashboard_service import (
     next_activity, pending_callups, player_callup_status, prioritized_alerts,
     weekly_attendance,
 )
+from callup_service import (
+    VALID_STATUSES, apply_response, is_late, normalize_callup, normalize_status,
+    response_counts,
+)
 
 
 ROOT_DIR = Path(__file__).parent
@@ -757,53 +761,264 @@ async def remove_match(match_id: str):
 # ================= CALLUPS (Convocatorias) =================
 class ConvocadoItem(BaseModel):
     player_id: str
-    estado: str = "pendiente"  # pendiente, confirmado, no_puede
+    estado: str = "pending"
     motivo: Optional[str] = None
+    responded_at: Optional[str] = None
+    responded_by_user_id: Optional[str] = None
+    responded_by_username: Optional[str] = None
+    responded_by_role: Optional[str] = None
+    late: bool = False
+    history: List[Dict[str, Any]] = Field(default_factory=list)
+
+    @field_validator("estado")
+    @classmethod
+    def normalize_legacy_status(cls, value: str):
+        normalized = normalize_status(value)
+        if normalized not in VALID_STATUSES:
+            raise ValueError("Estado no válido")
+        return normalized
 
 
 class Callup(BaseModel):
     match_id: str
     equipo_id: Optional[str] = None
-    convocados: List[ConvocadoItem] = []
+    convocados: List[ConvocadoItem] = Field(default_factory=list)
     hora_quedada: Optional[str] = None
     lugar_quedada: Optional[str] = None
     material: Optional[str] = None
     mensaje_familias: Optional[str] = None
+    response_deadline: Optional[str] = None
+    player_self_response_allowed: bool = False
+
+
+class CallupResponse(BaseModel):
+    player_id: str
+    status: str
+    reason: Optional[str] = None
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: str):
+        normalized = normalize_status(value)
+        if normalized not in {"confirmed", "declined"}:
+            raise ValueError("La respuesta debe ser confirmed o declined")
+        return normalized
 
 
 @api_router.post("/callups")
 async def create_callup(callup: Callup):
-    return await insert_doc("callups", callup.model_dump())
+    created = await insert_doc("callups", callup.model_dump())
+    actor = current_user_context.get() or {}
+    await db.internal_events.insert_one({
+        "id": new_id(), "type": "callup.created", "callup_id": created["id"],
+        "team_id": created.get("equipo_id"), "actor_user_id": actor.get("id"),
+        "created_at": now_iso(), "delivered": False,
+    })
+    return normalize_callup(created)
 
 
 @api_router.get("/callups")
-async def get_callups():
+async def get_callups(estado: Optional[str] = None, q: Optional[str] = None):
     callups = await list_docs("callups")
+    actor = current_user_context.get() or {}
+    visible_player_ids = set(await user_player_ids(actor)) if actor.get("role") in {"family", "player"} else None
     matches = {m["id"]: m for m in await list_docs("matches")}
     teams = {t["id"]: t["nombre"] for t in await list_docs("teams")}
+    players = {p["id"]: p for p in await list_docs("players")}
+    wanted = normalize_status(estado) if estado else None
     for c in callups:
+        normalized = normalize_callup(c)
+        c.update(normalized)
+        if visible_player_ids is not None:
+            c["convocados"] = [item for item in c.get("convocados", []) if item.get("player_id") in visible_player_ids]
         m = matches.get(c.get("match_id"), {})
         c["match"] = m
         c["equipo_nombre"] = teams.get(c.get("equipo_id"), "—")
+        for item in c.get("convocados", []):
+            player = players.get(item.get("player_id"), {})
+            item["nombre"] = f"{player.get('nombre', '')} {player.get('apellidos', '')}".strip()
+            item["dorsal"] = player.get("dorsal")
         c["num_convocados"] = len(c.get("convocados", []))
+        c["response_counts"] = response_counts(c.get("convocados", []))
+        c["deadline_expired"] = is_late(c.get("response_deadline"))
+    if wanted:
+        callups = [c for c in callups if any(i.get("estado") == wanted for i in c.get("convocados", []))]
+    if q:
+        needle = q.casefold()
+        callups = [c for c in callups if any(needle in i.get("nombre", "").casefold() for i in c.get("convocados", []))]
     return callups
+
+
+@api_router.get("/callups/stats/summary")
+async def get_callup_stats(temporada: Optional[str] = None, equipo_id: Optional[str] = None):
+    actor = current_user_context.get() or {}
+    if equipo_id and actor.get("role") in {"coordinator", "coach"} and equipo_id not in set(ids(actor.get("assigned_team_ids") or [])):
+        raise HTTPException(status_code=403, detail="El equipo no pertenece a tu ámbito")
+    query: Dict[str, Any] = {}
+    if equipo_id:
+        query["equipo_id"] = equipo_id
+    callups = await list_docs("callups", query)
+    matches = {m["id"]: m for m in await list_docs("matches")}
+    if temporada:
+        callups = [c for c in callups if matches.get(c.get("match_id"), {}).get("temporada") == temporada]
+    totals = response_counts(item for c in callups for item in c.get("convocados", []))
+    return {"callups": len(callups), "responses": totals, "team_id": equipo_id, "season": temporada}
 
 
 @api_router.get("/callups/{callup_id}")
 async def get_callup(callup_id: str):
-    c = await get_doc("callups", callup_id)
+    c = normalize_callup(await get_doc("callups", callup_id))
+    actor = current_user_context.get() or {}
+    if actor.get("role") in {"family", "player"}:
+        visible_player_ids = set(await user_player_ids(actor))
+        c["convocados"] = [item for item in c.get("convocados", []) if item.get("player_id") in visible_player_ids]
     players = {p["id"]: p for p in await list_docs("players")}
     for item in c.get("convocados", []):
         p = players.get(item["player_id"], {})
         item["nombre"] = f"{p.get('nombre','')} {p.get('apellidos','')}".strip()
         item["dorsal"] = p.get("dorsal")
         item["foto"] = p.get("foto")
+    match = await db.matches.find_one({"id": c.get("match_id")}, {"_id": 0}) or {}
+    team = await db.teams.find_one({"id": c.get("equipo_id")}, {"_id": 0}) or {}
+    c["match"] = match
+    c["equipo_nombre"] = team.get("nombre", "—")
+    c["response_counts"] = response_counts(c.get("convocados", []))
+    c["deadline_expired"] = is_late(c.get("response_deadline"))
     return c
 
 
 @api_router.put("/callups/{callup_id}")
 async def edit_callup(callup_id: str, callup: Callup):
-    return await update_doc("callups", callup_id, callup.model_dump())
+    existing = await get_doc("callups", callup_id)
+    actor = current_user_context.get() or {}
+    previous_items = {item.get("player_id"): item for item in existing.get("convocados", [])}
+    data = callup.model_dump()
+    secured_items = []
+    history_events = []
+    for submitted in data.get("convocados", []):
+        previous = previous_items.get(submitted.get("player_id"))
+        if not previous:
+            secured_items.append({**submitted, "history": []})
+            continue
+        old_status = normalize_status(previous.get("estado"))
+        new_status = normalize_status(submitted.get("estado"))
+        if old_status == new_status:
+            secured_items.append({**submitted, "history": previous.get("history", []),
+                                  "responded_at": previous.get("responded_at"),
+                                  "responded_by_user_id": previous.get("responded_by_user_id"),
+                                  "responded_by_username": previous.get("responded_by_username"),
+                                  "responded_by_role": previous.get("responded_by_role")})
+            continue
+        changed_at = now_iso()
+        change = {
+            "previous_status": old_status, "new_status": new_status, "changed_at": changed_at,
+            "changed_by_user_id": actor.get("id"), "changed_by_username": actor.get("username"),
+            "relation": actor.get("role"), "reason": submitted.get("motivo") if new_status == "declined" else None,
+            "late": is_late(data.get("response_deadline")),
+        }
+        secured_items.append({**submitted, "motivo": change["reason"], "responded_at": changed_at,
+                              "responded_by_user_id": actor.get("id"),
+                              "responded_by_username": actor.get("username"),
+                              "responded_by_role": actor.get("role"), "late": change["late"],
+                              "history": [*(previous.get("history") or []), change]})
+        history_events.append((submitted.get("player_id"), change))
+    data["convocados"] = secured_items
+    updated = normalize_callup(await update_doc("callups", callup_id, data))
+    if history_events:
+        await db.internal_events.insert_many([{
+            "id": new_id(), "type": "callup.response_updated", "callup_id": callup_id,
+            "player_id": player_id, "actor_user_id": actor.get("id"), "history": change,
+            "created_at": now_iso(), "delivered": False,
+        } for player_id, change in history_events])
+    return updated
+
+
+@api_router.patch("/callups/{callup_id}/respond")
+async def respond_callup(callup_id: str, response: CallupResponse):
+    user = current_user_context.get() or {}
+    callup = await get_doc("callups", callup_id)
+    allowed_players = set(await user_player_ids(user))
+    if response.player_id not in allowed_players:
+        raise HTTPException(status_code=403, detail="No puedes responder por este jugador")
+    if user.get("role") == "player" and not callup.get("player_self_response_allowed", False):
+        raise HTTPException(status_code=403, detail="La respuesta directa del jugador no está autorizada")
+    index = next((i for i, item in enumerate(callup.get("convocados", []))
+                  if item.get("player_id") == response.player_id), None)
+    if index is None:
+        raise HTTPException(status_code=404, detail="El jugador no está convocado")
+    if is_late(callup.get("response_deadline")):
+        await db.internal_events.update_one(
+            {"type": "callup.deadline_expired", "callup_id": callup_id},
+            {"$setOnInsert": {"id": new_id(), "type": "callup.deadline_expired",
+                               "callup_id": callup_id, "created_at": now_iso(), "delivered": False}},
+            upsert=True,
+        )
+        raise HTTPException(status_code=409, detail="El plazo de respuesta ha finalizado")
+    old_status = normalize_status(callup["convocados"][index].get("estado"))
+    updated, history = apply_response(
+        callup["convocados"][index], response.status, response.reason,
+        user, callup.get("response_deadline"),
+    )
+    await db.callups.update_one({"id": callup_id}, {"$set": {
+        f"convocados.{index}": updated, "updated_at": now_iso(),
+    }})
+    event_type = "callup.response_updated" if old_status != "pending" else "callup.response_registered"
+    await db.internal_events.insert_one({
+        "id": new_id(), "type": event_type, "callup_id": callup_id,
+        "player_id": response.player_id, "actor_user_id": user.get("id"),
+        "history": history, "created_at": now_iso(), "delivered": False,
+    })
+    return {"player_id": response.player_id, **updated}
+
+
+@api_router.get("/callups/{callup_id}/pdf")
+async def export_callup_pdf(callup_id: str):
+    callup = await get_doc("callups", callup_id)
+    match = await db.matches.find_one({"id": callup.get("match_id")}, {"_id": 0}) or {}
+    team = await db.teams.find_one({"id": callup.get("equipo_id")}, {"_id": 0}) or {}
+    settings = await db.settings.find_one({"id": "global"}, {"_id": 0}) or {}
+    player_ids = [i.get("player_id") for i in callup.get("convocados", [])]
+    rows = await db.players.find({"id": {"$in": player_ids}}, {"_id": 0}).to_list(500)
+    players = {p["id"]: p for p in rows}
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=16*mm, leftMargin=16*mm,
+                            topMargin=14*mm, bottomMargin=14*mm)
+    styles = getSampleStyleSheet()
+    title = ParagraphStyle("CallupTitle", parent=styles["Title"], fontSize=16, leading=19, alignment=TA_CENTER)
+    story = [
+        Paragraph(str(settings.get("club_nombre") or "Ikas-Txiki"), styles["Heading2"]),
+        Paragraph("CONVOCATORIA / DEIALDIA", title), Spacer(1, 4*mm),
+        Paragraph(f"<b>Equipo / Taldea:</b> {html_lib.escape(str(team.get('nombre') or '—'))}", styles["BodyText"]),
+        Paragraph(f"<b>Partido / Partida:</b> {html_lib.escape(str(match.get('rival') or '—'))}", styles["BodyText"]),
+        Paragraph(f"<b>Fecha y hora / Data eta ordua:</b> {match.get('fecha') or '—'} {match.get('hora') or ''}", styles["BodyText"]),
+        Paragraph(f"<b>Lugar / Lekua:</b> {html_lib.escape(str(match.get('campo') or callup.get('lugar_quedada') or '—'))}", styles["BodyText"]),
+        Spacer(1, 5*mm),
+    ]
+    table_data = [["Jugador / Jokalaria", "Estado / Egoera", "Motivo / Arrazoia"]]
+    labels = {"pending": "Pendiente / Zain", "confirmed": "Confirmado / Baieztatuta", "declined": "Rechazado / Ukatuta"}
+    for item in callup.get("convocados", []):
+        player = players.get(item.get("player_id"), {})
+        name = f"{player.get('nombre', '')} {player.get('apellidos', '')}".strip() or "—"
+        table_data.append([name, labels[normalize_status(item.get("estado"))], item.get("motivo") or "—"])
+    table = Table(table_data, colWidths=[78*mm, 49*mm, 48*mm], repeatRows=1)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0f766e")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("GRID", (0, 0), (-1, -1), .4, colors.HexColor("#cbd5e1")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"), ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f8fafc")]),
+    ]))
+    counts = response_counts(callup.get("convocados", []))
+    story.extend([table, Spacer(1, 5*mm), Paragraph(
+        f"<b>Resumen / Laburpena:</b> {counts['confirmed']} confirmados / baieztatuta · "
+        f"{counts['declined']} rechazados / ukatuta · {counts['pending']} pendientes / zain",
+        styles["BodyText"]), Paragraph(f"Generado / Sortuta: {datetime.now().strftime('%d/%m/%Y %H:%M')}", styles["BodyText"]),
+    ])
+    doc.build(story)
+    buffer.seek(0)
+    return StreamingResponse(buffer, media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="convocatoria_{callup_id}.pdf"'
+    })
 
 
 @api_router.delete("/callups/{callup_id}")

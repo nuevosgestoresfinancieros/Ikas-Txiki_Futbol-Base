@@ -8,7 +8,7 @@ from fastapi import HTTPException, Request
 
 
 ROLES = ("admin", "coordinator", "coach", "family", "player")
-ACTIONS = ("read", "create", "edit", "delete", "export", "administer")
+ACTIONS = ("read", "create", "edit", "delete", "export", "administer", "respond")
 RESOURCES = (
     "dashboard", "users", "players", "families", "teams", "trainings",
     "matches", "callups", "attendance", "payments", "authorizations",
@@ -61,7 +61,7 @@ ROLE_PERMISSIONS: Dict[str, Dict[str, Set[str]]] = {
         "teams": _actions("read"),
         "trainings": _actions("read"),
         "matches": _actions("read"),
-        "callups": _actions("read"),
+        "callups": _actions("read", "respond"),
         "payments": _actions("read", "export"),
         "authorizations": _actions("read", "export"),
         "communications": _actions("read"),
@@ -75,7 +75,7 @@ ROLE_PERMISSIONS: Dict[str, Dict[str, Set[str]]] = {
         "teams": _actions("read"),
         "trainings": _actions("read"),
         "matches": _actions("read"),
-        "callups": _actions("read"),
+        "callups": _actions("read", "respond"),
         "authorizations": _actions("read", "export"),
         "communications": _actions("read"),
         "reports": _actions("read", "export"),
@@ -132,6 +132,8 @@ def route_permission(request: Request) -> tuple[str, str]:
     first = parts[1] if len(parts) > 1 and parts[0] == "api" else ""
     resource = PATH_RESOURCES.get(first, first or "dashboard")
     method = request.method.upper()
+    if first == "callups" and "respond" in parts:
+        return "callups", "respond"
     if first in {"clear-all", "seed-demo", "import-excel"}:
         return resource, "administer"
     if first == "export-excel" or "pdf" in parts or "signed-file" in parts:

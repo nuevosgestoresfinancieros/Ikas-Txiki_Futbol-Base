@@ -91,9 +91,9 @@ const Matches = () => {
           {matches.map((m) => {
             const callup = getCallup(m.id);
             const convocados = callup?.convocados || [];
-            const confirmados = convocados.filter((c) => c.estado === "confirmado").length;
-            const noPueden = convocados.filter((c) => c.estado === "no_puede").length;
-            const pendientes = convocados.filter((c) => c.estado === "pendiente").length;
+            const confirmados = convocados.filter((c) => ["confirmed", "confirmado"].includes(c.estado)).length;
+            const noPueden = convocados.filter((c) => ["declined", "no_puede"].includes(c.estado)).length;
+            const pendientes = convocados.filter((c) => ["pending", "pendiente"].includes(c.estado)).length;
             const isExpanded = expanded === m.id;
 
             return (
@@ -179,11 +179,11 @@ const Matches = () => {
                       {convocados.map((cv) => (
                         <span key={cv.player_id}
                           className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium
-                            ${cv.estado === "confirmado" ? "bg-green-100 text-green-800"
-                            : cv.estado === "no_puede" ? "bg-red-100 text-red-700"
+                            ${["confirmed", "confirmado"].includes(cv.estado) ? "bg-green-100 text-green-800"
+                            : ["declined", "no_puede"].includes(cv.estado) ? "bg-red-100 text-red-700"
                             : "bg-amber-100 text-amber-800"}`}>
-                          {cv.estado === "confirmado" ? <Check className="h-3 w-3" />
-                            : cv.estado === "no_puede" ? <X className="h-3 w-3" />
+                          {["confirmed", "confirmado"].includes(cv.estado) ? <Check className="h-3 w-3" />
+                            : ["declined", "no_puede"].includes(cv.estado) ? <X className="h-3 w-3" />
                             : <Clock className="h-3 w-3" />}
                           {getPlayerName(cv.player_id)}
                         </span>
