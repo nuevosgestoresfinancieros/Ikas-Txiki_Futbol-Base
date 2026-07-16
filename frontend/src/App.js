@@ -8,6 +8,7 @@ import Layout from "@/components/Layout";
 import RgpdBanner from "@/components/RgpdBanner";
 import Login from "@/pages/Login";
 import SplashScreen from "@/components/SplashScreen";
+import { can } from "@/auth";
 
 const Dashboard = lazy(() => import("@/pages/Dashboard"));
 const Players = lazy(() => import("@/pages/Players"));
@@ -24,6 +25,7 @@ const Stats = lazy(() => import("@/pages/Stats"));
 const Communications = lazy(() => import("@/pages/Communications"));
 const Reports = lazy(() => import("@/pages/Reports"));
 const Equipment = lazy(() => import("@/pages/Equipment"));
+const Users = lazy(() => import("@/pages/Users"));
 
 const AppLoader = ({ fullPage = false }) => {
   const { t } = useI18n();
@@ -48,12 +50,15 @@ const ProtectedRoute = ({ children, user }) => {
   return children;
 };
 
+const AuthorizedRoute = ({ user, resource, children }) =>
+  can(user, resource) ? children : <Navigate to="/" replace />;
+
 function App() {
-  const [user, setUser] = useState(undefined); // undefined=cargando, null=no auth, string=autenticado
+  const [user, setUser] = useState(undefined); // undefined=cargando, null=no auth, objeto=autenticado
 
   useEffect(() => {
     api.get("/auth/me")
-      .then((r) => setUser(r.data.username))
+      .then((r) => setUser(r.data))
       .catch(() => setUser(null));
   }, []);
 
@@ -85,20 +90,21 @@ function App() {
                 <Suspense fallback={<AppLoader />}>
                   <Routes>
                     <Route path="/" element={<Dashboard />} />
-                    <Route path="/inscripciones" element={<Inscriptions />} />
-                    <Route path="/jugadores" element={<Players />} />
-                    <Route path="/familias" element={<Families />} />
-                    <Route path="/equipos" element={<Teams />} />
-                    <Route path="/entrenamientos" element={<Trainings />} />
-                    <Route path="/partidos" element={<Matches />} />
-                    <Route path="/convocatorias" element={<Callups />} />
-                    <Route path="/estadisticas" element={<Stats />} />
-                    <Route path="/pagos" element={<Payments />} />
-                    <Route path="/autorizaciones" element={<Authorizations />} />
-                    <Route path="/comunicacion" element={<Communications />} />
-                    <Route path="/informes" element={<Reports />} />
-                    <Route path="/configuracion" element={<Settings />} />
-                    <Route path="/equipamiento" element={<Equipment />} />
+                    <Route path="/inscripciones" element={<AuthorizedRoute user={user} resource="inscriptions"><Inscriptions /></AuthorizedRoute>} />
+                    <Route path="/jugadores" element={<AuthorizedRoute user={user} resource="players"><Players /></AuthorizedRoute>} />
+                    <Route path="/familias" element={<AuthorizedRoute user={user} resource="families"><Families /></AuthorizedRoute>} />
+                    <Route path="/equipos" element={<AuthorizedRoute user={user} resource="teams"><Teams /></AuthorizedRoute>} />
+                    <Route path="/entrenamientos" element={<AuthorizedRoute user={user} resource="trainings"><Trainings /></AuthorizedRoute>} />
+                    <Route path="/partidos" element={<AuthorizedRoute user={user} resource="matches"><Matches /></AuthorizedRoute>} />
+                    <Route path="/convocatorias" element={<AuthorizedRoute user={user} resource="callups"><Callups /></AuthorizedRoute>} />
+                    <Route path="/estadisticas" element={<AuthorizedRoute user={user} resource="stats"><Stats /></AuthorizedRoute>} />
+                    <Route path="/pagos" element={<AuthorizedRoute user={user} resource="payments"><Payments /></AuthorizedRoute>} />
+                    <Route path="/autorizaciones" element={<AuthorizedRoute user={user} resource="authorizations"><Authorizations /></AuthorizedRoute>} />
+                    <Route path="/comunicacion" element={<AuthorizedRoute user={user} resource="communications"><Communications /></AuthorizedRoute>} />
+                    <Route path="/informes" element={<AuthorizedRoute user={user} resource="reports"><Reports /></AuthorizedRoute>} />
+                    <Route path="/configuracion" element={<AuthorizedRoute user={user} resource="settings"><Settings /></AuthorizedRoute>} />
+                    <Route path="/equipamiento" element={<AuthorizedRoute user={user} resource="equipment"><Equipment /></AuthorizedRoute>} />
+                    <Route path="/usuarios" element={<AuthorizedRoute user={user} resource="users"><Users /></AuthorizedRoute>} />
                   </Routes>
                 </Suspense>
               </Layout>

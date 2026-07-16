@@ -10,6 +10,7 @@ import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import GlobalSearch from "@/components/GlobalSearch";
+import { can, ROUTE_RESOURCES } from "@/auth";
 
 const navGroups = [
   {
@@ -46,7 +47,10 @@ const navGroups = [
   },
   {
     key: "navSystem",
-    items: [{ to: "/configuracion", key: "settings", icon: SettingsIcon, testid: "settings" }],
+    items: [
+      { to: "/configuracion", key: "settings", icon: SettingsIcon, testid: "settings" },
+      { to: "/usuarios", key: "usersAndPermissions", icon: Shield, testid: "users" },
+    ],
   },
 ];
 
@@ -76,9 +80,12 @@ const LangToggle = () => {
 
 const SidebarContent = ({ onNavigate, onSearch, user, onLogout, pathname }) => {
   const { t } = useI18n();
+  const visibleGroups = useMemo(() => navGroups
+    .map((group) => ({ ...group, items: group.items.filter((item) => can(user, ROUTE_RESOURCES[item.to])) }))
+    .filter((group) => group.items.length > 0), [user]);
   const activeGroup = useMemo(
-    () => navGroups.find((group) => group.items.some((item) => item.to === pathname))?.key,
-    [pathname],
+    () => visibleGroups.find((group) => group.items.some((item) => item.to === pathname))?.key,
+    [pathname, visibleGroups],
   );
   const [expanded, setExpanded] = useState(() => ({
     navStart: true,
@@ -118,7 +125,7 @@ const SidebarContent = ({ onNavigate, onSearch, user, onLogout, pathname }) => {
       </div>
 
       <nav className="min-h-0 flex-1 overflow-y-auto px-3 pb-3" aria-label={t("mainNavigation")}>
-        {navGroups.map((group) => {
+        {visibleGroups.map((group) => {
           const isExpanded = expanded[group.key];
           return (
             <div key={group.key} className="mb-2">
@@ -167,9 +174,12 @@ const SidebarContent = ({ onNavigate, onSearch, user, onLogout, pathname }) => {
         {user && (
           <div className="mb-2 flex items-center gap-3 rounded-xl bg-white/[0.05] px-3 py-2.5">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-teal-400/15 text-sm font-bold text-teal-300">
-              {user[0]?.toUpperCase()}
+              {user.username?.[0]?.toUpperCase()}
             </div>
-            <span className="min-w-0 flex-1 truncate text-sm font-semibold text-slate-200">{user}</span>
+            <div className="min-w-0 flex-1">
+              <span className="block truncate text-sm font-semibold text-slate-200">{user.username}</span>
+              <span className="block truncate text-[10px] font-bold uppercase tracking-wide text-teal-300">{t(`role_${user.role}`)}</span>
+            </div>
           </div>
         )}
         <button
@@ -186,7 +196,7 @@ const SidebarContent = ({ onNavigate, onSearch, user, onLogout, pathname }) => {
   );
 };
 
-const MobileBottomNav = ({ onMenu, onSearch }) => {
+const MobileBottomNav = ({ onMenu, onSearch, user }) => {
   const { t } = useI18n();
   const items = [
     { to: "/", key: "navStart", icon: LayoutDashboard },
@@ -196,7 +206,7 @@ const MobileBottomNav = ({ onMenu, onSearch }) => {
   return (
     <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 pb-[env(safe-area-inset-bottom)] shadow-[0_-10px_35px_rgba(15,23,42,0.08)] backdrop-blur-xl lg:hidden" aria-label={t("mainNavigation")}>
       <div className="mx-auto grid max-w-lg grid-cols-5 px-1 py-1.5">
-        {items.map((item) => (
+        {items.filter((item) => can(user, ROUTE_RESOURCES[item.to])).map((item) => (
           <NavLink key={item.to} to={item.to} end={item.to === "/"} className={({ isActive }) => `flex min-h-14 flex-col items-center justify-center gap-1 rounded-xl text-[10px] font-bold transition-colors ${isActive ? "bg-primary/10 text-primary" : "text-slate-500 hover:bg-slate-100 hover:text-slate-900"}`}>
             <item.icon className="h-5 w-5" aria-hidden="true" />
             <span>{t(item.key)}</span>
@@ -277,7 +287,7 @@ const Layout = ({ children, onLogout, user }) => {
         </main>
       </div>
 
-      <MobileBottomNav onMenu={() => setOpen(true)} onSearch={() => setSearchOpen(true)} />
+      <MobileBottomNav user={user} onMenu={() => setOpen(true)} onSearch={() => setSearchOpen(true)} />
     </div>
   );
 };

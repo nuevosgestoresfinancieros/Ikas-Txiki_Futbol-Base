@@ -18,7 +18,7 @@ import shutil
 import time
 from collections import defaultdict, deque
 from pathlib import Path
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional, Dict, Any
 import uuid
 import pandas as pd
@@ -29,6 +29,11 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, KeepTogether, Image as PdfImage
 from datetime import datetime, timezone, date, timedelta
+
+from authz import (
+    ROLES, ROLE_PERMISSIONS, current_user_context, enforce_permission, ids,
+    merge_query, public_user, route_permission,
+)
 
 
 ROOT_DIR = Path(__file__).parent
@@ -61,6 +66,16 @@ def create_access_token(data: dict) -> str:
     expire = datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRE_HOURS)
     return jwt.encode({**data, "exp": expire}, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
+async def load_user(username: str) -> Optional[dict]:
+    if username == ADMIN_USER:
+        return {
+            "id": "environment-admin", "username": username, "role": "admin",
+            "active": True, "assigned_team_ids": [], "language": "es",
+            "notification_preferences": {},
+        }
+    return await db["users"].find_one({"username": username}, {"_id": 0, "password_hash": 0})
+
+
 async def get_current_user(request: Request):
     token = request.cookies.get("ikastxiki_session")
     if not token:
@@ -70,7 +85,12 @@ async def get_current_user(request: Request):
         username = payload.get("sub")
         if not username:
             raise HTTPException(status_code=401, detail="Token inválido")
-        return username
+        user = await load_user(username)
+        if not user or not user.get("active", True):
+            raise HTTPException(status_code=403, detail="Usuario inactivo o sin acceso")
+        request.state.current_user = user
+        current_user_context.set(user)
+        return user
     except JWTError:
         raise HTTPException(status_code=401, detail="Sesión expirada")
 
@@ -92,15 +112,18 @@ async def login(request: Request, response: Response, data: Dict[str, Any]):
 
     # Verificar contra usuario admin del .env
     valid_user = username == ADMIN_USER and password == ADMIN_PASSWORD
+    db_user = None
     # También buscar en colección users de MongoDB
     if not valid_user:
         db_user = await db["users"].find_one({"username": username})
-        if db_user and pwd_context.verify(password, db_user.get("password_hash", "")):
+        if db_user and db_user.get("active", True) and pwd_context.verify(password, db_user.get("password_hash", "")):
             valid_user = True
     if not valid_user:
         attempts.append(now)
         raise HTTPException(status_code=401, detail="Usuario o contraseña incorrectos")
     login_attempts.pop(attempt_key, None)
+    if db_user:
+        await db["users"].update_one({"id": db_user["id"]}, {"$set": {"last_access_at": now_iso()}})
     token = create_access_token({"sub": username})
     response.set_cookie(
         key="ikastxiki_session",
@@ -111,7 +134,8 @@ async def login(request: Request, response: Response, data: Dict[str, Any]):
         max_age=JWT_EXPIRE_HOURS * 3600,
         path="/",
     )
-    return {"ok": True, "username": username}
+    user = await load_user(username)
+    return {"ok": True, "user": public_user(user), "username": username}
 
 
 @app.post("/api/auth/logout")
@@ -121,8 +145,8 @@ async def logout(response: Response):
 
 
 @app.get("/api/auth/me")
-async def me(current_user: str = Depends(get_current_user)):
-    return {"username": current_user}
+async def me(current_user: dict = Depends(get_current_user)):
+    return public_user(current_user)
 
 
 @app.get("/api/public/branding")
@@ -141,6 +165,12 @@ async def public_branding(response: Response):
 
 
 api_router = APIRouter(prefix="/api")
+
+
+async def authorize_request(request: Request, user: dict = Depends(get_current_user)):
+    resource, action = route_permission(request)
+    enforce_permission(user, resource, action)
+    return user
 
 
 # ---------- Helpers ----------
@@ -192,19 +222,105 @@ def clean(doc: dict) -> dict:
 
 
 # ---------- Generic CRUD factory ----------
+PLAYER_SCOPED_COLLECTIONS = {"payments", "authorizations", "stats", "equipment"}
+
+
+async def user_player_ids(user: dict) -> list[str]:
+    if user.get("role") == "player":
+        return ids([user.get("player_id")])
+    if user.get("role") == "family":
+        explicit = ids(user.get("player_ids") or [])
+        linked = await db.players.find(
+            {"familia_id": user.get("family_id")}, {"_id": 0, "id": 1}
+        ).to_list(100)
+        return sorted(set(explicit + ids(row.get("id") for row in linked)))
+    team_ids = ids(user.get("assigned_team_ids") or [])
+    if team_ids:
+        linked = await db.players.find(
+            {"equipo_id": {"$in": team_ids}}, {"_id": 0, "id": 1}
+        ).to_list(5000)
+        return ids(row.get("id") for row in linked)
+    return []
+
+
+async def scope_for_collection(coll: str, user: Optional[dict] = None) -> Optional[dict]:
+    user = user or current_user_context.get()
+    if not user or user.get("role") == "admin":
+        return None
+    role = user.get("role")
+    team_ids = ids(user.get("assigned_team_ids") or [])
+    player_ids = await user_player_ids(user)
+    if role in {"coordinator", "coach"}:
+        if coll == "teams":
+            return {"id": {"$in": team_ids}}
+        if coll in {"players", "matches", "trainings", "callups"}:
+            return {"equipo_id": {"$in": team_ids}}
+        if coll in PLAYER_SCOPED_COLLECTIONS or coll == "inscriptions":
+            return {"player_id": {"$in": player_ids}}
+        if coll == "families":
+            family_ids = await db.players.distinct("familia_id", {"id": {"$in": player_ids}})
+            return {"id": {"$in": ids(family_ids)}}
+        if coll == "communications":
+            return {"$or": [
+                {"destinatario_tipo": "equipo", "destinatario_id": {"$in": team_ids}},
+                {"destinatario_tipo": "individual", "destinatario_id": {"$in": player_ids}},
+            ]}
+    if role in {"family", "player"}:
+        if coll == "players":
+            return {"id": {"$in": player_ids}}
+        if coll == "families":
+            return {"id": user.get("family_id")}
+        team_ids = ids(await db.players.distinct("equipo_id", {"id": {"$in": player_ids}}))
+        if coll == "teams":
+            return {"id": {"$in": team_ids}}
+        if coll in {"matches", "trainings"}:
+            return {"equipo_id": {"$in": team_ids}}
+        if coll == "callups":
+            return {"convocados.player_id": {"$in": player_ids}}
+        if coll in PLAYER_SCOPED_COLLECTIONS or coll == "inscriptions":
+            return {"player_id": {"$in": player_ids}}
+        if coll == "communications":
+            targets = player_ids + ids([user.get("family_id")])
+            return {"$or": [
+                {"destinatario_tipo": "individual", "destinatario_id": {"$in": targets}},
+                {"destinatario_tipo": "equipo", "destinatario_id": {"$in": team_ids}},
+            ]}
+    return {"id": {"$in": []}}
+
+
+async def ensure_data_scope(coll: str, data: dict) -> None:
+    user = current_user_context.get()
+    if not user or user.get("role") == "admin":
+        return
+    role = user.get("role")
+    if role not in {"coordinator", "coach"}:
+        raise HTTPException(status_code=403, detail="No puedes modificar datos de este módulo")
+    team_ids = set(ids(user.get("assigned_team_ids") or []))
+    if coll in {"teams", "players", "matches", "trainings", "callups"}:
+        target = data.get("id") if coll == "teams" else data.get("equipo_id")
+        if target not in team_ids:
+            raise HTTPException(status_code=403, detail="El elemento no pertenece a tus equipos asignados")
+    if coll in PLAYER_SCOPED_COLLECTIONS and data.get("player_id"):
+        if data["player_id"] not in set(await user_player_ids(user)):
+            raise HTTPException(status_code=403, detail="El jugador no pertenece a tu ámbito")
+
+
 async def list_docs(coll: str, query: dict = None):
-    cursor = db[coll].find(query or {}, {"_id": 0}).sort("created_at", -1)
+    scoped = merge_query(query, await scope_for_collection(coll))
+    cursor = db[coll].find(scoped, {"_id": 0}).sort("created_at", -1)
     return await cursor.to_list(5000)
 
 
 async def get_doc(coll: str, _id: str):
-    doc = await db[coll].find_one({"id": _id}, {"_id": 0})
+    query = merge_query({"id": _id}, await scope_for_collection(coll))
+    doc = await db[coll].find_one(query, {"_id": 0})
     if not doc:
         raise HTTPException(status_code=404, detail="No encontrado")
     return doc
 
 
 async def insert_doc(coll: str, data: dict):
+    await ensure_data_scope(coll, data)
     data["id"] = new_id()
     data["created_at"] = now_iso()
     data["updated_at"] = now_iso()
@@ -213,18 +329,161 @@ async def insert_doc(coll: str, data: dict):
 
 
 async def update_doc(coll: str, _id: str, data: dict):
-    existing = await db[coll].find_one({"id": _id})
+    query = merge_query({"id": _id}, await scope_for_collection(coll))
+    existing = await db[coll].find_one(query)
     if not existing:
         raise HTTPException(status_code=404, detail="No encontrado")
     data = {k: v for k, v in data.items() if v is not None or k in data}
     data["updated_at"] = now_iso()
-    await db[coll].update_one({"id": _id}, {"$set": data})
+    await ensure_data_scope(coll, {**existing, **data})
+    await db[coll].update_one(query, {"$set": data})
     return await get_doc(coll, _id)
 
 
 async def delete_doc(coll: str, _id: str):
-    res = await db[coll].delete_one({"id": _id})
+    query = merge_query({"id": _id}, await scope_for_collection(coll))
+    res = await db[coll].delete_one(query)
     if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="No encontrado")
+    return {"ok": True}
+
+
+# ================= USERS / RBAC =================
+class NotificationPreferences(BaseModel):
+    in_app: bool = True
+    email: bool = True
+    callups: bool = True
+    schedule_changes: bool = True
+    payments: bool = True
+    documents: bool = True
+
+
+class UserCreate(BaseModel):
+    username: str
+    password: str
+    role: str
+    active: bool = True
+    assigned_team_ids: List[str] = Field(default_factory=list)
+    player_id: Optional[str] = None
+    family_id: Optional[str] = None
+    language: str = "es"
+    notification_preferences: NotificationPreferences = Field(default_factory=NotificationPreferences)
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, value: str):
+        value = value.strip()
+        if len(value) < 3 or not value.replace("_", "").replace("-", "").isalnum():
+            raise ValueError("El usuario debe tener al menos 3 caracteres alfanuméricos")
+        return value
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, value: str):
+        if len(value) < 12:
+            raise ValueError("La contraseña debe tener al menos 12 caracteres")
+        return value
+
+    @field_validator("role")
+    @classmethod
+    def validate_role(cls, value: str):
+        if value not in ROLES:
+            raise ValueError("Rol no válido")
+        return value
+
+    @field_validator("language")
+    @classmethod
+    def validate_language(cls, value: str):
+        if value not in {"es", "eu"}:
+            raise ValueError("Idioma no válido")
+        return value
+
+
+class UserUpdate(BaseModel):
+    active: Optional[bool] = None
+    assigned_team_ids: Optional[List[str]] = None
+    player_id: Optional[str] = None
+    family_id: Optional[str] = None
+    language: Optional[str] = None
+    notification_preferences: Optional[NotificationPreferences] = None
+
+    @field_validator("language")
+    @classmethod
+    def validate_language(cls, value: Optional[str]):
+        if value is not None and value not in {"es", "eu"}:
+            raise ValueError("Idioma no válido")
+        return value
+
+
+def validate_user_relationships(data: dict) -> None:
+    role = data.get("role")
+    if role == "player" and not data.get("player_id"):
+        raise HTTPException(status_code=422, detail="El rol jugador requiere un jugador asociado")
+    if role == "family" and not data.get("family_id"):
+        raise HTTPException(status_code=422, detail="El rol familia requiere una familia asociada")
+    if role in {"coordinator", "coach"} and not data.get("assigned_team_ids"):
+        raise HTTPException(status_code=422, detail="El rol requiere al menos un equipo asignado")
+
+
+@api_router.get("/users/permissions")
+async def get_permission_matrix():
+    return {
+        role: {resource: sorted(actions) for resource, actions in resources.items()}
+        for role, resources in ROLE_PERMISSIONS.items()
+    }
+
+
+@api_router.post("/users")
+async def create_user(user: UserCreate):
+    data = user.model_dump()
+    validate_user_relationships(data)
+    if data["username"] == ADMIN_USER or await db.users.find_one({"username": data["username"]}):
+        raise HTTPException(status_code=409, detail="El nombre de usuario ya existe")
+    password = data.pop("password")
+    data.update({
+        "id": new_id(), "password_hash": pwd_context.hash(password),
+        "created_at": now_iso(), "updated_at": now_iso(), "last_access_at": None,
+    })
+    data["notification_preferences"] = dict(data["notification_preferences"])
+    await db.users.insert_one(dict(data))
+    return public_user(data)
+
+
+@api_router.get("/users")
+async def get_users():
+    users = await db.users.find({}, {"_id": 0, "password_hash": 0}).sort("username", 1).to_list(5000)
+    return [public_user(user) for user in users]
+
+
+@api_router.get("/users/{user_id}")
+async def get_user(user_id: str):
+    user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="No encontrado")
+    return public_user(user)
+
+
+@api_router.put("/users/{user_id}")
+async def edit_user(user_id: str, changes: UserUpdate):
+    existing = await db.users.find_one({"id": user_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="No encontrado")
+    data = changes.model_dump(exclude_unset=True)
+    if data.get("notification_preferences") is not None:
+        data["notification_preferences"] = dict(data["notification_preferences"])
+    candidate = {**existing, **data}
+    validate_user_relationships(candidate)
+    data["updated_at"] = now_iso()
+    await db.users.update_one({"id": user_id}, {"$set": data})
+    return public_user(candidate)
+
+
+@api_router.delete("/users/{user_id}")
+async def deactivate_user(user_id: str):
+    result = await db.users.update_one(
+        {"id": user_id}, {"$set": {"active": False, "updated_at": now_iso()}}
+    )
+    if not result.matched_count:
         raise HTTPException(status_code=404, detail="No encontrado")
     return {"ok": True}
 
@@ -1505,7 +1764,7 @@ async def import_excel(file: UploadFile = File(...)):
     return {"ok": True, "imported": summary}
 
 
-app.include_router(api_router, dependencies=[Depends(get_current_user)])
+app.include_router(api_router, dependencies=[Depends(authorize_request)])
 app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
 
 cors_origins = os.environ.get('CORS_ORIGINS', 'https://ikasfutbase.cibermedida.es').split(',')

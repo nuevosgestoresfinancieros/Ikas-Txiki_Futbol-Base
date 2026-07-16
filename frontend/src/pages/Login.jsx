@@ -51,7 +51,7 @@ const Login = ({ onLogin }) => {
         username: form.username.trim(),
         password: form.password,
       });
-      onLogin?.(response.data.username);
+      onLogin?.(response.data.user || { username: response.data.username, role: "admin", permissions: {} });
       const destination = location.state?.from?.pathname || "/";
       navigate(destination, { replace: true });
     } catch (requestError) {
