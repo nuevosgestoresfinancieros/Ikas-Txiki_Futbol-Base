@@ -9,6 +9,8 @@ from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import io
+import base64
+import html as html_lib
 import json
 import logging
 import math
@@ -20,6 +22,12 @@ from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 import uuid
 import pandas as pd
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import mm
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, KeepTogether, Image as PdfImage
 from datetime import datetime, timezone, date, timedelta
 
 
@@ -592,6 +600,132 @@ class Authorization(BaseModel):
     observaciones: Optional[str] = None
 
 
+AUTHORIZATION_PDF_TYPES = {
+    "general": {
+        "es": "Autorización general de participación",
+        "eu": "Parte hartzeko baimen orokorra",
+        "text_es": "Autorizo a mi hijo/a a participar en todas las actividades deportivas, entrenamientos y partidos organizados por el club durante la temporada, así como a recibir la atención necesaria en caso de accidente leve.",
+        "text_eu": "Nire seme-alabari klubak denboraldian antolatutako kirol-jarduera, entrenamendu eta partida guztietan parte hartzeko baimena ematen diot, baita istripu arin baten kasuan beharrezko arreta jasotzeko ere.",
+    },
+    "imagen": {
+        "es": "Autorización de uso de imagen",
+        "eu": "Irudia erabiltzeko baimena",
+        "text_es": "Autorizo el uso de la imagen de mi hijo/a en fotografías y vídeos del club con fines informativos y de difusión de las actividades deportivas, sin contraprestación económica y respetando en todo momento la dignidad del menor.",
+        "text_eu": "Nire seme-alabaren irudia klubaren argazki eta bideoetan erabiltzeko baimena ematen dut, kirol-jardueren berri emateko eta zabaltzeko, ordain ekonomikorik gabe eta adingabearen duintasuna une oro errespetatuz.",
+    },
+    "medica": {
+        "es": "Autorización médica básica",
+        "eu": "Oinarrizko mediku-baimena",
+        "text_es": "Autorizo al club a tomar las medidas oportunas en caso de urgencia médica cuando no sea posible contactar con el/los tutor/es. Declaro estar informado/a del estado de salud de mi hijo/a y no tener conocimiento de impedimento médico para la práctica deportiva.",
+        "text_eu": "Klubari baimena ematen diot larrialdi mediko baten aurrean beharrezko neurriak har ditzan, tutoreekin harremanetan jartzea ezinezkoa denean. Adierazten dut nire seme-alabaren osasun-egoeraren berri dudala eta ez dudala kirola egiteko eragozpen medikorik ezagutzen.",
+    },
+    "desplazamientos": {
+        "es": "Autorización de desplazamientos",
+        "eu": "Lekualdaketa baimena",
+        "text_es": "Autorizo los desplazamientos de mi hijo/a en los vehículos del club o de otros progenitores/tutores a los distintos campos y localizaciones donde se disputen los partidos y actividades organizadas por el club.",
+        "text_eu": "Nire seme-alabak klubeko ibilgailuetan edo beste guraso edo tutore batzuen ibilgailuetan bidaiatzeko baimena ematen dut, partidak eta klubak antolatutako jarduerak egiten diren zelai eta lekuetara joateko.",
+    },
+    "recogida": {
+        "es": "Autorización para recogida por terceros",
+        "eu": "Hirugarrenek jasotzeko baimena",
+        "text_es": "Autorizo a la persona indicada a continuación a recoger a mi hijo/a tras los entrenamientos y partidos del club, en los casos en que yo no pueda hacerlo personalmente.",
+        "text_eu": "Jarraian adierazitako pertsonari nire seme-alaba entrenamendu eta partiden ondoren jasotzeko baimena ematen diot, nik neuk jaso ezin dudanean.",
+    },
+    "proteccion_datos": {
+        "es": "Protección de datos",
+        "eu": "Datuen babesa",
+        "text_es": "Doy mi consentimiento informado para el tratamiento de los datos personales de mi hijo/a conforme al Reglamento (UE) 2016/679 (RGPD) y la Ley Orgánica 3/2018 (LOPDGDD). Los datos serán utilizados exclusivamente para la gestión de las actividades del club y no serán cedidos a terceros sin consentimiento expreso.",
+        "text_eu": "Nire seme-alabaren datu pertsonalak tratatzeko baimen informatua ematen dut, 2016/679 (EB) Erregelamenduaren (DBEO) eta 3/2018 Lege Organikoaren arabera. Datuak klubaren jarduerak kudeatzeko baino ez dira erabiliko, eta ez zaizkie hirugarrenei lagako berariazko baimenik gabe.",
+    },
+}
+
+
+def build_authorization_pdf(auth: dict, player: dict, settings: dict, lang: str = "es") -> io.BytesIO:
+    """Genera una autorización A4 vectorial sin depender del navegador."""
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4, rightMargin=18 * mm, leftMargin=18 * mm,
+        topMargin=15 * mm, bottomMargin=15 * mm,
+        title="Autorización Ikas-Txiki", author=settings.get("club_nombre") or "Ikas-Txiki",
+    )
+    styles = getSampleStyleSheet()
+    normal = ParagraphStyle("AuthNormal", parent=styles["Normal"], fontName="Helvetica", fontSize=10, leading=15, textColor=colors.HexColor("#1f2937"))
+    small = ParagraphStyle("AuthSmall", parent=normal, fontSize=8, leading=11, textColor=colors.HexColor("#6b7280"))
+    title = ParagraphStyle("AuthTitle", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=15, leading=19, alignment=TA_CENTER, spaceAfter=4, textColor=colors.HexColor("#111827"))
+    club_style = ParagraphStyle("AuthClub", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=17, leading=20, textColor=colors.HexColor("#102A43"))
+    esc = lambda value, fallback="": html_lib.escape(str(value if value not in (None, "") else fallback))
+
+    club_name = settings.get("club_nombre") or "Ikas-Txiki"
+    club_lines = [esc(settings.get("club_direccion")), esc(settings.get("club_email")), esc(settings.get("club_telefono"))]
+    club_info = " · ".join(value for value in club_lines if value)
+    header_cells = []
+    logo = settings.get("club_logo") or ""
+    if isinstance(logo, str) and logo.startswith("data:image") and "," in logo:
+        try:
+            header_cells.append(PdfImage(io.BytesIO(base64.b64decode(logo.split(",", 1)[1])), width=18 * mm, height=18 * mm))
+        except Exception:
+            header_cells.append(Spacer(18 * mm, 18 * mm))
+    else:
+        header_cells.append(Spacer(18 * mm, 18 * mm))
+    header_cells.append(Paragraph(f"<b>{esc(club_name)}</b>{'<br/><font size=8>' + club_info + '</font>' if club_info else ''}", club_style))
+    header = Table([header_cells], colWidths=[22 * mm, 150 * mm])
+    header.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
+
+    type_data = AUTHORIZATION_PDF_TYPES.get(auth.get("tipo"), {"es": auth.get("tipo") or "Autorización", "eu": auth.get("tipo") or "Baimena", "text": ""})
+    type_label_es = type_data.get("es") or auth.get("tipo") or "Autorización"
+    type_label_eu = type_data.get("eu") or auth.get("tipo") or "Baimena"
+    player_name = f"{player.get('nombre', '')} {player.get('apellidos', '')}".strip() or "________________"
+    season = settings.get("temporada_actual") or "2025-2026"
+    story = [header, Spacer(1, 5 * mm), HRFlowable(width="100%", thickness=1.5, color=colors.HexColor("#102A43")), Spacer(1, 8 * mm)]
+    story.extend([
+        Paragraph(esc(type_label_es).upper(), title),
+        Paragraph(esc(type_label_eu).upper(), ParagraphStyle("AuthTitleEu", parent=title, fontSize=12, leading=15)),
+        Paragraph(f"Temporada / Denboraldia {esc(season)}", ParagraphStyle("Season", parent=small, alignment=TA_CENTER)),
+        Spacer(1, 7 * mm),
+    ])
+
+    details = [
+        [Paragraph("Padre/Madre/Tutor/a · Aita/Ama/Tutorea:", small), Paragraph(f"<b>{esc(auth.get('firmante'), '________________')}</b>", normal)],
+        [Paragraph("Jugador/a · Jokalaria:", small), Paragraph(f"<b>{esc(player_name)}</b>", normal)],
+        [Paragraph("Fecha de nacimiento · Jaioteguna:", small), Paragraph(esc((player.get("fecha_nacimiento") or "—")[:10]), normal)],
+        [Paragraph("Categoría · Kategoria:", small), Paragraph(esc(player.get("categoria"), "—"), normal)],
+    ]
+    details_table = Table(details, colWidths=[52 * mm, 116 * mm], rowHeights=[9 * mm] * 4)
+    details_table.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("LINEBELOW", (1, 0), (1, -1), 0.5, colors.HexColor("#9ca3af")),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    story.extend([details_table, Spacer(1, 7 * mm)])
+
+    consent = Table([[Paragraph(
+        f"<b>AUTORIZO:</b><br/>{esc(type_data.get('text_es'))}<br/><br/>"
+        f"<b>BAIMENA EMATEN DUT:</b><br/>{esc(type_data.get('text_eu'))}", normal
+    )]], colWidths=[168 * mm])
+    consent.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f3f4f6")), ("LINEBEFORE", (0, 0), (0, 0), 3, colors.HexColor("#102A43")), ("BOX", (0, 0), (-1, -1), 0.25, colors.HexColor("#e5e7eb")), ("LEFTPADDING", (0, 0), (-1, -1), 12), ("RIGHTPADDING", (0, 0), (-1, -1), 12), ("TOPPADDING", (0, 0), (-1, -1), 10), ("BOTTOMPADDING", (0, 0), (-1, -1), 10)]))
+    story.extend([consent, Spacer(1, 6 * mm)])
+
+    if auth.get("tipo") == "recogida":
+        pickup = Table([
+            [Paragraph("Persona autorizada · Baimendutako pertsona:", small), Paragraph(f"<b>{esc(auth.get('persona_autorizada'), '________________')}</b>", normal)],
+            [Paragraph("DNI / NIF · NAN / IFZ:", small), Paragraph(esc(auth.get("dni_autorizada"), "________________"), normal)],
+        ], colWidths=[52 * mm, 116 * mm])
+        pickup.setStyle(TableStyle([("LINEBELOW", (1, 0), (1, -1), 0.5, colors.HexColor("#9ca3af")), ("VALIGN", (0, 0), (-1, -1), "MIDDLE")]))
+        story.extend([pickup, Spacer(1, 5 * mm)])
+    if auth.get("observaciones"):
+        story.extend([Paragraph(f"<b>Observaciones · Oharrak:</b> <i>{esc(auth.get('observaciones'))}</i>", normal), Spacer(1, 7 * mm)])
+
+    signature_style = ParagraphStyle("Signature", parent=small, alignment=TA_CENTER)
+    signatures = Table([
+        ["", "", ""],
+        [Paragraph("Firma del padre/madre/tutor/a<br/>Aita/ama/tutorearen sinadura", signature_style), Paragraph(f"Fecha · Data: {esc(auth.get('fecha_firma'), '____________')}", signature_style), Paragraph("Sello del club<br/>Klubaren zigilua", signature_style)],
+    ], colWidths=[52 * mm, 52 * mm, 52 * mm], rowHeights=[18 * mm, 12 * mm], hAlign="CENTER")
+    signatures.setStyle(TableStyle([("LINEBELOW", (0, 0), (-1, 0), 0.8, colors.HexColor("#111827")), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 6), ("RIGHTPADDING", (0, 0), (-1, -1), 6)]))
+    story.extend([Spacer(1, 8 * mm), KeepTogether(signatures), Spacer(1, 10 * mm), HRFlowable(width="100%", thickness=0.4, color=colors.HexColor("#d1d5db")), Spacer(1, 2 * mm), Paragraph(f"{esc(club_name)} · Documento generado / Sortutako dokumentua: {date.today().strftime('%d/%m/%Y')} · RGPD/DBEO (UE/EB) 2016/679", ParagraphStyle("Footer", parent=small, alignment=TA_CENTER, fontSize=7))])
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
+
+
 @api_router.post("/authorizations")
 async def create_authorization(auth: Authorization):
     return await insert_doc("authorizations", auth.model_dump())
@@ -606,6 +740,20 @@ async def get_authorizations(estado: Optional[str] = None):
         p = players.get(a.get("player_id"), {})
         a["player_nombre"] = f"{p.get('nombre','')} {p.get('apellidos','')}".strip() or "—"
     return auths
+
+
+@api_router.get("/authorizations/{auth_id}/pdf")
+async def download_authorization_pdf(auth_id: str, lang: str = "es"):
+    auth = await get_doc("authorizations", auth_id)
+    player = await get_doc("players", auth.get("player_id"))
+    settings = await get_settings()
+    buffer = build_authorization_pdf(auth, player, settings, lang)
+    filename = f"autorizacion_{auth_id}.pdf"
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @api_router.put("/authorizations/{auth_id}")

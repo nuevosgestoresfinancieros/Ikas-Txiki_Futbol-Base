@@ -19,12 +19,30 @@ const AUTH_TYPES = {
 };
 
 const TEMPLATE_TEXT = {
-  general: "Autorizo a mi hijo/a a participar en todas las actividades deportivas, entrenamientos y partidos organizados por el club durante la temporada, así como a recibir la atención necesaria en caso de accidente leve.",
-  imagen: "Autorizo el uso de la imagen de mi hijo/a en fotografías y vídeos del club con fines informativos y de difusión de las actividades deportivas, sin contraprestación económica y respetando en todo momento la dignidad del menor.",
-  medica: "Autorizo al club a tomar las medidas oportunas en caso de urgencia médica cuando no sea posible contactar con el/los tutor/es. Declaro estar informado/a del estado de salud de mi hijo/a y no tener conocimiento de impedimento médico para la práctica deportiva.",
-  desplazamientos: "Autorizo los desplazamientos de mi hijo/a en los vehículos del club o de otros progenitores/tutores a los distintos campos y localizaciones donde se disputen los partidos y actividades organizadas por el club.",
-  recogida: "Autorizo a la persona indicada a continuación a recoger a mi hijo/a tras los entrenamientos y partidos del club, en los casos en que yo no pueda hacerlo personalmente.",
-  proteccion_datos: "Doy mi consentimiento informado para el tratamiento de los datos personales de mi hijo/a conforme al Reglamento (UE) 2016/679 (RGPD) y la Ley Orgánica 3/2018 (LOPDGDD). Los datos serán utilizados exclusivamente para la gestión de las actividades del club y no serán cedidos a terceros sin consentimiento expreso.",
+  general: {
+    es: "Autorizo a mi hijo/a a participar en todas las actividades deportivas, entrenamientos y partidos organizados por el club durante la temporada, así como a recibir la atención necesaria en caso de accidente leve.",
+    eu: "Nire seme-alabari klubak denboraldian antolatutako kirol-jarduera, entrenamendu eta partida guztietan parte hartzeko baimena ematen diot, baita istripu arin baten kasuan beharrezko arreta jasotzeko ere.",
+  },
+  imagen: {
+    es: "Autorizo el uso de la imagen de mi hijo/a en fotografías y vídeos del club con fines informativos y de difusión de las actividades deportivas, sin contraprestación económica y respetando en todo momento la dignidad del menor.",
+    eu: "Nire seme-alabaren irudia klubaren argazki eta bideoetan erabiltzeko baimena ematen dut, kirol-jardueren berri emateko eta zabaltzeko, ordain ekonomikorik gabe eta adingabearen duintasuna une oro errespetatuz.",
+  },
+  medica: {
+    es: "Autorizo al club a tomar las medidas oportunas en caso de urgencia médica cuando no sea posible contactar con el/los tutor/es. Declaro estar informado/a del estado de salud de mi hijo/a y no tener conocimiento de impedimento médico para la práctica deportiva.",
+    eu: "Klubari baimena ematen diot larrialdi mediko baten aurrean beharrezko neurriak har ditzan, tutoreekin harremanetan jartzea ezinezkoa denean. Adierazten dut nire seme-alabaren osasun-egoeraren berri dudala eta ez dudala kirola egiteko eragozpen medikorik ezagutzen.",
+  },
+  desplazamientos: {
+    es: "Autorizo los desplazamientos de mi hijo/a en los vehículos del club o de otros progenitores/tutores a los distintos campos y localizaciones donde se disputen los partidos y actividades organizadas por el club.",
+    eu: "Nire seme-alabak klubeko ibilgailuetan edo beste guraso edo tutore batzuen ibilgailuetan bidaiatzeko baimena ematen dut, partidak eta klubak antolatutako jarduerak egiten diren zelai eta lekuetara joateko.",
+  },
+  recogida: {
+    es: "Autorizo a la persona indicada a continuación a recoger a mi hijo/a tras los entrenamientos y partidos del club, en los casos en que yo no pueda hacerlo personalmente.",
+    eu: "Jarraian adierazitako pertsonari nire seme-alaba entrenamendu eta partiden ondoren jasotzeko baimena ematen diot, nik neuk jaso ezin dudanean.",
+  },
+  proteccion_datos: {
+    es: "Doy mi consentimiento informado para el tratamiento de los datos personales de mi hijo/a conforme al Reglamento (UE) 2016/679 (RGPD) y la Ley Orgánica 3/2018 (LOPDGDD). Los datos serán utilizados exclusivamente para la gestión de las actividades del club y no serán cedidos a terceros sin consentimiento expreso.",
+    eu: "Nire seme-alabaren datu pertsonalak tratatzeko baimen informatua ematen dut, 2016/679 (EB) Erregelamenduaren (DBEO) eta 3/2018 Lege Organikoaren arabera. Datuak klubaren jarduerak kudeatzeko baino ez dira erabiliko, eta ez zaizkie hirugarrenei lagako berariazko baimenik gabe.",
+  },
 };
 
 const buildAuthHTML = (auth, player, settings, lang) => {
@@ -33,8 +51,9 @@ const buildAuthHTML = (auth, player, settings, lang) => {
   const clubEmail = settings.club_email || "";
   const clubTelefono = settings.club_telefono || "";
   const clubLogo = settings.club_logo || "";
-  const tipoLabel = AUTH_TYPES[auth.tipo]?.[lang] || auth.tipo;
-  const texto = TEMPLATE_TEXT[auth.tipo] || "";
+  const tipoEs = AUTH_TYPES[auth.tipo]?.es || auth.tipo;
+  const tipoEu = AUTH_TYPES[auth.tipo]?.eu || auth.tipo;
+  const texto = TEMPLATE_TEXT[auth.tipo] || { es: "", eu: "" };
   const jugadorNombre = player ? `${player.nombre} ${player.apellidos || ""}`.trim() : "________________";
   const firmante = auth.firmante || "________________";
   const fecha = auth.fecha_firma || "____________";
@@ -49,34 +68,35 @@ const buildAuthHTML = (auth, player, settings, lang) => {
         </div>
       </div>
       <div style="text-align:center;margin-bottom:32px;">
-        <div style="font-size:17px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;border-bottom:1px solid #ccc;padding-bottom:8px;display:inline-block;">${tipoLabel}</div>
-        <div style="font-size:12px;color:#666;margin-top:6px;">Temporada 2025 – 2026</div>
+        <div style="font-size:17px;font-weight:700;text-transform:uppercase;letter-spacing:1px;border-bottom:1px solid #ccc;padding-bottom:8px;display:inline-block;">${tipoEs}</div>
+        <div style="font-size:14px;font-weight:700;text-transform:uppercase;margin-top:6px;">${tipoEu}</div>
+        <div style="font-size:12px;color:#666;margin-top:6px;">Temporada / Denboraldia ${settings.temporada_actual || "2025 – 2026"}</div>
       </div>
       <table style="width:100%;border-collapse:collapse;margin-bottom:24px;font-size:13px;">
-        <tr><td style="padding:6px 0;color:#555;width:40%;">Padre/Madre/Tutor/a:</td><td style="padding:6px 0;font-weight:600;border-bottom:1px solid #999;">${firmante}</td></tr>
-        <tr><td style="padding:6px 0;color:#555;">Jugador/a:</td><td style="padding:6px 0;font-weight:600;border-bottom:1px solid #999;">${jugadorNombre}</td></tr>
-        ${player?.fecha_nacimiento ? `<tr><td style="padding:6px 0;color:#555;">Fecha de nacimiento:</td><td style="padding:6px 0;border-bottom:1px solid #999;">${player.fecha_nacimiento.slice(0,10)}</td></tr>` : ""}
-        ${player?.categoria ? `<tr><td style="padding:6px 0;color:#555;">Categoría:</td><td style="padding:6px 0;border-bottom:1px solid #999;">${player.categoria}</td></tr>` : ""}
+        <tr><td style="padding:6px 0;color:#555;width:40%;">Padre/Madre/Tutor/a · Aita/Ama/Tutorea:</td><td style="padding:6px 0;font-weight:600;border-bottom:1px solid #999;">${firmante}</td></tr>
+        <tr><td style="padding:6px 0;color:#555;">Jugador/a · Jokalaria:</td><td style="padding:6px 0;font-weight:600;border-bottom:1px solid #999;">${jugadorNombre}</td></tr>
+        ${player?.fecha_nacimiento ? `<tr><td style="padding:6px 0;color:#555;">Fecha de nacimiento · Jaioteguna:</td><td style="padding:6px 0;border-bottom:1px solid #999;">${player.fecha_nacimiento.slice(0,10)}</td></tr>` : ""}
+        ${player?.categoria ? `<tr><td style="padding:6px 0;color:#555;">Categoría · Kategoria:</td><td style="padding:6px 0;border-bottom:1px solid #999;">${player.categoria}</td></tr>` : ""}
       </table>
       <div style="background:#f8f8f8;border-left:4px solid #333;padding:16px 20px;margin-bottom:24px;font-size:14px;line-height:1.8;">
-        <strong>AUTORIZO / BAIMENA EMATEN DUT:</strong><br/>${texto}
+        <strong>AUTORIZO:</strong><br/>${texto.es}<br/><br/><strong>BAIMENA EMATEN DUT:</strong><br/>${texto.eu}
       </div>
       ${auth.tipo === "recogida" ? `
       <div style="margin-bottom:24px;font-size:13px;">
-        <strong>Persona autorizada para la recogida:</strong>
+        <strong>Persona autorizada para la recogida · Jasotzeko baimendutako pertsona:</strong>
         <table style="width:100%;border-collapse:collapse;margin-top:8px;">
-          <tr><td style="padding:6px 0;color:#555;width:40%;">Nombre y apellidos:</td><td style="padding:6px 0;border-bottom:1px solid #999;font-weight:600;">${auth.persona_autorizada || "________________"}</td></tr>
-          <tr><td style="padding:6px 0;color:#555;">DNI / NIF:</td><td style="padding:6px 0;border-bottom:1px solid #999;font-weight:600;">${auth.dni_autorizada || "________________"}</td></tr>
+          <tr><td style="padding:6px 0;color:#555;width:40%;">Nombre y apellidos · Izen-abizenak:</td><td style="padding:6px 0;border-bottom:1px solid #999;font-weight:600;">${auth.persona_autorizada || "________________"}</td></tr>
+          <tr><td style="padding:6px 0;color:#555;">DNI / NIF · NAN / IFZ:</td><td style="padding:6px 0;border-bottom:1px solid #999;font-weight:600;">${auth.dni_autorizada || "________________"}</td></tr>
         </table>
       </div>` : ""}
-      ${auth.observaciones ? `<div style="margin-bottom:24px;font-size:13px;font-style:italic;color:#555;"><strong>Observaciones:</strong> ${auth.observaciones}</div>` : ""}
+      ${auth.observaciones ? `<div style="margin-bottom:24px;font-size:13px;font-style:italic;color:#555;"><strong>Observaciones · Oharrak:</strong> ${auth.observaciones}</div>` : ""}
       <div style="margin-top:56px;display:flex;justify-content:space-between;gap:40px;">
-        <div style="flex:1;text-align:center;"><div style="border-top:1.5px solid #1a1a1a;padding-top:8px;font-size:12px;color:#555;">Firma del padre/madre/tutor/a</div></div>
-        <div style="flex:1;text-align:center;"><div style="border-top:1.5px solid #1a1a1a;padding-top:8px;font-size:12px;color:#555;">Fecha: ${fecha}</div></div>
-        <div style="flex:1;text-align:center;"><div style="border-top:1.5px solid #1a1a1a;padding-top:8px;font-size:12px;color:#555;">Sello del club</div></div>
+        <div style="flex:1;text-align:center;"><div style="border-top:1.5px solid #1a1a1a;padding-top:8px;font-size:11px;color:#555;">Firma del padre/madre/tutor/a<br/>Aita/ama/tutorearen sinadura</div></div>
+        <div style="flex:1;text-align:center;"><div style="border-top:1.5px solid #1a1a1a;padding-top:8px;font-size:11px;color:#555;">Fecha · Data: ${fecha}</div></div>
+        <div style="flex:1;text-align:center;"><div style="border-top:1.5px solid #1a1a1a;padding-top:8px;font-size:11px;color:#555;">Sello del club · Klubaren zigilua</div></div>
       </div>
       <div style="margin-top:40px;border-top:1px solid #ddd;padding-top:10px;font-size:10px;color:#999;text-align:center;">
-        ${clubNombre} · Documento generado el ${new Date().toLocaleDateString("es-ES")} · Protección de datos: conforme al RGPD (UE) 2016/679
+        ${clubNombre} · Documento generado / Sortutako dokumentua: ${new Date().toLocaleDateString("es-ES")} · RGPD/DBEO (UE/EB) 2016/679
       </div>
     </div>`;
 };
@@ -132,108 +152,61 @@ const Authorizations = () => {
   };
 
   const getPlayer = (id) => players.find((p) => p.id === id);
-  const doPrint = async (a) => {
-    const printWindow = window.open("", "_blank", "width=900,height=1000");
-    if (!printWindow) {
-      toast.error("Permite las ventanas emergentes para imprimir la autorización");
-      return;
-    }
+  const doPrint = (a) => {
+    const printRoot = document.createElement("div");
+    printRoot.id = "authorization-print-root";
+    printRoot.innerHTML = buildAuthHTML(a, getPlayer(a.player_id), settings, lang);
 
-    printWindow.opener = null;
-    printWindow.document.open();
-    printWindow.document.write(`<!doctype html>
-      <html lang="${lang}">
-        <head>
-          <meta charset="utf-8" />
-          <meta name="viewport" content="width=device-width,initial-scale=1" />
-          <title>${AUTH_TYPES[a.tipo]?.[lang] || "Autorización"}</title>
-          <style>
-            @page { size: A4 portrait; margin: 10mm; }
-            html, body { margin: 0; padding: 0; background: #fff; }
-            body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-            @media print { html, body { width: 100%; min-height: 100%; } }
-          </style>
-        </head>
-        <body>${buildAuthHTML(a, getPlayer(a.player_id), settings, lang)}</body>
-      </html>`);
-    printWindow.document.close();
+    const printStyle = document.createElement("style");
+    printStyle.id = "authorization-print-style";
+    printStyle.textContent = `
+      #authorization-print-root { display: none; }
+      @media print {
+        @page { size: A4 portrait; margin: 10mm; }
+        body > *:not(#authorization-print-root) { display: none !important; }
+        #authorization-print-root { display: block !important; }
+        html, body { margin: 0 !important; padding: 0 !important; background: #fff !important; }
+        body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+      }
+    `;
 
+    document.head.appendChild(printStyle);
+    document.body.appendChild(printRoot);
+
+    const cleanup = () => {
+      printRoot.remove();
+      printStyle.remove();
+    };
+
+    window.addEventListener("afterprint", cleanup, { once: true });
     try {
-      if (printWindow.document.fonts?.ready) await printWindow.document.fonts.ready;
-      const images = Array.from(printWindow.document.images);
-      await Promise.all(images.map((img) => {
-        if (img.complete) return Promise.resolve();
-        return new Promise((resolve) => {
-          img.addEventListener("load", resolve, { once: true });
-          img.addEventListener("error", resolve, { once: true });
-        });
-      }));
-      printWindow.focus();
-      printWindow.print();
+      window.focus();
+      window.print();
     } catch (error) {
       console.error("Error al preparar la impresión", error);
-      printWindow.close();
+      cleanup();
       toast.error("No se pudo preparar la impresión");
     }
   };
 
   const doDownloadPdf = async (a) => {
     const player = getPlayer(a.player_id);
-    const html = buildAuthHTML(a, player, settings, lang);
-    const container = document.createElement("div");
-    container.innerHTML = html;
-    // html2canvas necesita que el nodo esté dentro del viewport y pintado. Se
-    // muestra como una capa A4 durante la captura y se elimina inmediatamente.
-    container.setAttribute("aria-hidden", "true");
-    container.style.cssText = [
-      "position:fixed",
-      "left:0",
-      "top:0",
-      "width:794px",
-      "min-height:1123px",
-      "background:#fff",
-      "pointer-events:none",
-      "z-index:2147483647",
-      "box-shadow:none",
-      "overflow:visible",
-    ].join(";");
-    document.body.appendChild(container);
     const tipoSlug = (AUTH_TYPES[a.tipo]?.[lang] || a.tipo).toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
     const jugadorSlug = player ? `${player.nombre}_${player.apellidos || ""}`.toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "") : "jugador";
     try {
-      if (!window.html2pdf) throw new Error("El generador PDF no está disponible");
-
-      if (document.fonts?.ready) await document.fonts.ready;
-      const images = Array.from(container.querySelectorAll("img"));
-      await Promise.all(images.map((img) => {
-        if (img.complete) return Promise.resolve();
-        return new Promise((resolve) => {
-          img.addEventListener("load", resolve, { once: true });
-          img.addEventListener("error", resolve, { once: true });
-        });
-      }));
-
-      await window.html2pdf().set({
-        margin: [10, 10, 10, 10],
-        filename: `autorizacion_${tipoSlug}_${jugadorSlug}.pdf`,
-        image: { type: "jpeg", quality: 0.98 },
-        html2canvas: {
-          scale: 2,
-          useCORS: true,
-          backgroundColor: "#ffffff",
-          scrollX: 0,
-          scrollY: 0,
-          windowWidth: 794,
-        },
-        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-        pagebreak: { mode: ["avoid-all", "css", "legacy"] },
-      }).from(container).save();
+      const response = await api.get(`/authorizations/${a.id}/pdf`, { params: { lang }, responseType: "blob" });
+      const url = URL.createObjectURL(response.data);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `autorizacion_${tipoSlug}_${jugadorSlug}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
       toast.success("Autorización descargada correctamente");
     } catch (error) {
       console.error("Error al generar la autorización PDF", error);
       toast.error("No se pudo generar el PDF. Prueba la opción Imprimir / PDF.");
-    } finally {
-      container.remove();
     }
   };
 
