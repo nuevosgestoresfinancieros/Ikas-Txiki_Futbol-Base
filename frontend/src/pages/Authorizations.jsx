@@ -227,7 +227,7 @@ const Authorizations = () => {
         },
         jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
         pagebreak: { mode: ["avoid-all", "css", "legacy"] },
-      }).from(container.firstElementChild || container).save();
+      }).from(container).save();
       toast.success("Autorización descargada correctamente");
     } catch (error) {
       console.error("Error al generar la autorización PDF", error);
