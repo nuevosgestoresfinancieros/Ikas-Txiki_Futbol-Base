@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   AlertTriangle, ArrowRight, CalendarDays, CheckCircle2, ClipboardCheck,
-  Dumbbell, Euro, FileSignature, FileWarning, RefreshCw, Shield,
+  Dumbbell, Euro, FileSignature, FileWarning, MessageSquare, RefreshCw, Shield,
   Trophy, UserPlus, Users,
 } from "lucide-react";
 import api from "@/api";
@@ -10,6 +10,7 @@ import { PermissionGate } from "@/auth";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/shared";
+import NextActivity from "@/components/dashboard/NextActivity";
 
 const metricStyles = {
   teal: "bg-teal-50 text-teal-700 border-teal-100",
@@ -77,16 +78,17 @@ const Dashboard = () => {
   const navigate = useNavigate();
   const [data, setData] = useState(null);
   const [error, setError] = useState(false);
+  const [filters, setFilters] = useState({ temporada: "", categoria: "", equipo_id: "" });
 
   const load = useCallback(async () => {
     setError(false);
     try {
-      const response = await api.get("/dashboard");
+      const response = await api.get("/dashboard", { params: Object.fromEntries(Object.entries(filters).filter(([, value]) => value)) });
       setData(response.data);
     } catch {
       setError(true);
     }
-  }, []);
+  }, [filters]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -114,6 +116,9 @@ const Dashboard = () => {
   const trainings = data.proximos_entrenamientos || [];
   const alerts = data.alertas || [];
   const alertRoutes = { pago: "/pagos", doc: "/jugadores", auth: "/autorizaciones", inscripcion: "/inscripciones" };
+  const options = data.filter_options || { temporadas: [], categorias: [], equipos: [] };
+  const attendance = data.asistencia_semanal || {};
+  const callupPending = data.convocatorias_pendientes?.total || 0;
 
   return (
     <div data-testid="dashboard-page" className="animate-fade-up">
@@ -135,6 +140,67 @@ const Dashboard = () => {
           </div>
         </div>
       </section>
+
+      {(options.temporadas.length > 1 || options.categorias.length > 1 || options.equipos.length > 1) && (
+        <section className="surface-card mb-6 grid gap-3 p-4 sm:grid-cols-3" aria-label={t("dashboardFilters")}>
+          <label className="text-xs font-bold text-slate-600">{t("season")}
+            <select value={filters.temporada} onChange={(event) => setFilters((current) => ({ ...current, temporada: event.target.value }))} className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm">
+              <option value="">{t("all")}</option>{options.temporadas.map((value) => <option key={value}>{value}</option>)}
+            </select>
+          </label>
+          <label className="text-xs font-bold text-slate-600">{t("category")}
+            <select value={filters.categoria} onChange={(event) => setFilters((current) => ({ ...current, categoria: event.target.value, equipo_id: "" }))} className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm">
+              <option value="">{t("all")}</option>{options.categorias.map((value) => <option key={value}>{value}</option>)}
+            </select>
+          </label>
+          <label className="text-xs font-bold text-slate-600">{t("team")}
+            <select value={filters.equipo_id} onChange={(event) => setFilters((current) => ({ ...current, equipo_id: event.target.value }))} className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm">
+              <option value="">{t("all")}</option>{options.equipos.filter((team) => (!filters.categoria || team.categoria === filters.categoria) && (!filters.temporada || team.temporada === filters.temporada)).map((team) => <option key={team.id} value={team.id}>{team.nombre}</option>)}
+            </select>
+          </label>
+        </section>
+      )}
+
+      <div className="mb-6 grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(18rem,1fr)]">
+        <NextActivity activity={data.siguiente_actividad} onOpen={navigate} />
+        <section className="surface-card grid grid-cols-3 divide-x divide-slate-100" aria-label={t("weeklySummary")}>
+          <div className="p-4 text-center"><p className="font-heading text-2xl font-bold text-emerald-700">{attendance.porcentaje_presencia || 0}%</p><p className="mt-1 text-xs font-semibold text-slate-500">{t("attendance")}</p></div>
+          <div className="p-4 text-center"><p className="font-heading text-2xl font-bold text-amber-700">{callupPending}</p><p className="mt-1 text-xs font-semibold text-slate-500">{t("pendingCallups")}</p></div>
+          <div className="p-4 text-center"><p className="font-heading text-2xl font-bold text-blue-700">{data.comunicaciones_pendientes || 0}</p><p className="mt-1 text-xs font-semibold text-slate-500">{t("pendingCommunications")}</p></div>
+        </section>
+      </div>
+
+      {data.role === "coach" && (
+        <section className="mb-6 grid grid-cols-2 gap-4" aria-label={t("players")}>
+          <div className="surface-card p-5"><p className="font-heading text-3xl font-bold text-emerald-700">{data.jugadores_disponibles || 0}</p><p className="mt-1 text-sm font-semibold text-slate-600">{t("availablePlayers")}</p></div>
+          <div className="surface-card p-5"><p className="font-heading text-3xl font-bold text-rose-700">{data.jugadores_ausentes || 0}</p><p className="mt-1 text-sm font-semibold text-slate-600">{t("absentPlayers")}</p></div>
+        </section>
+      )}
+
+      {data.role === "family" && (
+        <section className="surface-card mb-6 p-5" aria-labelledby="children-title">
+          <h2 id="children-title" className="font-heading text-xl font-bold text-slate-900">{t("associatedChildren")}</h2>
+          {(data.hijos || []).length === 0 ? <p className="mt-3 text-sm text-slate-500">{t("noData")}</p> : (
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">{data.hijos.map((child) => <div key={child.id} className="rounded-xl border border-slate-100 p-4"><p className="font-bold text-slate-800">{child.nombre} {child.apellidos}</p><p className="mt-1 text-xs text-slate-500">{child.categoria || "—"} · {child.estado || "—"}</p></div>)}</div>
+          )}
+        </section>
+      )}
+
+      {data.role === "player" && (
+        <section className="surface-card mb-6 p-5" aria-labelledby="callup-status-title">
+          <h2 id="callup-status-title" className="font-heading text-xl font-bold text-slate-900">{t("callupStatus")}</h2>
+          {(data.estado_convocatorias || []).length === 0 ? <p className="mt-3 text-sm text-slate-500">{t("noData")}</p> : (
+            <div className="mt-4 flex flex-wrap gap-2">{data.estado_convocatorias.map((item) => <StatusBadge key={`${item.callup_id}-${item.player_id}`} status={item.estado} />)}</div>
+          )}
+        </section>
+      )}
+
+      {data.role === "coordinator" && (
+        <section className="surface-card mb-6 p-5" aria-labelledby="incidents-title">
+          <h2 id="incidents-title" className="font-heading text-xl font-bold text-slate-900">{t("incidents")}</h2>
+          {(data.incidencias || []).length === 0 ? <p className="mt-3 text-sm text-slate-500">{t("noIncidents")}</p> : <ul className="mt-3 space-y-2">{data.incidencias.map((item) => <li key={`${item.tipo}-${item.id}`} className="rounded-xl bg-amber-50 p-3 text-sm text-amber-950">{item.mensaje}</li>)}</ul>}
+        </section>
+      )}
 
       <section aria-labelledby="dashboard-summary-title">
         <div className="mb-3 flex items-center justify-between">
@@ -165,6 +231,7 @@ const Dashboard = () => {
           <PermissionGate resource="trainings" action="create"><QuickAction testid="new-training" icon={Dumbbell} label={t("trainings")} onClick={() => navigate("/entrenamientos?new=1")} /></PermissionGate>
           <PermissionGate resource="payments" action="create"><QuickAction testid="new-payment" icon={Euro} label={t("newPayment")} onClick={() => navigate("/pagos?new=1")} /></PermissionGate>
           <PermissionGate resource="teams" action="create"><QuickAction testid="new-team" icon={Shield} label={t("newTeam")} onClick={() => navigate("/equipos?new=1")} /></PermissionGate>
+          <PermissionGate resource="authorizations" action="create"><QuickAction testid="new-authorization" icon={FileSignature} label={t("newAuthorization")} onClick={() => navigate("/autorizaciones?new=1")} /></PermissionGate>
         </div>
       </section>
 
@@ -220,6 +287,20 @@ const Dashboard = () => {
           </div>
         </section>
       </div>
+
+      <section className="mt-6" aria-labelledby="latest-communications-title">
+        <h2 id="latest-communications-title" className="mb-3 font-heading text-xl font-bold text-slate-900">{t("latestCommunications")}</h2>
+        <div className="surface-card overflow-hidden">
+          {(data.ultimas_comunicaciones || []).length === 0 ? (
+            <p className="px-5 py-7 text-sm text-slate-500">{t("noCommunications")}</p>
+          ) : data.ultimas_comunicaciones.map((communication) => (
+            <button key={communication.id} type="button" onClick={() => navigate("/comunicacion")} className="flex w-full items-start gap-3 border-b border-slate-100 px-5 py-4 text-left last:border-0 hover:bg-slate-50">
+              <MessageSquare className="mt-0.5 h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
+              <div className="min-w-0"><p className="truncate font-semibold text-slate-800">{communication.asunto || t("communications")}</p><p className="mt-1 line-clamp-2 text-xs text-slate-500">{communication.mensaje || "—"}</p></div>
+            </button>
+          ))}
+        </div>
+      </section>
     </div>
   );
 };

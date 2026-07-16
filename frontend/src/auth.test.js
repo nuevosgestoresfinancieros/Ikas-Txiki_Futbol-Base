@@ -34,4 +34,15 @@ describe("frontend permission helpers", () => {
     expect(html).not.toContain("Eliminar");
     expect(html).toContain("Editar");
   });
+
+  test.each([
+    ["admin", { players: ["read", "create"], authorizations: ["read", "create"], payments: ["read", "create"] }, ["players", "authorizations", "payments"]],
+    ["coordinator", { players: ["read", "create"], authorizations: ["read", "create"] }, ["players", "authorizations"]],
+    ["coach", { players: ["read"], trainings: ["read", "create"] }, ["trainings"]],
+    ["family", { players: ["read"], payments: ["read"], authorizations: ["read"] }, []],
+    ["player", { players: ["read"], authorizations: ["read"] }, []],
+  ])("shows only authorized quick actions for %s", (role, permissions, expected) => {
+    const resources = ["players", "trainings", "authorizations", "payments"];
+    expect(resources.filter((resource) => can({ role, permissions }, resource, "create"))).toEqual(expected);
+  });
 });

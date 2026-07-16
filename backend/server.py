@@ -34,6 +34,10 @@ from authz import (
     has_permission, ids,
     merge_query, public_user, route_permission,
 )
+from dashboard_service import (
+    next_activity, pending_callups, player_callup_status, prioritized_alerts,
+    weekly_attendance,
+)
 
 
 ROOT_DIR = Path(__file__).parent
@@ -1363,18 +1367,86 @@ async def api_compute_category(fecha_nacimiento: str):
 
 # ================= DASHBOARD =================
 @api_router.get("/dashboard")
-async def dashboard():
+async def dashboard(
+    temporada: Optional[str] = None,
+    categoria: Optional[str] = None,
+    equipo_id: Optional[str] = None,
+):
     user = current_user_context.get() or {}
+    role = user.get("role", "player")
 
     async def permitted_docs(collection: str, resource: str):
         return await list_docs(collection) if has_permission(user, resource, "read") else []
 
-    players = await permitted_docs("players", "players")
-    matches = await permitted_docs("matches", "matches")
-    payments = await permitted_docs("payments", "payments")
-    auths = await permitted_docs("authorizations", "authorizations")
-    inscriptions = await permitted_docs("inscriptions", "inscriptions")
-    trainings = await permitted_docs("trainings", "trainings")
+    all_teams = await permitted_docs("teams", "teams")
+    allowed_team_ids = {team.get("id") for team in all_teams if team.get("id")}
+    if equipo_id and equipo_id not in allowed_team_ids:
+        raise HTTPException(status_code=403, detail="El equipo solicitado no pertenece a tu ámbito")
+    if categoria and role != "admin" and not any(team.get("categoria") == categoria for team in all_teams):
+        raise HTTPException(status_code=403, detail="La categoría solicitada no pertenece a tu ámbito")
+    allowed_seasons = {team.get("temporada") for team in all_teams if team.get("temporada")}
+    if temporada and role != "admin" and allowed_seasons and temporada not in allowed_seasons:
+        raise HTTPException(status_code=403, detail="La temporada solicitada no pertenece a tu ámbito")
+
+    teams = [
+        team for team in all_teams
+        if (not equipo_id or team.get("id") == equipo_id)
+        and (not categoria or team.get("categoria") == categoria)
+        and (not temporada or team.get("temporada") == temporada)
+    ]
+    selected_team_ids = {team.get("id") for team in teams if team.get("id")}
+    team_names = {team["id"]: team.get("nombre", "—") for team in teams}
+
+    players = [
+        player for player in await permitted_docs("players", "players")
+        if (not selected_team_ids or player.get("equipo_id") in selected_team_ids)
+        and (not categoria or player.get("categoria") == categoria)
+    ] if (teams or not any((equipo_id, categoria, temporada))) else []
+    selected_player_ids = {player.get("id") for player in players if player.get("id")}
+
+    matches = [
+        match for match in await permitted_docs("matches", "matches")
+        if (not selected_team_ids or match.get("equipo_id") in selected_team_ids)
+        and (not temporada or match.get("temporada") == temporada)
+    ] if (teams or not any((equipo_id, categoria, temporada))) else []
+    trainings = [
+        training for training in await permitted_docs("trainings", "trainings")
+        if not selected_team_ids or training.get("equipo_id") in selected_team_ids
+    ] if (teams or not any((equipo_id, categoria, temporada))) else []
+    callups = [
+        callup for callup in await permitted_docs("callups", "callups")
+        if not selected_team_ids or callup.get("equipo_id") in selected_team_ids
+    ] if (teams or not any((equipo_id, categoria, temporada))) else []
+
+    payments = [
+        payment for payment in await permitted_docs("payments", "payments")
+        if not selected_player_ids or payment.get("player_id") in selected_player_ids
+    ] if players else []
+    auths = [
+        authorization for authorization in await permitted_docs("authorizations", "authorizations")
+        if not selected_player_ids or authorization.get("player_id") in selected_player_ids
+    ] if players else []
+    all_inscriptions = await permitted_docs("inscriptions", "inscriptions")
+    inscriptions = all_inscriptions if role == "admin" and not any((equipo_id, categoria, temporada)) else [
+        inscription for inscription in all_inscriptions
+        if inscription.get("player_id") in selected_player_ids
+    ]
+    communications = await permitted_docs("communications", "communications")
+    communication_targets = selected_player_ids | set(ids([user.get("family_id"), user.get("player_id")]))
+    if role != "admin" or any((equipo_id, categoria, temporada)):
+        communications = [
+            communication for communication in communications
+            if (
+                communication.get("destinatario_tipo") == "equipo"
+                and communication.get("destinatario_id") in selected_team_ids
+            ) or (
+                communication.get("destinatario_tipo") == "individual"
+                and communication.get("destinatario_id") in communication_targets
+            ) or (
+                role == "admin" and communication.get("destinatario_tipo") == "categoria"
+                and (not categoria or communication.get("destinatario_id") == categoria)
+            )
+        ]
 
     activos = [p for p in players if p.get("estado") == "activo"]
     pendientes_doc = [p for p in players if p.get("estado_documental") != "completo"]
@@ -1388,21 +1460,45 @@ async def dashboard():
         [m for m in matches if m.get("fecha") and m.get("fecha") >= today and m.get("estado") == "programado"],
         key=lambda m: (m.get("fecha"), m.get("hora") or "")
     )[:5]
-    teams = {t["id"]: t["nombre"] for t in await permitted_docs("teams", "teams")}
     for m in proximos_partidos:
-        m["equipo_nombre"] = teams.get(m.get("equipo_id"), "—")
+        m["equipo_nombre"] = team_names.get(m.get("equipo_id"), "—")
 
     proximos_entrenamientos = sorted(
         [tr for tr in trainings if tr.get("fecha") and tr.get("fecha") >= today],
         key=lambda tr: (tr.get("fecha"), tr.get("hora") or "")
     )[:5]
     for tr in proximos_entrenamientos:
-        tr["equipo_nombre"] = teams.get(tr.get("equipo_id"), "—")
+        tr["equipo_nombre"] = team_names.get(tr.get("equipo_id"), "—")
 
     insc_pendientes = [i for i in inscriptions if i.get("estado") in ("recibida", "pendiente", "revisada")]
     nuevas_insc = [i for i in inscriptions if i.get("tipo") == "alta" and not i.get("player_id")]
 
+    pending_communications = [communication for communication in communications if not communication.get("enviado")]
+    failed_communications = [
+        communication for communication in communications
+        if communication.get("estado") == "error" or communication.get("error_envio")
+    ]
+    latest_communications = sorted(
+        communications,
+        key=lambda communication: communication.get("fecha_envio") or communication.get("created_at") or "",
+        reverse=True,
+    )[:5]
+    attendance = weekly_attendance(trainings, selected_player_ids or None)
+    scoped_callup_players = selected_player_ids if role in {"family", "player"} else None
+    callup_pending = pending_callups(callups, scoped_callup_players)
+    callup_status = player_callup_status(callups, selected_player_ids) if role in {"family", "player"} else []
+    next_event = next_activity(proximos_partidos, proximos_entrenamientos)
+    incidents = [
+        {"tipo": kind, "id": item.get("id"), "equipo_id": item.get("equipo_id"), "mensaje": item.get("observaciones")}
+        for kind, rows in (("partido", matches), ("entrenamiento", trainings))
+        for item in rows if item.get("observaciones")
+    ][:5]
+
     alertas = []
+    if failed_communications:
+        alertas.append({"tipo": "error_comunicacion", "mensaje": f"{len(failed_communications)} comunicaciones fallidas"})
+    if callup_pending["total"]:
+        alertas.append({"tipo": "convocatoria", "mensaje": f"{callup_pending['total']} convocatorias pendientes de respuesta"})
     if pagos_pendientes:
         alertas.append({"tipo": "pago", "mensaje": f"{len(pagos_pendientes)} pagos pendientes"})
     if pendientes_doc:
@@ -1412,7 +1508,32 @@ async def dashboard():
     if insc_pendientes:
         alertas.append({"tipo": "inscripcion", "mensaje": f"{len(insc_pendientes)} inscripciones por revisar"})
 
+    if pending_communications:
+        alertas.append({"tipo": "comunicacion", "mensaje": f"{len(pending_communications)} comunicaciones pendientes"})
+
+    available = [player for player in players if player.get("estado") == "activo"]
+    absent = [player for player in players if player.get("estado") in {"lesionado", "baja"}]
+    children = [
+        {
+            "id": player.get("id"), "nombre": player.get("nombre"),
+            "apellidos": player.get("apellidos"), "equipo_id": player.get("equipo_id"),
+            "categoria": player.get("categoria"), "estado": player.get("estado"),
+        }
+        for player in players
+    ] if role == "family" else []
+
     return {
+        "role": role,
+        "scope": {"team_ids": sorted(selected_team_ids), "player_ids": sorted(selected_player_ids)},
+        "filters": {"temporada": temporada, "categoria": categoria, "equipo_id": equipo_id},
+        "filter_options": {
+            "temporadas": sorted({team.get("temporada") for team in all_teams if team.get("temporada")}),
+            "categorias": sorted({team.get("categoria") for team in all_teams if team.get("categoria")}),
+            "equipos": [
+                {"id": team.get("id"), "nombre": team.get("nombre"), "categoria": team.get("categoria"), "temporada": team.get("temporada")}
+                for team in all_teams
+            ],
+        },
         "jugadores_activos": len(activos),
         "total_jugadores": len(players),
         "nuevas_inscripciones": len(nuevas_insc),
@@ -1423,7 +1544,18 @@ async def dashboard():
         "autorizaciones_pendientes": len(auth_pendientes),
         "proximos_partidos": proximos_partidos,
         "proximos_entrenamientos": proximos_entrenamientos,
-        "alertas": alertas,
+        "siguiente_actividad": next_event,
+        "ultimas_comunicaciones": latest_communications,
+        "comunicaciones_pendientes": len(pending_communications),
+        "comunicaciones_fallidas": len(failed_communications),
+        "asistencia_semanal": attendance,
+        "convocatorias_pendientes": callup_pending,
+        "estado_convocatorias": callup_status,
+        "jugadores_disponibles": len(available),
+        "jugadores_ausentes": len(absent),
+        "hijos": children,
+        "incidencias": incidents,
+        "alertas": prioritized_alerts(alertas),
     }
 
 
