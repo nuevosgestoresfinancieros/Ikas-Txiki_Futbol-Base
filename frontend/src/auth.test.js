@@ -22,6 +22,7 @@ describe("frontend permission helpers", () => {
   test("maps every protected navigation route", () => {
     expect(ROUTE_RESOURCES["/usuarios"]).toBe("users");
     expect(ROUTE_RESOURCES["/autorizaciones"]).toBe("authorizations");
+    expect(ROUTE_RESOURCES["/portal"]).toBe("portal");
   });
 
   test("does not render an action missing from backend-provided permissions", () => {

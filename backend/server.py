@@ -47,6 +47,7 @@ from calendar_service import (
     CALENDAR_TYPES, aggregate_calendar_events, calendar_to_ical,
     next_calendar_event, subscription_capability,
 )
+from portal_service import document_status, portal_attendance, portal_callups, safe_payment, safe_player, upcoming
 
 
 ROOT_DIR = Path(__file__).parent
@@ -875,6 +876,63 @@ async def export_calendar_ical(start: Optional[str] = None, end: Optional[str] =
         "Content-Disposition": "attachment; filename=ikas-txiki-calendario.ics",
         "Cache-Control": "private, no-store",
     })
+
+
+# ================= FAMILY / PLAYER PORTAL =================
+@api_router.get("/portal")
+async def get_portal():
+    actor = current_user_context.get() or {}
+    role = actor.get("role")
+    if role not in {"family", "player"}:
+        raise HTTPException(status_code=403, detail="El portal está reservado a familias y jugadores")
+
+    raw_players = await list_docs("players")
+    player_ids = {player.get("id") for player in raw_players if player.get("id")}
+    teams = await list_docs("teams")
+    team_map = {team.get("id"): team for team in teams}
+    players = [{**safe_player(player), "team_name": team_map.get(player.get("equipo_id"), {}).get("nombre")} for player in raw_players]
+
+    matches = await list_docs("matches")
+    trainings = await list_docs("trainings")
+    club_events = await list_docs("club_events")
+    calendar_events = aggregate_calendar_events(matches, trainings, club_events, teams)
+    callups = portal_callups(await list_docs("callups"), player_ids)
+    match_map = {match.get("id"): match for match in matches}
+    for callup in callups:
+        match = match_map.get(callup.get("match_id"), {})
+        callup["match"] = {
+            key: match.get(key) for key in ("id", "fecha", "hora", "rival", "campo", "estado")
+        }
+        callup["team_name"] = team_map.get(callup.get("equipo_id"), {}).get("nombre")
+        callup["deadline_expired"] = is_late(callup.get("response_deadline"))
+
+    authorizations = []
+    for authorization in await list_docs("authorizations"):
+        authorizations.append({
+            key: authorization.get(key) for key in (
+                "id", "player_id", "tipo", "estado", "fecha_firma", "fecha_caducidad",
+                "persona_autorizada", "observaciones",
+            )
+        } | {"has_signed_file": bool(authorization.get("archivo_firmado"))})
+
+    communications = [{key: item.get(key) for key in (
+        "id", "asunto", "mensaje", "canal", "fecha_envio", "created_at",
+    )} for item in await list_docs("communications")]
+    payments = [safe_payment(item) for item in await list_docs("payments")] if role == "family" else []
+
+    return {
+        "role": role,
+        "players": players,
+        "teams": [{key: team.get(key) for key in ("id", "nombre", "categoria", "temporada", "entrenador")} for team in teams],
+        "schedule": upcoming(calendar_events),
+        "next_activity": next_calendar_event(calendar_events),
+        "callups": callups,
+        "attendance": portal_attendance(trainings, player_ids),
+        "payments": payments,
+        "authorizations": authorizations,
+        "documents": document_status(raw_players),
+        "communications": communications[:20],
+    }
 
 
 # ================= CALLUPS (Convocatorias) =================

@@ -27,6 +27,7 @@ const Reports = lazy(() => import("@/pages/Reports"));
 const Equipment = lazy(() => import("@/pages/Equipment"));
 const Users = lazy(() => import("@/pages/Users"));
 const Calendar = lazy(() => import("@/pages/Calendar"));
+const Portal = lazy(() => import("@/pages/Portal"));
 
 const AppLoader = ({ fullPage = false }) => {
   const { t } = useI18n();
@@ -98,6 +99,7 @@ function App() {
                     <Route path="/entrenamientos" element={<AuthorizedRoute user={user} resource="trainings"><Trainings /></AuthorizedRoute>} />
                     <Route path="/partidos" element={<AuthorizedRoute user={user} resource="matches"><Matches /></AuthorizedRoute>} />
                     <Route path="/calendario" element={<AuthorizedRoute user={user} resource="calendar"><Calendar /></AuthorizedRoute>} />
+                    <Route path="/portal" element={<AuthorizedRoute user={user} resource="portal"><Portal user={user} /></AuthorizedRoute>} />
                     <Route path="/convocatorias" element={<AuthorizedRoute user={user} resource="callups"><Callups /></AuthorizedRoute>} />
                     <Route path="/estadisticas" element={<AuthorizedRoute user={user} resource="stats"><Stats /></AuthorizedRoute>} />
                     <Route path="/pagos" element={<AuthorizedRoute user={user} resource="payments"><Payments /></AuthorizedRoute>} />

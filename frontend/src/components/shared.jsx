@@ -32,6 +32,9 @@ const STATUS_COLORS = {
   justificada: "bg-amber-100 text-amber-800",
   injustificada: "bg-red-100 text-red-800",
   lesion: "bg-orange-100 text-orange-800",
+  pending: "bg-amber-100 text-amber-800",
+  confirmed: "bg-green-100 text-green-800",
+  declined: "bg-red-100 text-red-800",
 };
 
 export const StatusBadge = ({ status }) => {

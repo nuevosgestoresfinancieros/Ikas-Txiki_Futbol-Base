@@ -4,7 +4,7 @@ import {
   BarChart3, CalendarDays, ChevronDown, ClipboardList, Dumbbell, Euro,
   FileSignature, FileText, Home, LayoutDashboard, LogOut, Menu,
   MessageSquare, MoreHorizontal, Search, Settings as SettingsIcon,
-  Shield, Shirt, Trophy, UserPlus, Users,
+  HeartHandshake, Shield, Shirt, Trophy, UserPlus, Users,
 } from "lucide-react";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,10 @@ import { can, ROUTE_RESOURCES } from "@/auth";
 const navGroups = [
   {
     key: "navStart",
-    items: [{ to: "/", key: "dashboard", icon: LayoutDashboard, testid: "dashboard" }],
+    items: [
+      { to: "/", key: "dashboard", icon: LayoutDashboard, testid: "dashboard" },
+      { to: "/portal", key: "familyPlayerPortal", icon: HeartHandshake, testid: "portal", roles: ["family", "player"] },
+    ],
   },
   {
     key: "navPeople",
@@ -82,7 +85,7 @@ const LangToggle = () => {
 const SidebarContent = ({ onNavigate, onSearch, user, onLogout, pathname }) => {
   const { t } = useI18n();
   const visibleGroups = useMemo(() => navGroups
-    .map((group) => ({ ...group, items: group.items.filter((item) => can(user, ROUTE_RESOURCES[item.to])) }))
+    .map((group) => ({ ...group, items: group.items.filter((item) => (!item.roles || item.roles.includes(user?.role)) && can(user, ROUTE_RESOURCES[item.to])) }))
     .filter((group) => group.items.length > 0), [user]);
   const activeGroup = useMemo(
     () => visibleGroups.find((group) => group.items.some((item) => item.to === pathname))?.key,
@@ -199,7 +202,11 @@ const SidebarContent = ({ onNavigate, onSearch, user, onLogout, pathname }) => {
 
 const MobileBottomNav = ({ onMenu, onSearch, user }) => {
   const { t } = useI18n();
-  const items = [
+  const items = user?.role === "family" || user?.role === "player" ? [
+    { to: "/portal", key: "familyPlayerPortal", icon: HeartHandshake },
+    { to: "/calendario", key: "calendar", icon: CalendarDays },
+    { to: "/convocatorias", key: "callups", icon: ClipboardList },
+  ] : [
     { to: "/", key: "navStart", icon: LayoutDashboard },
     { to: "/jugadores", key: "players", icon: Users },
     { to: "/calendario", key: "calendar", icon: CalendarDays },

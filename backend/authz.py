@@ -13,7 +13,7 @@ RESOURCES = (
     "dashboard", "users", "players", "families", "teams", "trainings",
     "matches", "callups", "attendance", "payments", "authorizations",
     "inscriptions", "communications", "reports", "stats", "search",
-    "equipment", "settings", "data", "calendar",
+    "equipment", "settings", "data", "calendar", "portal",
 )
 
 
@@ -71,6 +71,7 @@ ROLE_PERMISSIONS: Dict[str, Dict[str, Set[str]]] = {
         "stats": _actions("read"),
         "search": _actions("read"),
         "calendar": _actions("read", "export"),
+        "portal": _actions("read"),
     },
     "player": {
         "dashboard": _actions("read"),
@@ -85,6 +86,7 @@ ROLE_PERMISSIONS: Dict[str, Dict[str, Set[str]]] = {
         "stats": _actions("read"),
         "search": _actions("read"),
         "calendar": _actions("read", "export"),
+        "portal": _actions("read"),
     },
 }
 
@@ -97,7 +99,7 @@ PATH_RESOURCES = {
     "inscriptions": "inscriptions", "communications": "communications",
     "reports": "reports", "stats": "stats", "search": "search",
     "equipment": "equipment", "settings": "settings", "dashboard": "dashboard",
-    "users": "users", "categories": "teams", "compute-category": "players", "calendar": "calendar",
+    "users": "users", "categories": "teams", "compute-category": "players", "calendar": "calendar", "portal": "portal",
     "export-excel": "data", "import-excel": "data", "clear-all": "data",
     "seed-demo": "data",
 }
