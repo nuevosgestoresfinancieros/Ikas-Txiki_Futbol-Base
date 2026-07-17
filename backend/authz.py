@@ -13,7 +13,7 @@ RESOURCES = (
     "dashboard", "users", "players", "families", "teams", "trainings",
     "matches", "callups", "attendance", "payments", "authorizations",
     "inscriptions", "communications", "reports", "stats", "search",
-    "equipment", "settings", "data",
+    "equipment", "settings", "data", "calendar",
 )
 
 
@@ -39,6 +39,7 @@ ROLE_PERMISSIONS: Dict[str, Dict[str, Set[str]]] = {
         "stats": _actions("read", "create", "edit", "export"),
         "search": _actions("read"),
         "equipment": _actions("read", "edit", "export"),
+        "calendar": _actions("read", "create", "edit", "delete", "export"),
     },
     "coach": {
         "dashboard": _actions("read"),
@@ -53,6 +54,7 @@ ROLE_PERMISSIONS: Dict[str, Dict[str, Set[str]]] = {
         "stats": _actions("read", "edit"),
         "search": _actions("read"),
         "equipment": _actions("read"),
+        "calendar": _actions("read", "create", "edit", "delete", "export"),
     },
     "family": {
         "dashboard": _actions("read"),
@@ -68,6 +70,7 @@ ROLE_PERMISSIONS: Dict[str, Dict[str, Set[str]]] = {
         "reports": _actions("read", "export"),
         "stats": _actions("read"),
         "search": _actions("read"),
+        "calendar": _actions("read", "export"),
     },
     "player": {
         "dashboard": _actions("read"),
@@ -81,6 +84,7 @@ ROLE_PERMISSIONS: Dict[str, Dict[str, Set[str]]] = {
         "reports": _actions("read", "export"),
         "stats": _actions("read"),
         "search": _actions("read"),
+        "calendar": _actions("read", "export"),
     },
 }
 
@@ -93,7 +97,7 @@ PATH_RESOURCES = {
     "inscriptions": "inscriptions", "communications": "communications",
     "reports": "reports", "stats": "stats", "search": "search",
     "equipment": "equipment", "settings": "settings", "dashboard": "dashboard",
-    "users": "users", "categories": "teams", "compute-category": "players",
+    "users": "users", "categories": "teams", "compute-category": "players", "calendar": "calendar",
     "export-excel": "data", "import-excel": "data", "clear-all": "data",
     "seed-demo": "data",
 }
@@ -137,7 +141,7 @@ def route_permission(request: Request) -> tuple[str, str]:
         return "callups", "respond"
     if first in {"clear-all", "seed-demo", "import-excel"}:
         return resource, "administer"
-    if first == "export-excel" or "pdf" in parts or "signed-file" in parts or any(part.endswith((".pdf", ".xlsx")) for part in parts):
+    if first == "export-excel" or "pdf" in parts or "signed-file" in parts or any(part.endswith((".pdf", ".xlsx", ".ics")) for part in parts):
         return resource, "export" if method == "GET" else "edit"
     if resource == "settings" and method != "GET":
         return resource, "administer"

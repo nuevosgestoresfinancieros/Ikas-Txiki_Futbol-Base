@@ -24,6 +24,7 @@ export const ROUTE_RESOURCES = {
   "/equipamiento": "equipment",
   "/entrenamientos": "trainings",
   "/partidos": "matches",
+  "/calendario": "calendar",
   "/convocatorias": "callups",
   "/estadisticas": "stats",
   "/pagos": "payments",

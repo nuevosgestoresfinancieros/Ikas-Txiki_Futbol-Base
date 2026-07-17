@@ -32,6 +32,7 @@ const navGroups = [
       { to: "/equipamiento", key: "equipment", icon: Shirt, testid: "equipment" },
       { to: "/entrenamientos", key: "trainings", icon: Dumbbell, testid: "trainings" },
       { to: "/partidos", key: "matches", icon: CalendarDays, testid: "matches" },
+      { to: "/calendario", key: "calendar", icon: CalendarDays, testid: "calendar" },
       { to: "/convocatorias", key: "callups", icon: ClipboardList, testid: "callups" },
       { to: "/estadisticas", key: "stats", icon: BarChart3, testid: "stats" },
     ],
@@ -201,7 +202,7 @@ const MobileBottomNav = ({ onMenu, onSearch, user }) => {
   const items = [
     { to: "/", key: "navStart", icon: LayoutDashboard },
     { to: "/jugadores", key: "players", icon: Users },
-    { to: "/partidos", key: "matches", icon: CalendarDays },
+    { to: "/calendario", key: "calendar", icon: CalendarDays },
   ];
   return (
     <nav className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200 bg-white/95 pb-[env(safe-area-inset-bottom)] shadow-[0_-10px_35px_rgba(15,23,42,0.08)] backdrop-blur-xl lg:hidden" aria-label={t("mainNavigation")}>

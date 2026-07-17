@@ -1,4 +1,4 @@
-import { CalendarDays, Dumbbell } from "lucide-react";
+import { CalendarDays, Dumbbell, UsersRound, PartyPopper } from "lucide-react";
 import { useI18n } from "../../i18n";
 
 export default function NextActivity({ activity, onOpen }) {
@@ -12,20 +12,21 @@ export default function NextActivity({ activity, onOpen }) {
     );
   }
 
-  const isMatch = activity.tipo === "partido";
-  const Icon = isMatch ? CalendarDays : Dumbbell;
+  const isMatch = ["partido", "match"].includes(activity.tipo);
+  const isTraining = ["entrenamiento", "training"].includes(activity.tipo);
+  const Icon = isMatch ? CalendarDays : isTraining ? Dumbbell : activity.tipo === "meeting" ? UsersRound : PartyPopper;
   const dateTime = new Intl.DateTimeFormat(lang === "eu" ? "eu-ES" : "es-ES", {
     dateStyle: "medium", timeStyle: "short",
   }).format(new Date(activity.fecha_hora));
-  const title = isMatch
+  const title = activity.titulo || (isMatch
     ? `${activity.equipo_nombre || "—"} vs ${activity.rival || "—"}`
-    : activity.equipo_nombre || t("trainings");
+    : activity.equipo_nombre || t("trainings"));
 
   return (
     <section className="surface-card overflow-hidden" aria-labelledby="next-activity-title">
       <button
         type="button"
-        onClick={() => onOpen?.(isMatch ? "/partidos" : "/entrenamientos")}
+        onClick={() => onOpen?.(activity.detail_path || (isMatch ? "/partidos" : isTraining ? "/entrenamientos" : "/calendario"))}
         className="flex min-h-32 w-full items-center gap-4 p-5 text-left transition-colors hover:bg-slate-50"
       >
         <div className={`flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl ${isMatch ? "bg-blue-50 text-blue-700" : "bg-emerald-50 text-emerald-700"}`}>
@@ -34,7 +35,7 @@ export default function NextActivity({ activity, onOpen }) {
         <div className="min-w-0">
           <h2 id="next-activity-title" className="text-xs font-bold uppercase tracking-wider text-slate-400">{t("nextActivity")}</h2>
           <p className="mt-1 truncate font-heading text-xl font-bold text-slate-900">{title}</p>
-          <p className="mt-1 text-sm text-slate-500">{dateTime} · {activity.campo || "—"}</p>
+          <p className="mt-1 text-sm text-slate-500">{dateTime} · {activity.lugar || activity.campo || "—"}</p>
         </div>
       </button>
     </section>

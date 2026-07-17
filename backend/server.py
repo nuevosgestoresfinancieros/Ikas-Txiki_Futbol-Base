@@ -34,10 +34,7 @@ from authz import (
     has_permission, ids,
     merge_query, public_user, route_permission,
 )
-from dashboard_service import (
-    next_activity, pending_callups, player_callup_status, prioritized_alerts,
-    weekly_attendance,
-)
+from dashboard_service import pending_callups, player_callup_status, prioritized_alerts, weekly_attendance
 from attendance_service import (
     ATTENDANCE_STATES, attendance_history, attendance_rows, attendance_summary,
     attendance_trend, callup_attendance_comparison, player_percentages, repeated_absence_alerts,
@@ -45,6 +42,10 @@ from attendance_service import (
 from callup_service import (
     VALID_STATUSES, apply_response, is_late, normalize_callup, normalize_status,
     response_counts,
+)
+from calendar_service import (
+    CALENDAR_TYPES, aggregate_calendar_events, calendar_to_ical,
+    next_calendar_event, subscription_capability,
 )
 
 
@@ -277,6 +278,10 @@ async def scope_for_collection(coll: str, user: Optional[dict] = None) -> Option
                 {"destinatario_tipo": "equipo", "destinatario_id": {"$in": team_ids}},
                 {"destinatario_tipo": "individual", "destinatario_id": {"$in": player_ids}},
             ]}
+        if coll == "club_events":
+            return {"$or": [
+                {"equipo_id": {"$in": team_ids}}, {"equipo_id": None}, {"equipo_id": {"$exists": False}},
+            ]}
     if role in {"family", "player"}:
         if coll == "players":
             return {"id": {"$in": player_ids}}
@@ -297,6 +302,10 @@ async def scope_for_collection(coll: str, user: Optional[dict] = None) -> Option
                 {"destinatario_tipo": "individual", "destinatario_id": {"$in": targets}},
                 {"destinatario_tipo": "equipo", "destinatario_id": {"$in": team_ids}},
             ]}
+        if coll == "club_events":
+            return {"$or": [
+                {"equipo_id": {"$in": team_ids}}, {"equipo_id": None}, {"equipo_id": {"$exists": False}},
+            ]}
     return {"id": {"$in": []}}
 
 
@@ -312,6 +321,8 @@ async def ensure_data_scope(coll: str, data: dict) -> None:
         target = data.get("id") if coll == "teams" else data.get("equipo_id")
         if target not in team_ids:
             raise HTTPException(status_code=403, detail="El elemento no pertenece a tus equipos asignados")
+    if coll == "club_events" and data.get("equipo_id") not in team_ids:
+        raise HTTPException(status_code=403, detail="El evento no pertenece a tus equipos asignados")
     player_ids = set(await user_player_ids(user))
     if coll == "players" and data.get("familia_id"):
         family_scope = await scope_for_collection("families", user)
@@ -763,6 +774,107 @@ async def edit_match(match_id: str, match: Match):
 @api_router.delete("/matches/{match_id}")
 async def remove_match(match_id: str):
     return await delete_doc("matches", match_id)
+
+
+# ================= UNIFIED CALENDAR =================
+class ClubCalendarEvent(BaseModel):
+    titulo: str
+    tipo: str = "club_event"
+    fecha: str
+    hora: Optional[str] = None
+    fecha_fin: Optional[str] = None
+    hora_fin: Optional[str] = None
+    equipo_id: Optional[str] = None
+    lugar: Optional[str] = None
+    descripcion: Optional[str] = None
+    temporada: Optional[str] = None
+    categoria: Optional[str] = None
+
+    @field_validator("tipo")
+    @classmethod
+    def validate_type(cls, value: str):
+        if value not in {"meeting", "club_event"}:
+            raise ValueError("El tipo debe ser meeting o club_event")
+        return value
+
+    @field_validator("titulo")
+    @classmethod
+    def validate_title(cls, value: str):
+        value = value.strip()
+        if not value or len(value) > 160:
+            raise ValueError("El título debe tener entre 1 y 160 caracteres")
+        return value
+
+    @field_validator("fecha", "fecha_fin")
+    @classmethod
+    def validate_date(cls, value: Optional[str]):
+        if value:
+            date.fromisoformat(value[:10])
+        return value
+
+
+async def calendar_payload(start: Optional[str] = None, end: Optional[str] = None,
+                           equipo_id: Optional[str] = None, categoria: Optional[str] = None,
+                           temporada: Optional[str] = None, tipo: Optional[str] = None):
+    actor = current_user_context.get() or {}
+    teams = await list_docs("teams")
+    team_ids = {team.get("id") for team in teams if team.get("id")}
+    if equipo_id and equipo_id not in team_ids:
+        raise HTTPException(status_code=403, detail="El equipo solicitado no pertenece a tu ámbito")
+    categories = {team.get("categoria") for team in teams if team.get("categoria")}
+    seasons = {team.get("temporada") for team in teams if team.get("temporada")}
+    if categoria and actor.get("role") != "admin" and categoria not in categories:
+        raise HTTPException(status_code=403, detail="La categoría solicitada no pertenece a tu ámbito")
+    if temporada and actor.get("role") != "admin" and seasons and temporada not in seasons:
+        raise HTTPException(status_code=403, detail="La temporada solicitada no pertenece a tu ámbito")
+    if tipo and tipo not in CALENDAR_TYPES:
+        raise HTTPException(status_code=422, detail="Tipo de evento no válido")
+    events = aggregate_calendar_events(
+        await list_docs("matches"), await list_docs("trainings"), await list_docs("club_events"), teams,
+        start, end, equipo_id, categoria, temporada, tipo,
+    )
+    return {
+        "events": events,
+        "filter_options": {
+            "teams": [{"id": team.get("id"), "name": team.get("nombre"), "category": team.get("categoria"), "season": team.get("temporada")} for team in teams],
+            "categories": sorted(categories), "seasons": sorted(seasons), "types": list(CALENDAR_TYPES),
+        },
+        "subscription": subscription_capability(),
+    }
+
+
+@api_router.get("/calendar/events")
+async def get_calendar_events(start: Optional[str] = None, end: Optional[str] = None,
+                              equipo_id: Optional[str] = None, categoria: Optional[str] = None,
+                              temporada: Optional[str] = None, tipo: Optional[str] = None):
+    return await calendar_payload(start, end, equipo_id, categoria, temporada, tipo)
+
+
+@api_router.post("/calendar/club-events")
+async def create_club_calendar_event(event: ClubCalendarEvent):
+    return await insert_doc("club_events", event.model_dump())
+
+
+@api_router.put("/calendar/club-events/{event_id}")
+async def edit_club_calendar_event(event_id: str, event: ClubCalendarEvent):
+    return await update_doc("club_events", event_id, event.model_dump())
+
+
+@api_router.delete("/calendar/club-events/{event_id}")
+async def delete_club_calendar_event(event_id: str):
+    return await delete_doc("club_events", event_id)
+
+
+@api_router.get("/calendar/export.ics")
+async def export_calendar_ical(start: Optional[str] = None, end: Optional[str] = None,
+                               equipo_id: Optional[str] = None, categoria: Optional[str] = None,
+                               temporada: Optional[str] = None, tipo: Optional[str] = None):
+    payload = await calendar_payload(start, end, equipo_id, categoria, temporada, tipo)
+    content = calendar_to_ical(payload["events"])
+    return Response(content=content, media_type="text/calendar; charset=utf-8", headers={
+        "Content-Disposition": "attachment; filename=ikas-txiki-calendario.ics",
+        "Cache-Control": "private, no-store",
+    })
 
 
 # ================= CALLUPS (Convocatorias) =================
@@ -1747,6 +1859,12 @@ async def dashboard(
         training for training in await permitted_docs("trainings", "trainings")
         if not selected_team_ids or training.get("equipo_id") in selected_team_ids
     ] if (teams or not any((equipo_id, categoria, temporada))) else []
+    club_events = [
+        event for event in await permitted_docs("club_events", "calendar")
+        if (not selected_team_ids or not event.get("equipo_id") or event.get("equipo_id") in selected_team_ids)
+        and (not temporada or not event.get("temporada") or event.get("temporada") == temporada)
+        and (not categoria or not event.get("categoria") or event.get("categoria") == categoria)
+    ] if (teams or not any((equipo_id, categoria, temporada))) else []
     callups = [
         callup for callup in await permitted_docs("callups", "callups")
         if not selected_team_ids or callup.get("equipo_id") in selected_team_ids
@@ -1826,7 +1944,10 @@ async def dashboard(
     scoped_callup_players = selected_player_ids if role in {"family", "player"} else None
     callup_pending = pending_callups(callups, scoped_callup_players)
     callup_status = player_callup_status(callups, selected_player_ids) if role in {"family", "player"} else []
-    next_event = next_activity(proximos_partidos, proximos_entrenamientos)
+    calendar_events = aggregate_calendar_events(matches, trainings, club_events, teams)
+    next_event = next_calendar_event(calendar_events)
+    if next_event:
+        next_event = {**next_event, "fecha_hora": f"{next_event['fecha']}T{next_event.get('hora') or '00:00'}:00+00:00"}
     incidents = [
         {"tipo": kind, "id": item.get("id"), "equipo_id": item.get("equipo_id"), "mensaje": item.get("observaciones")}
         for kind, rows in (("partido", matches), ("entrenamiento", trainings))
