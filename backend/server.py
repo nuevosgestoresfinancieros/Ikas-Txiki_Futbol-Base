@@ -38,6 +38,10 @@ from dashboard_service import (
     next_activity, pending_callups, player_callup_status, prioritized_alerts,
     weekly_attendance,
 )
+from attendance_service import (
+    ATTENDANCE_STATES, attendance_history, attendance_rows, attendance_summary,
+    attendance_trend, callup_attendance_comparison, player_percentages, repeated_absence_alerts,
+)
 from callup_service import (
     VALID_STATUSES, apply_response, is_late, normalize_callup, normalize_status,
     response_counts,
@@ -319,6 +323,9 @@ async def ensure_data_scope(coll: str, data: dict) -> None:
             "id": data["match_id"], "equipo_id": {"$in": list(team_ids)},
         }):
             raise HTTPException(status_code=403, detail="El partido no pertenece a tu ámbito")
+    if coll == "trainings" and data.get("callup_id"):
+        if not await db.callups.find_one({"id": data["callup_id"], "equipo_id": {"$in": list(team_ids)}}):
+            raise HTTPException(status_code=403, detail="La convocatoria no pertenece a tus equipos asignados")
     if coll in PLAYER_SCOPED_COLLECTIONS and data.get("player_id"):
         if data["player_id"] not in player_ids:
             raise HTTPException(status_code=403, detail="El jugador no pertenece a tu ámbito")
@@ -1401,6 +1408,14 @@ async def inscription_to_player(insc_id: str):
 class AsistenciaItem(BaseModel):
     player_id: str
     estado: str = "presente"  # presente, justificada, injustificada, lesion
+    motivo: Optional[str] = None
+
+    @field_validator("estado")
+    @classmethod
+    def validate_estado(cls, value: str):
+        if value not in ATTENDANCE_STATES:
+            raise ValueError("Estado de asistencia no válido")
+        return value
 
 
 class Training(BaseModel):
@@ -1411,11 +1426,107 @@ class Training(BaseModel):
     asistencia: List[AsistenciaItem] = []
     ejercicios: Optional[str] = None
     observaciones: Optional[str] = None
+    callup_id: Optional[str] = None
+
+
+async def attendance_data(desde: Optional[str] = None, hasta: Optional[str] = None,
+                          equipo_id: Optional[str] = None, player_id: Optional[str] = None):
+    """Devuelve datos ya acotados por la identidad autenticada, nunca por el cliente."""
+    actor = current_user_context.get() or {}
+    trainings = await list_docs("trainings")
+    players = await list_docs("players")
+    teams = await list_docs("teams")
+    allowed_players = {player.get("id") for player in players if player.get("id")}
+    if player_id:
+        if player_id not in allowed_players:
+            raise HTTPException(status_code=403, detail="El jugador solicitado no pertenece a tu ámbito")
+        allowed_players = {player_id}
+    if equipo_id:
+        allowed_teams = {team.get("id") for team in teams}
+        if equipo_id not in allowed_teams:
+            raise HTTPException(status_code=403, detail="El equipo solicitado no pertenece a tu ámbito")
+        trainings = [training for training in trainings if training.get("equipo_id") == equipo_id]
+        allowed_players = {player.get("id") for player in players if player.get("equipo_id") == equipo_id and player.get("id") in allowed_players}
+    # Las familias y jugadores ven exclusivamente sus filas, incluso si el entrenamiento tiene más asistentes.
+    if actor.get("role") in {"family", "player"}:
+        trainings = [{**training, "asistencia": [row for row in training.get("asistencia", []) if row.get("player_id") in allowed_players]}
+                     for training in trainings]
+    return trainings, players, teams, allowed_players
+
+
+@api_router.get("/attendance/summary")
+async def get_attendance_summary(desde: Optional[str] = None, hasta: Optional[str] = None,
+                                 equipo_id: Optional[str] = None, categoria: Optional[str] = None,
+                                 player_id: Optional[str] = None, periodo: str = "weekly"):
+    trainings, players, teams, allowed_players = await attendance_data(desde, hasta, equipo_id, player_id)
+    if categoria:
+        team_ids = {team.get("id") for team in teams if team.get("categoria") == categoria}
+        trainings = [training for training in trainings if training.get("equipo_id") in team_ids]
+        allowed_players = {player.get("id") for player in players if player.get("equipo_id") in team_ids and player.get("id") in allowed_players}
+    threshold_doc = await db.settings.find_one({"id": SETTINGS_ID}, {"_id": 0, "attendance_alert_threshold": 1}) or {}
+    threshold = threshold_doc.get("attendance_alert_threshold", 3)
+    rows = attendance_rows(trainings, allowed_players, desde, hasta)
+    names = {player.get("id"): f"{player.get('nombre', '')} {player.get('apellidos', '')}".strip() for player in players}
+    alerts = [{**alert, "player_name": names.get(alert["player_id"], "—")} for alert in repeated_absence_alerts(trainings, threshold, allowed_players, desde, hasta)]
+    return {
+        "summary": attendance_summary(trainings, allowed_players, desde, hasta),
+        "trend": attendance_trend(trainings, allowed_players, periodo if periodo in {"weekly", "monthly"} else "weekly", desde, hasta),
+        "players": [{"player_id": pid, "player_name": names.get(pid, "—"), **stats} for pid, stats in player_percentages(trainings, allowed_players, desde, hasta).items()],
+        "alerts": alerts,
+        "callup_comparison": callup_attendance_comparison(trainings, await list_docs("callups"), allowed_players),
+        "recent": sorted(rows, key=lambda row: row.get("fecha") or "", reverse=True)[:12],
+    }
+
+
+def attendance_export_pdf(summary: dict, lang: str) -> io.BytesIO:
+    labels = {
+        "es": ("Informe de asistencia", "Periodo", "Presentes", "Justificadas", "Injustificadas", "Lesiones", "Porcentaje de presencia"),
+        "eu": ("Asistentzia-txostena", "Aldia", "Bertaratutakoak", "Justifikatuak", "Justifikatu gabeak", "Lesioak", "Bertaratze-ehunekoa"),
+    }
+    title, period, present, justified, unjustified, injury, percentage = labels.get(lang, labels["es"])
+    data = summary["summary"]
+    buffer = io.BytesIO()
+    document = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm, topMargin=18 * mm)
+    styles = getSampleStyleSheet()
+    story = [Paragraph(title + " / " + labels["eu" if lang == "es" else "es"][0], styles["Title"]), Spacer(1, 8 * mm)]
+    story.append(Table([[period, f"{data.get('desde') or '—'} — {data.get('hasta') or '—'}"],
+                        [present, data["presente"]], [justified, data["justificada"]],
+                        [unjustified, data["injustificada"]], [injury, data["lesion"]], [percentage, f"{data['porcentaje_presencia']}%"]],
+                       colWidths=[75 * mm, 85 * mm], style=TableStyle([
+                           ("GRID", (0, 0), (-1, -1), .35, colors.HexColor("#CBD5E1")),
+                           ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#F1F5F9")),
+                           ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"), ("PADDING", (0, 0), (-1, -1), 7),
+                       ])))
+    document.build(story)
+    buffer.seek(0)
+    return buffer
+
+
+@api_router.get("/attendance/export.pdf")
+async def export_attendance_pdf(desde: Optional[str] = None, hasta: Optional[str] = None,
+                                equipo_id: Optional[str] = None, player_id: Optional[str] = None, lang: str = "es"):
+    summary = await get_attendance_summary(desde, hasta, equipo_id, None, player_id)
+    return StreamingResponse(attendance_export_pdf(summary, "eu" if lang == "eu" else "es"), media_type="application/pdf",
+                             headers={"Content-Disposition": "attachment; filename=asistencia.pdf"})
+
+
+@api_router.get("/attendance/export.xlsx")
+async def export_attendance_excel(desde: Optional[str] = None, hasta: Optional[str] = None,
+                                  equipo_id: Optional[str] = None, player_id: Optional[str] = None):
+    summary = await get_attendance_summary(desde, hasta, equipo_id, None, player_id)
+    buffer = io.BytesIO()
+    pd.DataFrame(summary["players"]).to_excel(buffer, index=False)
+    buffer.seek(0)
+    return StreamingResponse(buffer, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                             headers={"Content-Disposition": "attachment; filename=asistencia.xlsx"})
 
 
 @api_router.post("/trainings")
 async def create_training(tr: Training):
-    return await insert_doc("trainings", tr.model_dump())
+    payload = tr.model_dump()
+    payload["attendance_history"] = []
+    payload["attendance_updated_by"] = None
+    return await insert_doc("trainings", payload)
 
 
 @api_router.get("/trainings")
@@ -1443,7 +1554,14 @@ async def get_training(tr_id: str):
 
 @api_router.put("/trainings/{tr_id}")
 async def edit_training(tr_id: str, tr: Training):
-    return await update_doc("trainings", tr_id, tr.model_dump())
+    existing = await get_doc("trainings", tr_id)
+    payload = tr.model_dump()
+    actor = current_user_context.get() or {}
+    changes = attendance_history(existing.get("asistencia", []), payload.get("asistencia", []), actor)
+    payload["attendance_history"] = [*(existing.get("attendance_history") or []), *changes]
+    if changes:
+        payload["attendance_updated_by"] = {"id": actor.get("id"), "role": actor.get("role"), "at": now_iso()}
+    return await update_doc("trainings", tr_id, payload)
 
 
 @api_router.delete("/trainings/{tr_id}")
@@ -1544,6 +1662,7 @@ class Settings(BaseModel):
     entrenadores: List[str] = []
     cuota_base: Optional[float] = 0
     descuento_hermano: Optional[float] = 0
+    attendance_alert_threshold: int = Field(default=3, ge=1, le=20)
 
 
 SETTINGS_ID = "global"
@@ -1699,6 +1818,11 @@ async def dashboard(
         reverse=True,
     )[:5]
     attendance = weekly_attendance(trainings, selected_player_ids or None)
+    attendance_detail = attendance_summary(trainings, selected_player_ids or None)
+    attendance_settings = await db.settings.find_one({"id": SETTINGS_ID}, {"_id": 0, "attendance_alert_threshold": 1}) or {}
+    attendance_alerts = repeated_absence_alerts(
+        trainings, attendance_settings.get("attendance_alert_threshold", 3), selected_player_ids or None,
+    )
     scoped_callup_players = selected_player_ids if role in {"family", "player"} else None
     callup_pending = pending_callups(callups, scoped_callup_players)
     callup_status = player_callup_status(callups, selected_player_ids) if role in {"family", "player"} else []
@@ -1725,6 +1849,8 @@ async def dashboard(
 
     if pending_communications:
         alertas.append({"tipo": "comunicacion", "mensaje": f"{len(pending_communications)} comunicaciones pendientes"})
+    if attendance_alerts:
+        alertas.append({"tipo": "asistencia", "mensaje": f"{len(attendance_alerts)} alertas de asistencia"})
 
     available = [player for player in players if player.get("estado") == "activo"]
     absent = [player for player in players if player.get("estado") in {"lesionado", "baja"}]
@@ -1764,6 +1890,8 @@ async def dashboard(
         "comunicaciones_pendientes": len(pending_communications),
         "comunicaciones_fallidas": len(failed_communications),
         "asistencia_semanal": attendance,
+        "asistencia_resumen": attendance_detail,
+        "alertas_asistencia": attendance_alerts,
         "convocatorias_pendientes": callup_pending,
         "estado_convocatorias": callup_status,
         "jugadores_disponibles": len(available),

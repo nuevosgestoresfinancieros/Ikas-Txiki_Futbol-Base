@@ -147,6 +147,7 @@ const Settings = () => {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field label={t("baseFee")} type="number" value={s.cuota_base} onChange={set("cuota_base")} testid="cuota-base" />
             <Field label={t("siblingDiscountCfg")} type="number" value={s.descuento_hermano} onChange={set("descuento_hermano")} testid="descuento-hermano" />
+            <Field label={t("attendanceAlertThreshold")} type="number" value={s.attendance_alert_threshold ?? 3} onChange={set("attendance_alert_threshold")} testid="attendance-alert-threshold" />
           </div>
         </div>
 

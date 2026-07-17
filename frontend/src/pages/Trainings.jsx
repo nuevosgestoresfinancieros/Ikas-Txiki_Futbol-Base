@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Dumbbell, Plus, Pencil, Trash2, Check } from "lucide-react";
+import { Dumbbell, Plus, Pencil, Trash2, Check, Download, AlertTriangle, FileText } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
 import { PermissionGate, usePermission } from "@/auth";
@@ -17,21 +17,34 @@ const ATT_STATES = ["presente", "justificada", "injustificada", "lesion"];
 
 const Trainings = () => {
   const canCreate = usePermission("trainings", "create");
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const [params, setParams] = useSearchParams();
   const [items, setItems] = useState([]);
   const [teams, setTeams] = useState([]);
   const [players, setPlayers] = useState([]);
   const [dialog, setDialog] = useState(false);
   const [form, setForm] = useState({ asistencia: [] });
+  const [summary, setSummary] = useState(null);
+  const [summaryError, setSummaryError] = useState(false);
+  const [teamFilter, setTeamFilter] = useState("all");
 
-  const load = async () => setItems((await api.get("/trainings")).data);
+  const load = async () => {
+    try {
+      const [trainingResponse, attendanceResponse] = await Promise.all([
+        api.get("/trainings", { params: teamFilter !== "all" ? { equipo_id: teamFilter } : {} }),
+        api.get("/attendance/summary", { params: teamFilter !== "all" ? { equipo_id: teamFilter } : {} }),
+      ]);
+      setItems(trainingResponse.data); setSummary(attendanceResponse.data); setSummaryError(false);
+    } catch { setSummaryError(true); }
+  };
   useEffect(() => {
     load();
     Promise.all([api.get("/teams"), api.get("/players")]).then(([tm, p]) => { setTeams(tm.data); setPlayers(p.data); });
     if (params.get("new") && canCreate) { openNew(); params.delete("new"); setParams(params); }
     // eslint-disable-next-line
   }, []);
+
+  useEffect(() => { if (teams.length || teamFilter === "all") load(); /* eslint-disable-line react-hooks/exhaustive-deps */ }, [teamFilter]);
 
   const set = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
   const openNew = () => { setForm({ asistencia: [], equipo_id: "" }); setDialog(true); };
@@ -50,6 +63,13 @@ const Trainings = () => {
     toast.success(t("saved")); setDialog(false); load();
   };
   const remove = async (i) => { if (!window.confirm(t("confirmDelete"))) return; await api.delete(`/trainings/${i.id}`); toast.success(t("deleted")); load(); };
+  const download = async (type) => {
+    try {
+      const response = await api.get(`/attendance/export.${type}`, { params: { ...(teamFilter !== "all" ? { equipo_id: teamFilter } : {}), lang }, responseType: "blob" });
+      const url = URL.createObjectURL(response.data); const link = document.createElement("a");
+      link.href = url; link.download = `asistencia.${type === "pdf" ? "pdf" : "xlsx"}`; link.click(); URL.revokeObjectURL(url);
+    } catch { toast.error(t("attendanceExportError")); }
+  };
 
   const teamOptions = teams.map((tm) => ({ value: tm.id, label: tm.nombre }));
   const pName = (pid) => { const p = players.find(x=>x.id===pid); return p ? `${p.nombre} ${p.apellidos||""}`.trim() : "—"; };
@@ -58,6 +78,20 @@ const Trainings = () => {
     <div data-testid="trainings-page">
       <PageHeader title={t("trainings")} icon={Dumbbell}
         action={canCreate ? <Button data-testid="add-training-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("add")}</Button> : null} />
+
+      <section className="surface-card mb-5 p-4" aria-label={t("attendance")}>
+        <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div className="w-full sm:w-64"><SelectField label={t("team")} value={teamFilter} onChange={setTeamFilter} options={[{ value: "all", label: t("allTeams") }, ...teamOptions]} testid="attendance-team-filter" /></div>
+          <PermissionGate resource="attendance" action="export"><div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => download("pdf")}><FileText className="h-4 w-4" />PDF</Button><Button variant="outline" size="sm" onClick={() => download("xlsx")}><Download className="h-4 w-4" />Excel</Button></div></PermissionGate>
+        </div>
+        {summaryError ? <div className="flex items-center justify-between text-sm text-red-600"><span>{t("attendanceLoadError")}</span><Button variant="link" onClick={load}>{t("retry")}</Button></div> : !summary ? <p className="text-sm text-slate-400">{t("loading")}</p> : <>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+            {[["presente", "present"], ["justificada", "justified"], ["injustificada", "unjustified"], ["lesion", "injury"]].map(([key, label]) => <div key={key} className="rounded-lg bg-slate-50 p-3 text-center"><p className="font-heading text-xl font-bold text-slate-800">{summary.summary[key]}</p><p className="text-xs text-slate-500">{t(label)}</p></div>)}
+            <div className="rounded-lg bg-primary/5 p-3 text-center"><p className="font-heading text-xl font-bold text-primary">{summary.summary.porcentaje_presencia}%</p><p className="text-xs text-slate-500">{t("attendanceRate")}</p></div>
+          </div>
+          {summary.alerts?.length > 0 && <div className="mt-3 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"><AlertTriangle className="h-4 w-4" />{summary.alerts.length} {t("attendanceAlerts")}</div>}
+        </>}
+      </section>
 
       {items.length === 0 ? (
         <EmptyState icon={Dumbbell} message={t("noData")} action={canCreate ? <Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("add")}</Button> : null} />
@@ -106,6 +140,8 @@ const Trainings = () => {
                           {ATT_STATES.map((s) => <SelectItem key={s} value={s}>{t(s)}</SelectItem>)}
                         </SelectContent>
                       </Select>
+                      <input value={a.motivo || ""} onChange={(event) => setForm((f) => ({ ...f, asistencia: f.asistencia.map((row) => row.player_id === a.player_id ? { ...row, motivo: event.target.value } : row) }))}
+                        aria-label={t("attendanceReason")} placeholder={t("attendanceReason")} className="hidden h-8 w-40 rounded border border-slate-200 px-2 text-xs sm:block" />
                     </div>
                   ))}
                 </div>}
