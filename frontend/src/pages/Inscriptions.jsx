@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { UserPlus, Plus, Pencil, Trash2, UserCheck, Users } from "lucide-react";
+import { UserPlus, Plus, Pencil, Trash2, UserCheck, Users, FileSpreadsheet } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
 import { PermissionGate, usePermission } from "@/auth";
@@ -9,11 +9,13 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { PageHeader, StatusBadge, EmptyState } from "@/components/shared";
 import { Field, Area, SelectField } from "@/components/form";
+import InscriptionImportWizard from "@/components/InscriptionImportWizard";
 
 const empty = { tipo: "alta", estado: "recibida", nueva_incorporacion: true, nombre: "" };
 
 const Inscriptions = () => {
   const canCreate = usePermission("inscriptions", "create");
+  const canImport = usePermission("data", "administer");
   const { t, lang } = useI18n();
   const nav = useNavigate();
   const [params, setParams] = useSearchParams();
@@ -23,6 +25,7 @@ const Inscriptions = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [nameError, setNameError] = useState("");
+  const [importOpen, setImportOpen] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -63,7 +66,7 @@ const Inscriptions = () => {
   return (
     <div data-testid="inscriptions-page">
       <PageHeader title={t("inscriptions")} icon={UserPlus}
-        action={canCreate ? <Button data-testid="add-inscription-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("alta")}</Button> : null} />
+        action={<div className="flex flex-wrap gap-2">{canImport && <Button variant="outline" data-testid="open-import" onClick={() => setImportOpen(true)} className="h-11"><FileSpreadsheet className="h-5 w-5" />Excel</Button>}{canCreate && <Button data-testid="add-inscription-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("alta")}</Button>}</div>} />
 
       {loading ? (
         <div className="surface-card space-y-3 p-5" role="status" aria-label={t("loading")}>{[0,1,2,3].map((item) => <div key={item} className="h-20 animate-pulse rounded-xl bg-slate-100" />)}</div>
@@ -123,6 +126,7 @@ const Inscriptions = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {canImport && <InscriptionImportWizard open={importOpen} onOpenChange={setImportOpen} onImported={load} />}
     </div>
   );
 };

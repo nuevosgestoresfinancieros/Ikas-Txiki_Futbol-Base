@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Depends, Cookie, Response, Request
+from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Form, Depends, Cookie, Response, Request
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.responses import StreamingResponse, FileResponse
 from dotenv import load_dotenv
@@ -28,6 +28,8 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, KeepTogether, Image as PdfImage
 from datetime import datetime, timezone, date, timedelta
+from openpyxl import Workbook
+from pymongo.errors import DuplicateKeyError
 
 from authz import (
     ROLES, ROLE_PERMISSIONS, current_user_context, enforce_permission, enforce_related_scope,
@@ -49,6 +51,12 @@ from calendar_service import (
 )
 from portal_service import document_status, portal_attendance, portal_callups, safe_payment, safe_player, upcoming
 from notification_service import dispatch_email, make_notification, notification_enabled, provider_configuration
+from inscription_import_service import (
+    SEASON as IMPORT_SEASON, SAFE_PLAYER_FIELDS, ImportValidationError,
+    analyze_rows, decode_plan, encode_plan, encrypt_iban, family_key,
+    file_sha256, identity_key, masked_iban, merge_nonempty, normalize_key,
+    parse_excel,
+)
 
 
 ROOT_DIR = Path(__file__).parent
@@ -735,6 +743,7 @@ async def remove_family(family_id: str):
 class Team(BaseModel):
     nombre: str
     categoria: Optional[str] = None
+    modalidad: Optional[str] = None
     temporada: Optional[str] = None
     entrenador: Optional[str] = None
     segundo_entrenador: Optional[str] = None
@@ -1306,6 +1315,9 @@ async def get_payments(estado: Optional[str] = None):
     players = {p["id"]: f"{p.get('nombre','')} {p.get('apellidos','')}".strip() for p in await list_docs("players")}
     for p in payments:
         p["player_nombre"] = players.get(p.get("player_id"), "—")
+        p.pop("iban_encrypted", None)
+        if p.get("iban_last4"):
+            p["iban"] = masked_iban(p.get("iban_last4"))
     return payments
 
 
@@ -1574,6 +1586,10 @@ class Inscription(BaseModel):
     nueva_incorporacion: bool = True
     estado: str = "recibida"  # recibida, revisada, aceptada, pendiente, rechazada
     categoria: Optional[str] = None
+    temporada: Optional[str] = None
+    equipo_id: Optional[str] = None
+    modalidad: Optional[str] = None
+    equipamiento_items: List[str] = Field(default_factory=list)
     player_id: Optional[str] = None  # set when converted to player
     observaciones: Optional[str] = None
 
@@ -1643,6 +1659,278 @@ async def inscription_to_player(insc_id: str):
     player = await insert_doc("players", pdata)
     await db.inscriptions.update_one({"id": insc_id}, {"$set": {"player_id": player["id"], "estado": "aceptada"}})
     return player
+
+
+# ================= SAFE INSCRIPTION EXCEL IMPORT =================
+class ImportPlanRequest(BaseModel):
+    plan_token: str
+
+
+class ImportConfirmRequest(ImportPlanRequest):
+    confirmed: bool = False
+    decisions: Dict[str, str] = Field(default_factory=dict)
+
+
+IMPORT_COLLECTIONS = ("teams", "families", "players", "inscriptions", "payments")
+
+
+async def _import_existing() -> dict:
+    return {
+        name: await db[name].find({}, {"_id": 0}).to_list(20000)
+        for name in IMPORT_COLLECTIONS
+    }
+
+
+def _public_analysis(analysis: dict, token: str) -> dict:
+    return {
+        "season": analysis["season"], "summary": analysis["summary"],
+        "unique_count": analysis["unique_count"], "blocking_errors": analysis["blocking_errors"],
+        "unresolved_conflicts": analysis["unresolved_conflicts"], "duplicate_file": analysis["duplicate_file"],
+        "rows": analysis["public_rows"], "issues": analysis["issues"], "plan_token": token,
+    }
+
+
+def _clean_doc(document: Optional[dict]) -> Optional[dict]:
+    if document is None:
+        return None
+    return {key: value for key, value in document.items() if key != "_id"}
+
+
+def _build_import_operations(analysis: dict, existing: dict, job_id: str,
+                             decisions: Dict[str, str]) -> list[dict]:
+    now = now_iso()
+    maps = {name: {str(doc.get("id")): _clean_doc(doc) for doc in existing[name]} for name in IMPORT_COLLECTIONS}
+    team_by_name = {normalize_key(doc.get("nombre")): doc for doc in maps["teams"].values()}
+    family_by_key = {family_key(doc): doc for doc in maps["families"].values()}
+    player_by_key = {str(doc.get("import_identity_key") or identity_key(doc)): doc for doc in maps["players"].values()}
+    inscription_by_key = {
+        (doc.get("import_identity_key"), doc.get("temporada")): doc
+        for doc in maps["inscriptions"].values() if doc.get("import_identity_key")
+    }
+    payment_by_key = {
+        (doc.get("player_id"), doc.get("temporada")): doc
+        for doc in maps["payments"].values() if doc.get("temporada")
+    }
+    operations: Dict[tuple, dict] = {}
+
+    def schedule(collection: str, before: Optional[dict], after: dict) -> None:
+        key = (collection, after["id"])
+        if key in operations:
+            operations[key]["after"] = _clean_doc(after)
+        else:
+            operations[key] = {"collection": collection, "id": after["id"],
+                               "before": _clean_doc(before), "after": _clean_doc(after)}
+        maps[collection][after["id"]] = after
+
+    family_fields = {
+        "progenitor1_nombre", "progenitor1_telefono", "progenitor1_email",
+        "progenitor2_nombre", "progenitor2_telefono", "progenitor2_email",
+        "domicilio", "observaciones",
+    }
+    inscription_fields = set(SAFE_PLAYER_FIELDS) | {"tipo", "equipamiento_items"}
+    for result in analysis["rows"]:
+        if result.get("status") in {"error", "duplicate"}:
+            continue
+        if result.get("status") == "conflict":
+            if decisions.get(result.get("conflict_id")) != "skip":
+                raise HTTPException(status_code=409, detail="Todos los conflictos requieren una decisión explícita")
+            continue
+        row = result["record"]
+        team_key = normalize_key(row.get("equipo"))
+        team = team_by_name.get(team_key)
+        if not team:
+            team = {
+                "id": new_id(), "nombre": row["equipo"], "categoria": row["categoria"],
+                "modalidad": row["modalidad"], "temporada": analysis["season"],
+                "limite_jugadores": 18 if row["modalidad"] == "F7" else 25,
+                "estado": "activo", "created_at": now, "updated_at": now,
+            }
+            schedule("teams", None, team); team_by_name[team_key] = team
+
+        fkey = family_key(row)
+        family = family_by_key.get(fkey)
+        family_before = family
+        if family:
+            family = merge_nonempty(family, row, family_fields)
+            family["updated_at"] = now
+        else:
+            family = merge_nonempty({"id": new_id(), "created_at": now}, row, family_fields)
+            family.update({"contacto_principal": "progenitor1", "preferencia_comunicacion": "email", "updated_at": now})
+        if family != family_before:
+            schedule("families", family_before, family)
+        family_by_key[fkey] = family
+
+        pkey = row["import_identity_key"]
+        player = player_by_key.get(pkey)
+        player_before = player
+        player = merge_nonempty(player or {"id": new_id(), "created_at": now}, row, SAFE_PLAYER_FIELDS)
+        current_equipment = list(player.get("equipamiento_items") or [])
+        for item in row.get("equipamiento_items") or []:
+            if item.casefold() not in {value.casefold() for value in current_equipment}:
+                current_equipment.append(item)
+        player.update({
+            "equipo_id": team["id"], "familia_id": family["id"], "equipamiento_items": current_equipment,
+            "import_identity_key": pkey, "import_job_id": job_id, "updated_at": now,
+        })
+        player.setdefault("estado", "pendiente_documentacion")
+        player.setdefault("fecha_inscripcion", now)
+        if player != player_before:
+            schedule("players", player_before, player)
+        player_by_key[pkey] = player
+
+        ikey = (pkey, analysis["season"])
+        inscription = inscription_by_key.get(ikey)
+        inscription_before = inscription
+        inscription = merge_nonempty(inscription or {"id": new_id(), "created_at": now}, row, inscription_fields)
+        inscription.update({
+            "temporada": analysis["season"], "equipo_id": team["id"], "familia_id": family["id"],
+            "player_id": player["id"], "modalidad": row["modalidad"], "import_identity_key": pkey,
+            "import_job_id": job_id, "estado": inscription.get("estado", "recibida"), "updated_at": now,
+        })
+        if inscription != inscription_before:
+            schedule("inscriptions", inscription_before, inscription)
+        inscription_by_key[ikey] = inscription
+
+        if row.get("iban"):
+            pay_key = (player["id"], analysis["season"])
+            payment = payment_by_key.get(pay_key)
+            payment_before = payment
+            payment = dict(payment or {"id": new_id(), "created_at": now, "estado": "pendiente",
+                                       "concepto": f"Cuota temporada {analysis['season']}"})
+            payment.update({
+                "player_id": player["id"], "temporada": analysis["season"], "forma_pago": "domiciliacion",
+                **encrypt_iban(row["iban"], JWT_SECRET), "iban": None, "import_job_id": job_id, "updated_at": now,
+            })
+            schedule("payments", payment_before, payment); payment_by_key[pay_key] = payment
+    return list(operations.values())
+
+
+async def _apply_operations(operations: list[dict], reverse: bool = False) -> None:
+    sequence = list(reversed(operations)) if reverse else operations
+    applied = []
+    try:
+        for operation in sequence:
+            target = operation["before"] if reverse else operation["after"]
+            if target is None:
+                await db[operation["collection"]].delete_one({"id": operation["id"]})
+            else:
+                await db[operation["collection"]].replace_one({"id": operation["id"]}, target, upsert=True)
+            applied.append(operation)
+    except Exception:
+        for operation in reversed(applied):
+            target = operation["after"] if reverse else operation["before"]
+            if target is None:
+                await db[operation["collection"]].delete_one({"id": operation["id"]})
+            else:
+                await db[operation["collection"]].replace_one({"id": operation["id"]}, target, upsert=True)
+        raise
+
+
+@api_router.get("/inscription-imports/template")
+async def download_inscription_template():
+    path = ROOT_DIR / "templates" / "plantilla_inscripciones_2026-2027.xlsx"
+    if not path.exists():
+        raise HTTPException(status_code=503, detail="Plantilla no disponible")
+    return FileResponse(path, filename=path.name,
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+@api_router.post("/inscription-imports/analyze")
+async def analyze_inscription_import(file: UploadFile = File(...), season: str = Form(...)):
+    if not (file.filename or "").lower().endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="Solo se admiten archivos .xlsx")
+    content = await file.read()
+    digest = file_sha256(content)
+    try:
+        rows = parse_excel(content)
+        duplicate = bool(await db.import_locks.find_one({"_id": f"{season}:{digest}"}))
+        analysis = analyze_rows(rows, season, await _import_existing(), digest, duplicate)
+        token = encode_plan({"season": season, "file_sha256": digest, "rows": rows,
+                             "generated_at": now_iso()}, JWT_SECRET)
+        return _public_analysis(analysis, token)
+    except ImportValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _decode_and_check_plan(plan_token: str) -> dict:
+    try:
+        return decode_plan(plan_token, JWT_SECRET)
+    except ImportValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@api_router.post("/inscription-imports/error-report")
+async def inscription_import_error_report(request: ImportPlanRequest):
+    plan = _decode_and_check_plan(request.plan_token)
+    duplicate = bool(await db.import_locks.find_one({"_id": f"{plan['season']}:{plan['file_sha256']}"}))
+    analysis = analyze_rows(plan["rows"], plan["season"], await _import_existing(), plan["file_sha256"], duplicate)
+    workbook = Workbook(); sheet = workbook.active; sheet.title = "Errores"
+    sheet.append(["Fila", "Estado", "Gravedad", "Código", "Mensaje"])
+    for issue in analysis["issues"]:
+        sheet.append([issue.get("row"), issue.get("status"), issue.get("severity"), issue.get("code"), issue.get("message")])
+    buffer = io.BytesIO(); workbook.save(buffer); buffer.seek(0)
+    return StreamingResponse(buffer, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                             headers={"Content-Disposition": "attachment; filename=informe_importacion.xlsx"})
+
+
+@api_router.post("/inscription-imports/confirm")
+async def confirm_inscription_import(request: ImportConfirmRequest):
+    if request.confirmed is not True:
+        raise HTTPException(status_code=422, detail="La importación requiere confirmación expresa")
+    plan = _decode_and_check_plan(request.plan_token)
+    lock_id = f"{plan['season']}:{plan['file_sha256']}"
+    existing = await _import_existing()
+    duplicate = bool(await db.import_locks.find_one({"_id": lock_id}))
+    analysis = analyze_rows(plan["rows"], plan["season"], existing, plan["file_sha256"], duplicate)
+    if analysis["blocking_errors"]:
+        raise HTTPException(status_code=409, detail="La importación contiene errores graves")
+    if any(request.decisions.get(item.get("conflict_id")) != "skip" for item in analysis["rows"] if item.get("status") == "conflict"):
+        raise HTTPException(status_code=409, detail="Todos los conflictos requieren una decisión explícita")
+    actor = current_user_context.get() or {}
+    job_id = new_id()
+    operations = _build_import_operations(analysis, existing, job_id, request.decisions)
+    try:
+        await db.import_locks.insert_one({"_id": lock_id, "job_id": job_id, "created_at": now_iso()})
+    except DuplicateKeyError as exc:
+        raise HTTPException(status_code=409, detail="Este archivo ya fue importado") from exc
+    job = {"id": job_id, "season": plan["season"], "file_sha256": plan["file_sha256"],
+           "status": "applying", "summary": analysis["summary"], "operations": operations,
+           "created_by_user_id": actor.get("id"), "created_at": now_iso(), "updated_at": now_iso()}
+    try:
+        await db.inscription_import_jobs.insert_one(job)
+        await _apply_operations(operations)
+        await db.inscription_import_jobs.update_one({"id": job_id}, {"$set": {"status": "applied", "updated_at": now_iso()}})
+    except Exception as exc:
+        await db.import_locks.delete_one({"_id": lock_id})
+        await db.inscription_import_jobs.update_one({"id": job_id}, {"$set": {"status": "failed", "updated_at": now_iso()}}, upsert=False)
+        raise HTTPException(status_code=500, detail="La importación fue revertida sin cambios parciales") from exc
+    return {"ok": True, "job_id": job_id, "status": "applied", "operations": len(operations), "summary": analysis["summary"]}
+
+
+@api_router.get("/inscription-imports/history")
+async def inscription_import_history():
+    jobs = await db.inscription_import_jobs.find({}, {"_id": 0, "operations": 0, "created_by_user_id": 0}).sort("created_at", -1).to_list(100)
+    for job in jobs:
+        job["file_sha256"] = f"{job.get('file_sha256', '')[:12]}…"
+    return jobs
+
+
+@api_router.post("/inscription-imports/{job_id}/undo")
+async def undo_inscription_import(job_id: str):
+    job = await db.inscription_import_jobs.find_one({"id": job_id}, {"_id": 0})
+    if not job or job.get("status") != "applied":
+        raise HTTPException(status_code=409, detail="La importación no existe o ya fue deshecha")
+    for operation in job.get("operations") or []:
+        current = _clean_doc(await db[operation["collection"]].find_one({"id": operation["id"]}))
+        if current != operation.get("after"):
+            raise HTTPException(status_code=409, detail="No se puede deshacer: existen cambios posteriores")
+    await _apply_operations(job.get("operations") or [], reverse=True)
+    actor = current_user_context.get() or {}
+    await db.inscription_import_jobs.update_one({"id": job_id}, {"$set": {
+        "status": "undone", "undone_at": now_iso(), "undone_by_user_id": actor.get("id"), "updated_at": now_iso(),
+    }})
+    await db.import_locks.delete_one({"_id": f"{job['season']}:{job['file_sha256']}"})
+    return {"ok": True, "job_id": job_id, "status": "undone"}
 
 
 # ================= TRAININGS =================

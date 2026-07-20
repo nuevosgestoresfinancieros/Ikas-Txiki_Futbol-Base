@@ -104,6 +104,7 @@ PATH_RESOURCES = {
     "reports": "reports", "stats": "stats", "search": "search",
     "equipment": "equipment", "settings": "settings", "dashboard": "dashboard",
     "users": "users", "categories": "teams", "compute-category": "players", "calendar": "calendar", "portal": "portal", "notifications": "notifications",
+    "inscription-imports": "data",
     "export-excel": "data", "import-excel": "data", "clear-all": "data",
     "seed-demo": "data",
 }
@@ -145,7 +146,7 @@ def route_permission(request: Request) -> tuple[str, str]:
     method = request.method.upper()
     if first == "callups" and "respond" in parts:
         return "callups", "respond"
-    if first in {"clear-all", "seed-demo", "import-excel"}:
+    if first in {"clear-all", "seed-demo", "import-excel", "inscription-imports"}:
         return resource, "administer"
     if first == "export-excel" or "pdf" in parts or "signed-file" in parts or any(part.endswith((".pdf", ".xlsx", ".ics")) for part in parts):
         return resource, "export" if method == "GET" else "edit"
