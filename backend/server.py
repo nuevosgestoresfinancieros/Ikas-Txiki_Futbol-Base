@@ -57,6 +57,10 @@ from inscription_import_service import (
     file_sha256, identity_key, masked_iban, merge_nonempty, normalize_key,
     parse_excel,
 )
+from import_staging_service import (
+    ALLOWED_RECORD_FIELDS, audit_event, draft_summary, effective_records, expiry, field_is_valid,
+    prepare_records, public_draft, valid_iban as staging_valid_iban,
+)
 
 
 ROOT_DIR = Path(__file__).parent
@@ -1671,6 +1675,34 @@ class ImportConfirmRequest(ImportPlanRequest):
     decisions: Dict[str, str] = Field(default_factory=dict)
 
 
+class StagingRecordUpdate(BaseModel):
+    field: str
+    value: Any = None
+
+
+class StagingBulkUpdate(BaseModel):
+    record_ids: List[str]
+    field: str
+    value: str
+    confirm_suggestion: bool = False
+
+
+class StagingDuplicateDecision(BaseModel):
+    decision: str
+
+
+class StagingOctoberSelection(BaseModel):
+    record_ids: List[str]
+
+
+class StagingIncidentResolution(BaseModel):
+    resolution: str
+
+
+class StagingConfirmRequest(BaseModel):
+    confirmed: bool = False
+
+
 IMPORT_COLLECTIONS = ("teams", "families", "players", "inscriptions", "payments")
 
 
@@ -1791,7 +1823,8 @@ def _build_import_operations(analysis: dict, existing: dict, job_id: str,
             schedule("inscriptions", inscription_before, inscription)
         inscription_by_key[ikey] = inscription
 
-        if row.get("iban"):
+        protected_bank = row.get("_bank") or {}
+        if row.get("iban") or protected_bank.get("iban_encrypted"):
             pay_key = (player["id"], analysis["season"])
             payment = payment_by_key.get(pay_key)
             payment_before = payment
@@ -1799,7 +1832,8 @@ def _build_import_operations(analysis: dict, existing: dict, job_id: str,
                                        "concepto": f"Cuota temporada {analysis['season']}"})
             payment.update({
                 "player_id": player["id"], "temporada": analysis["season"], "forma_pago": "domiciliacion",
-                **encrypt_iban(row["iban"], JWT_SECRET), "iban": None, "import_job_id": job_id, "updated_at": now,
+                **(protected_bank if protected_bank.get("iban_encrypted") else encrypt_iban(row["iban"], JWT_SECRET)),
+                "iban": None, "import_job_id": job_id, "updated_at": now,
             })
             schedule("payments", payment_before, payment); payment_by_key[pay_key] = payment
     return list(operations.values())
@@ -1931,6 +1965,251 @@ async def undo_inscription_import(job_id: str):
     }})
     await db.import_locks.delete_one({"_id": f"{job['season']}:{job['file_sha256']}"})
     return {"ok": True, "job_id": job_id, "status": "undone"}
+
+
+# ================= IMPORT PREPARATION / STAGING =================
+def _staging_ttl_hours() -> int:
+    try:
+        return max(1, min(int(os.environ.get("IMPORT_STAGING_TTL_HOURS", "168")), 24 * 90))
+    except ValueError:
+        return 168
+
+
+async def _ensure_staging_indexes() -> None:
+    await db.import_staging.create_index("expires_at", expireAfterSeconds=0, name="expires_at_ttl")
+    await db.import_staging.create_index([("status", 1), ("updated_at", -1)], name="status_updated")
+    await db.import_staging.create_index("source_sha256", name="source_sha256")
+
+
+async def _staging_doc(draft_id: str) -> dict:
+    draft = await db.import_staging.find_one({"id": draft_id})
+    if not draft:
+        raise HTTPException(status_code=404, detail="El borrador no existe o ha caducado")
+    return draft
+
+
+def _staging_actor() -> Optional[str]:
+    return (current_user_context.get() or {}).get("id")
+
+
+@api_router.post("/inscription-imports/staging")
+async def create_import_staging(file: UploadFile = File(...), season: str = Form(...)):
+    if season != IMPORT_SEASON:
+        raise HTTPException(status_code=422, detail=f"La temporada permitida es {IMPORT_SEASON}")
+    if not (file.filename or "").lower().endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="Solo se admiten archivos .xlsx")
+    content = await file.read()
+    digest = file_sha256(content)
+    await _ensure_staging_indexes()
+    previous = await db.import_staging.find_one({"source_sha256": digest, "season": season, "status": "draft"})
+    if previous:
+        return public_draft(previous)
+    try:
+        rows = parse_excel(content)
+    except ImportValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    records, duplicates, incidents = prepare_records(rows, JWT_SECRET)
+    now = datetime.now(timezone.utc)
+    draft = {
+        "id": new_id(), "season": season, "status": "draft", "source_sha256": digest,
+        "records": records, "duplicates": duplicates, "incidents": incidents,
+        "audit": [audit_event(_staging_actor(), "draft_created", {"rows": len(records)})],
+        "created_by_user_id": _staging_actor(), "created_at": now, "updated_at": now,
+        "expires_at": expiry(_staging_ttl_hours()),
+    }
+    await db.import_staging.insert_one(draft)
+    return public_draft(draft)
+
+
+@api_router.get("/inscription-imports/staging")
+async def list_import_staging():
+    await _ensure_staging_indexes()
+    drafts = await db.import_staging.find({"status": "draft"}).sort("updated_at", -1).to_list(100)
+    return [public_draft(item, include_records=False) for item in drafts]
+
+
+@api_router.get("/inscription-imports/staging/{draft_id}")
+async def get_import_staging(draft_id: str):
+    return public_draft(await _staging_doc(draft_id))
+
+
+@api_router.patch("/inscription-imports/staging/{draft_id}/records/{record_id}")
+async def update_staging_record(draft_id: str, record_id: str, request: StagingRecordUpdate):
+    draft = await _staging_doc(draft_id)
+    if request.field == "iban":
+        normalized = normalize_key(request.value)
+        raw = str(request.value or "").replace(" ", "").upper()
+        if normalized and not staging_valid_iban(raw):
+            raise HTTPException(status_code=422, detail="El IBAN no es válido; no se guardó")
+        bank = encrypt_iban(raw, JWT_SECRET) if raw else {}
+        update_path = "records.$.bank"
+        value = {"status": "valid", **bank} if bank else {"status": "pending", "iban_encrypted": None, "iban_last4": None}
+        issue_field = "bank"
+    elif request.field in ALLOWED_RECORD_FIELDS - {"equipamiento_items"}:
+        update_path, value, issue_field = f"records.$.{request.field}", str(request.value or "").strip(), request.field
+        if request.field == "modalidad":
+            value = value.upper()
+            if value not in {"", "F7", "F11"}:
+                raise HTTPException(status_code=422, detail="La modalidad debe ser F7 o F11")
+        candidate = dict(next((row for row in draft.get("records", []) if row.get("id") == record_id), {}))
+        candidate[request.field] = value
+        if not field_is_valid(candidate, request.field):
+            raise HTTPException(status_code=422, detail="El valor no tiene un formato válido")
+    else:
+        raise HTTPException(status_code=422, detail="Campo no editable")
+    now = datetime.now(timezone.utc)
+    event = audit_event(_staging_actor(), "record_updated", {"record_id": record_id, "field": request.field})
+    result = await db.import_staging.update_one(
+        {"id": draft_id, "records.id": record_id},
+        {"$set": {update_path: value, "updated_at": now, "expires_at": expiry(_staging_ttl_hours())}, "$push": {"audit": event}},
+    )
+    if not result.modified_count:
+        raise HTTPException(status_code=404, detail="Registro no encontrado")
+    if value not in (None, ""):
+        await db.import_staging.update_many(
+            {"id": draft_id}, {"$set": {"incidents.$[issue].resolution": "corrected"}},
+            array_filters=[{"issue.record_id": record_id, "issue.field": issue_field}],
+        )
+    return public_draft(await _staging_doc(draft_id))
+
+
+@api_router.post("/inscription-imports/staging/{draft_id}/bulk")
+async def bulk_update_staging(draft_id: str, request: StagingBulkUpdate):
+    if request.field not in {"equipo", "categoria", "modalidad"}:
+        raise HTTPException(status_code=422, detail="Asignación masiva no permitida para este campo")
+    value = request.value.strip()
+    if request.field == "modalidad":
+        value = value.upper()
+        if value not in {"F7", "F11"}:
+            raise HTTPException(status_code=422, detail="La modalidad debe ser F7 o F11")
+        if not request.confirm_suggestion:
+            raise HTTPException(status_code=422, detail="La sugerencia de modalidad requiere confirmación expresa")
+    draft = await _staging_doc(draft_id)
+    selected = set(request.record_ids)
+    if not selected or not selected.issubset({row["id"] for row in draft.get("records", [])}):
+        raise HTTPException(status_code=422, detail="Selección de registros no válida")
+    now = datetime.now(timezone.utc)
+    await db.import_staging.update_one(
+        {"id": draft_id},
+        {"$set": {
+            "records.$[row]." + request.field: value,
+            **({"records.$[row].suggestion_confirmed": True} if request.field == "modalidad" else {}),
+            "incidents.$[issue].resolution": "corrected", "updated_at": now,
+            "expires_at": expiry(_staging_ttl_hours()),
+        }, "$push": {"audit": audit_event(_staging_actor(), "bulk_updated", {
+            "field": request.field, "records": len(selected),
+        })}},
+        array_filters=[{"row.id": {"$in": list(selected)}}, {"issue.record_id": {"$in": list(selected)}, "issue.field": request.field}],
+    )
+    return public_draft(await _staging_doc(draft_id))
+
+
+@api_router.post("/inscription-imports/staging/{draft_id}/duplicates/{group_id}")
+async def resolve_staging_duplicate(draft_id: str, group_id: str, request: StagingDuplicateDecision):
+    allowed = {"keep_first", "keep_second", "merge", "different_people"}
+    if request.decision not in allowed:
+        raise HTTPException(status_code=422, detail="Decisión de duplicado no válida")
+    result = await db.import_staging.update_one(
+        {"id": draft_id, "duplicates.id": group_id},
+        {"$set": {"duplicates.$.decision": request.decision, "updated_at": datetime.now(timezone.utc),
+                  "expires_at": expiry(_staging_ttl_hours())},
+         "$push": {"audit": audit_event(_staging_actor(), "duplicate_resolved", {"group_id": group_id, "decision": request.decision})}},
+    )
+    if not result.modified_count:
+        raise HTTPException(status_code=404, detail="Duplicado no encontrado")
+    return public_draft(await _staging_doc(draft_id))
+
+
+@api_router.post("/inscription-imports/staging/{draft_id}/october")
+async def select_staging_october(draft_id: str, request: StagingOctoberSelection):
+    draft = await _staging_doc(draft_id)
+    requested = set(request.record_ids)
+    valid_ids = {row["id"] for row in effective_records(draft) if row.get("tipo") == "renovacion"}
+    if len(requested) > 54 or not requested.issubset(valid_ids):
+        raise HTTPException(status_code=422, detail="La selección de octubre admite exactamente hasta 54 registros válidos")
+    records = draft.get("records", [])
+    for row in records:
+        row["selected_october"] = row["id"] in requested
+    await db.import_staging.update_one({"id": draft_id}, {"$set": {
+        "records": records, "updated_at": datetime.now(timezone.utc), "expires_at": expiry(_staging_ttl_hours()),
+    }, "$push": {"audit": audit_event(_staging_actor(), "october_selection", {"count": len(requested)})}})
+    return public_draft(await _staging_doc(draft_id))
+
+
+@api_router.patch("/inscription-imports/staging/{draft_id}/incidents/{incident_id}")
+async def resolve_staging_incident(draft_id: str, incident_id: str, request: StagingIncidentResolution):
+    if request.resolution not in {"corrected", "not_applicable"}:
+        raise HTTPException(status_code=422, detail="Resolución no válida")
+    draft = await _staging_doc(draft_id)
+    incident = next((item for item in draft.get("incidents", []) if item.get("id") == incident_id), None)
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incidencia no encontrada")
+    if incident.get("blocking") and request.resolution == "not_applicable":
+        raise HTTPException(status_code=422, detail="Una incidencia obligatoria debe corregirse")
+    record = next((row for row in draft.get("records", []) if row.get("id") == incident.get("record_id")), {})
+    if request.resolution == "corrected" and not field_is_valid(record, incident.get("field")):
+        raise HTTPException(status_code=422, detail="Corrige el valor antes de cerrar la incidencia")
+    await db.import_staging.update_one(
+        {"id": draft_id, "incidents.id": incident_id},
+        {"$set": {"incidents.$.resolution": request.resolution, "updated_at": datetime.now(timezone.utc),
+                  "expires_at": expiry(_staging_ttl_hours())},
+         "$push": {"audit": audit_event(_staging_actor(), "incident_resolved", {"incident_id": incident_id, "resolution": request.resolution})}},
+    )
+    return public_draft(await _staging_doc(draft_id))
+
+
+@api_router.delete("/inscription-imports/staging/{draft_id}")
+async def delete_import_staging(draft_id: str):
+    result = await db.import_staging.delete_one({"id": draft_id, "status": "draft"})
+    if not result.deleted_count:
+        raise HTTPException(status_code=404, detail="El borrador no existe")
+    return {"ok": True}
+
+
+@api_router.post("/inscription-imports/staging/{draft_id}/confirm")
+async def confirm_import_staging(draft_id: str, request: StagingConfirmRequest):
+    if request.confirmed is not True:
+        raise HTTPException(status_code=422, detail="La importación requiere confirmación expresa")
+    draft = await _staging_doc(draft_id)
+    summary = draft_summary(draft)
+    if not summary["can_import"]:
+        raise HTTPException(status_code=409, detail="El borrador mantiene bloqueos pendientes")
+    rows = []
+    for record in effective_records(draft):
+        row = {key: value for key, value in record.items() if key in ALLOWED_RECORD_FIELDS}
+        row["_row"] = record.get("source_row")
+        if record.get("identity_override"):
+            row["external_id"] = record["identity_override"]
+        bank = record.get("bank") or {}
+        if bank.get("status") == "valid":
+            row["_bank"] = {"iban_encrypted": bank.get("iban_encrypted"), "iban_last4": bank.get("iban_last4")}
+        rows.append(row)
+    existing = await _import_existing()
+    analysis = analyze_rows(rows, draft["season"], existing, draft["source_sha256"], False)
+    if analysis["blocking_errors"] or analysis["unresolved_conflicts"]:
+        raise HTTPException(status_code=409, detail="La validación final ha detectado bloqueos")
+    lock_id = f"{draft['season']}:{draft['source_sha256']}"
+    job_id = new_id()
+    operations = _build_import_operations(analysis, existing, job_id, {})
+    try:
+        await db.import_locks.insert_one({"_id": lock_id, "job_id": job_id, "created_at": now_iso()})
+    except DuplicateKeyError as exc:
+        raise HTTPException(status_code=409, detail="Este archivo ya fue importado") from exc
+    job = {"id": job_id, "season": draft["season"], "file_sha256": draft["source_sha256"],
+           "status": "applying", "summary": analysis["summary"], "operations": operations,
+           "created_by_user_id": _staging_actor(), "staging_id": draft_id,
+           "created_at": now_iso(), "updated_at": now_iso()}
+    try:
+        await db.inscription_import_jobs.insert_one(job)
+        await _apply_operations(operations)
+        await db.inscription_import_jobs.update_one({"id": job_id}, {"$set": {"status": "applied", "updated_at": now_iso()}})
+        await db.import_staging.update_one({"id": draft_id}, {"$set": {"status": "imported", "updated_at": datetime.now(timezone.utc)},
+                                                                  "$unset": {"records": "", "incidents": "", "duplicates": ""}})
+    except Exception as exc:
+        await db.import_locks.delete_one({"_id": lock_id})
+        await db.inscription_import_jobs.update_one({"id": job_id}, {"$set": {"status": "failed", "updated_at": now_iso()}})
+        raise HTTPException(status_code=500, detail="La importación fue revertida sin cambios parciales") from exc
+    return {"ok": True, "job_id": job_id, "status": "applied", "operations": len(operations)}
 
 
 # ================= TRAININGS =================

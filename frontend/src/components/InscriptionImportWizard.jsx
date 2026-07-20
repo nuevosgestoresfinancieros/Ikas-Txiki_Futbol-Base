@@ -1,55 +1,58 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, CheckCircle2, Download, FileSpreadsheet, History, RotateCcw, Upload } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Download, FileSpreadsheet, History, Pencil, RotateCcw, Save, Trash2, Upload, Users } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useI18n } from "@/i18n";
-import { canConfirmImport, SUMMARY_ORDER, unresolvedConflictIds } from "./inscriptionImportView";
+import { canFinalizeDraft, filterPreparationRecords, selectedOctoberIds } from "./importPreparationView";
 
 const COPY = {
   es: {
-    title: "Importación segura de inscripciones", description: "Analiza el Excel antes de modificar datos y confirma únicamente cuando el resultado esté revisado.",
-    template: "Descargar plantilla", file: "Archivo Excel", season: "Temporada", analyze: "Analizar sin importar",
-    expected: "El resultado revisado esperado es de 323 inscripciones únicas.", october: "Los pendientes de octubre nunca se seleccionan automáticamente.",
-    report: "Descargar informe de errores", confirmLabel: "He revisado el análisis y confirmo expresamente la importación.",
-    confirm: "Confirmar importación", history: "Historial de importaciones", undo: "Deshacer", empty: "Todavía no hay análisis.",
-    severe: "Hay errores graves. Corrígelos en Excel y vuelve a analizar.", conflict: "Requiere decisión humana", skip: "Omitir esta fila",
-    created: "Altas", updated: "Actualizaciones", duplicate: "Duplicados", conflicts: "Conflictos", errors: "Errores", unchanged: "Sin cambios",
-    applied: "Importación aplicada", undone: "Importación deshecha", confirmUndo: "¿Deshacer esta importación? Se comprobará que no existan cambios posteriores.",
-    row: "Fila", status: "Estado", code: "Código", message: "Mensaje", decision: "Decisión",
+    title: "Preparar importación", description: "Corrige el borrador sin crear jugadores, familias, equipos, pagos ni inscripciones oficiales.",
+    upload: "Cargar como borrador", file: "Excel privado", season: "Temporada", template: "Descargar plantilla",
+    drafts: "Borradores guardados", empty: "Carga un Excel incompleto o abre un borrador para continuar otro día.",
+    rows: "Filas", unique: "Únicos previstos", duplicates: "Duplicados pendientes", noTeam: "Sin equipo", noMode: "Sin modalidad",
+    incidents: "Incidencias", october: "Pendientes de octubre", capacity: "Equipos sobre capacidad", preparation: "Preparación",
+    filter: "Buscar jugador", allCategories: "Todas las categorías", allTeams: "Todos los equipos", selected: "seleccionados", age: "Edad", previousTeam: "Equipo anterior", allStates: "Todos los estados", withIncidents: "Con incidencias", ready: "Sin incidencias",
+    bulk: "Asignación masiva", team: "Equipo", category: "Categoría", modality: "Modalidad", apply: "Aplicar",
+    suggestion: "Sugerencia pendiente de confirmar", acceptSuggestion: "Aceptar sugerencia para la selección",
+    confirmSuggestion: "¿Confirmas esta modalidad sugerida para los registros seleccionados? No se aplicará automáticamente.",
+    octoberHelp: "Selecciona exactamente 54 históricos. El sistema nunca los elige automáticamente.",
+    bankPending: "Datos bancarios pendientes", bankValid: "IBAN validado y cifrado", edit: "Corregir", delete: "Eliminar borrador",
+    confirmDelete: "¿Eliminar este borrador temporal? Los datos oficiales no se modificarán.",
+    saveContinue: "Los cambios se guardan automáticamente", final: "Importación final", finalConfirm: "Confirmo expresamente la importación final.",
+    blocked: "La importación final permanece bloqueada mientras haya decisiones obligatorias.",
+    duplicateTitle: "Resolver duplicados", keepFirst: "Conservar primera", keepSecond: "Conservar segunda", merge: "Fusionar", different: "Personas diferentes",
+    incidentTitle: "Incidencias pendientes", corrected: "Corregida", notApplicable: "No aplica", history: "Historial de importaciones", undo: "Deshacer",
+    noOriginal: "El Excel original no se guarda. Los IBAN válidos se cifran y nunca se muestran completos.",
   },
   eu: {
-    title: "Izen-emateen inportazio segurua", description: "Aztertu Excel fitxategia datuak aldatu aurretik, eta baieztatu emaitza berrikusi ondoren.",
-    template: "Txantiloia deskargatu", file: "Excel fitxategia", season: "Denboraldia", analyze: "Aztertu, inportatu gabe",
-    expected: "Berrikusitako emaitzan 323 izen-emate bakar espero dira.", october: "Urriko zain daudenak ez dira inoiz automatikoki hautatzen.",
-    report: "Erroreen txostena deskargatu", confirmLabel: "Azterketa berrikusi dut eta inportazioa espresuki baieztatzen dut.",
-    confirm: "Inportazioa baieztatu", history: "Inportazioen historia", undo: "Desegin", empty: "Oraindik ez dago azterketarik.",
-    severe: "Errore larriak daude. Zuzendu Excel fitxategia eta aztertu berriro.", conflict: "Giza erabakia behar da", skip: "Errenkada hau baztertu",
-    created: "Altak", updated: "Eguneratzeak", duplicate: "Bikoiztuak", conflicts: "Gatazkak", errors: "Erroreak", unchanged: "Aldaketarik ez",
-    applied: "Inportazioa aplikatu da", undone: "Inportazioa desegin da", confirmUndo: "Inportazio hau desegin? Geroagoko aldaketarik ez dagoela egiaztatuko da.",
-    row: "Errenkada", status: "Egoera", code: "Kodea", message: "Mezua", decision: "Erabakia",
+    title: "Inportazioa prestatu", description: "Zuzendu zirriborroa jokalari, familia, talde, ordainketa edo izen-emate ofizialik sortu gabe.",
+    upload: "Zirriborro gisa kargatu", file: "Excel pribatua", season: "Denboraldia", template: "Txantiloia deskargatu",
+    drafts: "Gordetako zirriborroak", empty: "Kargatu osatu gabeko Excel bat edo ireki zirriborro bat beste egun batean jarraitzeko.",
+    rows: "Errenkadak", unique: "Aurreikusitako bakarrak", duplicates: "Ebatzi gabeko bikoiztuak", noTeam: "Talderik gabe", noMode: "Modalitaterik gabe",
+    incidents: "Gorabeherak", october: "Urrirako zain", capacity: "Edukiera gaindituta", preparation: "Prestaketa",
+    filter: "Jokalaria bilatu", allCategories: "Kategoria guztiak", allTeams: "Talde guztiak", selected: "hautatuta", age: "Adina", previousTeam: "Aurreko taldea", allStates: "Egoera guztiak", withIncidents: "Gorabeherekin", ready: "Gorabeherarik gabe",
+    bulk: "Esleipen masiboa", team: "Taldea", category: "Kategoria", modality: "Modalitatea", apply: "Aplikatu",
+    suggestion: "Baieztatzeko behin-behineko iradokizuna", acceptSuggestion: "Onartu iradokizuna hautatutakoentzat",
+    confirmSuggestion: "Hautatutako erregistroetarako modalitate-iradokizuna baieztatzen duzu? Ez da automatikoki aplikatuko.",
+    octoberHelp: "Hautatu zehazki 54 historiko. Sistemak ez ditu automatikoki aukeratzen.",
+    bankPending: "Banku-datuak osatu gabe", bankValid: "IBAN balioztatua eta zifratua", edit: "Zuzendu", delete: "Zirriborroa ezabatu",
+    confirmDelete: "Aldi baterako zirriborro hau ezabatu? Datu ofizialak ez dira aldatuko.",
+    saveContinue: "Aldaketak automatikoki gordetzen dira", final: "Azken inportazioa", finalConfirm: "Azken inportazioa espresuki baieztatzen dut.",
+    blocked: "Azken inportazioa blokeatuta dago nahitaezko erabakiak geratzen diren bitartean.",
+    duplicateTitle: "Bikoiztuak ebatzi", keepFirst: "Lehena gorde", keepSecond: "Bigarrena gorde", merge: "Batu", different: "Pertsona desberdinak",
+    incidentTitle: "Ebatzi gabeko gorabeherak", corrected: "Zuzenduta", notApplicable: "Ez dagokio", history: "Inportazioen historia", undo: "Desegin",
+    noOriginal: "Jatorrizko Excel fitxategia ez da gordetzen. Baliozko IBANak zifratu egiten dira eta ez dira inoiz osorik erakusten.",
   },
 };
-const SUMMARY_LABEL = { create: "created", update: "updated", duplicate: "duplicate", conflict: "conflicts", error: "errors", unchanged: "unchanged" };
-const ROW_STATUS = {
-  es: { create: "Alta", update: "Actualización", duplicate: "Duplicado", conflict: "Conflicto", error: "Error", unchanged: "Sin cambios" },
-  eu: { create: "Alta", update: "Eguneratzea", duplicate: "Bikoiztua", conflict: "Gatazka", error: "Errorea", unchanged: "Aldaketarik ez" },
-};
-const ROW_MESSAGES_EU = {
-  formula_not_allowed: "Errenkadak formulak ditu; balioak bakarrik onartzen dira.",
-  missing_required: "Nahitaezko eremuak falta dira.",
-  invalid_birthdate: "Jaiotze-data ez da baliozkoa.",
-  invalid_modality: "Modalitateak F7 edo F11 izan behar du.",
-  invalid_type: "Motak alta edo berritzea izan behar du.",
-  invalid_email: "Helbide elektroniko baten formatua ez da baliozkoa.",
-  invalid_iban: "IBANak ez du baliozkotzea gainditu.",
-  duplicate_in_file: "Erregistroa fitxategian bikoiztuta dago.",
-  manual_decision: "Gatazka eskuz berrikusi behar da.",
-  existing_updated: "Balioa duten gelaxkak bakarrik eguneratuko dira.",
-  no_changes: "Ez dago aldaketarik egungo datu-basearekiko.",
-  new_inscription: "Izen-emate berria.",
-};
+
+const SUMMARY_CARDS = [
+  ["rows_received", "rows"], ["unique_expected", "unique"], ["duplicates_pending", "duplicates"],
+  ["missing_team", "noTeam"], ["missing_modality", "noMode"], ["incidents_pending", "incidents"],
+  ["october_selected", "october"], ["teams_over_capacity", "capacity"], ["preparation_percent", "preparation"],
+];
 
 const downloadBlob = (blob, name) => {
   const url = URL.createObjectURL(blob); const anchor = document.createElement("a");
@@ -58,53 +61,80 @@ const downloadBlob = (blob, name) => {
 
 export default function InscriptionImportWizard({ open, onOpenChange, onImported }) {
   const { lang } = useI18n(); const c = COPY[lang] || COPY.es;
-  const [file, setFile] = useState(null); const [analysis, setAnalysis] = useState(null);
-  const [decisions, setDecisions] = useState({}); const [express, setExpress] = useState(false);
-  const [busy, setBusy] = useState(false); const [error, setError] = useState(""); const [history, setHistory] = useState([]);
-  const pendingConflicts = useMemo(() => unresolvedConflictIds(analysis, decisions), [analysis, decisions]);
-  const allowed = canConfirmImport(analysis, decisions, express);
+  const [file, setFile] = useState(null); const [drafts, setDrafts] = useState([]); const [draft, setDraft] = useState(null);
+  const [history, setHistory] = useState([]); const [busy, setBusy] = useState(false); const [error, setError] = useState("");
+  const [selected, setSelected] = useState([]); const [filters, setFilters] = useState({ query: "", category: "", team: "" });
+  const [bulk, setBulk] = useState({ field: "equipo", value: "" }); const [express, setExpress] = useState(false);
+  const records = (draft?.records || []).filter((record) => record.active !== false);
+  const visible = useMemo(() => filterPreparationRecords(records, filters), [records, filters]);
+  const categories = useMemo(() => [...new Set(records.map((r) => r.categoria).filter(Boolean))].sort(), [records]);
+  const teams = useMemo(() => [...new Set(records.map((r) => r.equipo).filter(Boolean))].sort(), [records]);
+  const previousTeams = useMemo(() => [...new Set(records.map((r) => r.equipo_anterior).filter(Boolean))].sort(), [records]);
 
-  const loadHistory = async () => { try { setHistory((await api.get("/inscription-imports/history")).data); } catch (_) {} };
-  useEffect(() => { if (open) loadHistory(); }, [open]);
-  const template = async () => { const r = await api.get("/inscription-imports/template", { responseType: "blob" }); downloadBlob(r.data, "plantilla_inscripciones_2026-2027.xlsx"); };
-  const analyze = async () => {
-    if (!file) return; setBusy(true); setError(""); setAnalysis(null); setExpress(false); setDecisions({});
-    try { const body = new FormData(); body.append("file", file); body.append("season", "2026-2027"); setAnalysis((await api.post("/inscription-imports/analyze", body)).data); }
-    catch (e) { setError(e.response?.data?.detail || "No se ha podido analizar el archivo."); }
-    finally { setBusy(false); }
+  const loadLists = async () => {
+    const [draftResponse, historyResponse] = await Promise.all([api.get("/inscription-imports/staging"), api.get("/inscription-imports/history")]);
+    setDrafts(draftResponse.data); setHistory(historyResponse.data);
   };
-  const report = async () => { const r = await api.post("/inscription-imports/error-report", { plan_token: analysis.plan_token }, { responseType: "blob" }); downloadBlob(r.data, "informe_importacion.xlsx"); };
-  const confirm = async () => {
-    setBusy(true); setError("");
-    try { await api.post("/inscription-imports/confirm", { plan_token: analysis.plan_token, decisions, confirmed: true }); toast.success(c.applied); setAnalysis(null); setFile(null); setExpress(false); await loadHistory(); onImported?.(); }
-    catch (e) { setError(e.response?.data?.detail || "No se ha podido completar la importación."); }
-    finally { setBusy(false); }
+  useEffect(() => { if (open) loadLists().catch(() => setError("No se pudieron cargar los borradores.")); }, [open]);
+  const openDraft = async (id) => { setBusy(true); setError(""); try { setDraft((await api.get(`/inscription-imports/staging/${id}`)).data); setSelected([]); } catch (e) { setError(e.response?.data?.detail || "Error"); } finally { setBusy(false); } };
+  const upload = async () => {
+    if (!file) return; setBusy(true); setError("");
+    try { const body = new FormData(); body.append("file", file); body.append("season", "2026-2027"); const response = await api.post("/inscription-imports/staging", body); setDraft(response.data); setFile(null); await loadLists(); }
+    catch (e) { setError(e.response?.data?.detail || "No se pudo preparar el archivo."); } finally { setBusy(false); }
   };
-  const undo = async (job) => {
-    if (!window.confirm(c.confirmUndo)) return; setBusy(true);
-    try { await api.post(`/inscription-imports/${job.id}/undo`); toast.success(c.undone); await loadHistory(); onImported?.(); }
-    catch (e) { setError(e.response?.data?.detail || "No se ha podido deshacer."); }
-    finally { setBusy(false); }
+  const template = async () => { const response = await api.get("/inscription-imports/template", { responseType: "blob" }); downloadBlob(response.data, "plantilla_inscripciones_2026-2027.xlsx"); };
+  const refresh = (response) => { setDraft(response.data); setExpress(false); };
+  const updateField = async (record, field) => {
+    const value = window.prompt(`${c.edit}: ${field}`, field === "iban" ? "" : (record[field] || ""));
+    if (value === null) return;
+    try { refresh(await api.patch(`/inscription-imports/staging/${draft.id}/records/${record.id}`, { field, value })); }
+    catch (e) { setError(e.response?.data?.detail || "No se pudo guardar."); }
   };
+  const applyBulk = async (field = bulk.field, value = bulk.value, ids = selected) => {
+    if (!ids.length || !value) return;
+    const confirmSuggestion = field !== "modalidad" || window.confirm(c.confirmSuggestion);
+    if (!confirmSuggestion) return;
+    try { refresh(await api.post(`/inscription-imports/staging/${draft.id}/bulk`, { record_ids: ids, field, value, confirm_suggestion: confirmSuggestion })); setSelected([]); }
+    catch (e) { setError(e.response?.data?.detail || "No se pudo aplicar."); }
+  };
+  const resolveDuplicate = async (group, decision) => { refresh(await api.post(`/inscription-imports/staging/${draft.id}/duplicates/${group.id}`, { decision })); };
+  const toggleOctober = async (id) => {
+    const current = new Set(selectedOctoberIds(records)); current.has(id) ? current.delete(id) : current.add(id);
+    try { refresh(await api.post(`/inscription-imports/staging/${draft.id}/october`, { record_ids: [...current] })); }
+    catch (e) { setError(e.response?.data?.detail || "No se pudo guardar la selección."); }
+  };
+  const resolveIncident = async (incident, resolution) => { refresh(await api.patch(`/inscription-imports/staging/${draft.id}/incidents/${incident.id}`, { resolution })); };
+  const removeDraft = async () => { if (!window.confirm(c.confirmDelete)) return; await api.delete(`/inscription-imports/staging/${draft.id}`); setDraft(null); await loadLists(); };
+  const finalize = async () => {
+    if (!canFinalizeDraft(draft, express)) return; setBusy(true);
+    try { await api.post(`/inscription-imports/staging/${draft.id}/confirm`, { confirmed: true }); toast.success(c.final); setDraft(null); await loadLists(); onImported?.(); }
+    catch (e) { setError(e.response?.data?.detail || "No se pudo completar la importación."); } finally { setBusy(false); }
+  };
+  const undo = async (job) => { if (!window.confirm(c.undo)) return; await api.post(`/inscription-imports/${job.id}/undo`); await loadLists(); onImported?.(); };
 
   return <Dialog open={open} onOpenChange={onOpenChange}>
-    <DialogContent className="max-h-[94vh] w-[calc(100vw-1rem)] max-w-5xl overflow-y-auto overflow-x-hidden" data-testid="inscription-import-dialog">
-      <DialogHeader><DialogTitle className="flex items-start gap-2 pr-8 font-heading"><FileSpreadsheet className="mt-0.5 h-5 w-5 shrink-0 text-primary" /><span>{c.title}</span></DialogTitle><DialogDescription>{c.description}</DialogDescription></DialogHeader>
-      <div className="grid min-w-0 gap-4 rounded-2xl border bg-slate-50 p-4 md:grid-cols-[1fr_180px_auto] md:items-end">
-        <label className="grid min-w-0 gap-2 text-sm font-semibold">{c.file}<input data-testid="import-file" type="file" accept=".xlsx" onChange={(e) => setFile(e.target.files?.[0] || null)} className="block min-h-11 w-full min-w-0 rounded-xl border bg-white p-2 text-sm" /></label>
-        <label className="grid gap-2 text-sm font-semibold">{c.season}<input value="2026-2027" readOnly className="h-11 rounded-xl border bg-white px-3" /></label>
-        <Button data-testid="analyze-import" onClick={analyze} disabled={!file || busy} className="h-11"><Upload className="h-4 w-4" />{c.analyze}</Button>
+    <DialogContent className="max-h-[96vh] w-[calc(100vw-0.75rem)] max-w-7xl overflow-y-auto overflow-x-hidden" data-testid="import-preparation-dialog">
+      <DialogHeader><DialogTitle className="flex items-center gap-2 pr-8 font-heading"><FileSpreadsheet className="h-5 w-5 text-primary" />{c.title}</DialogTitle><DialogDescription>{c.description}</DialogDescription></DialogHeader>
+      <div className="grid gap-3 rounded-2xl border bg-slate-50 p-3 md:grid-cols-[1fr_160px_auto] md:items-end">
+        <label className="grid min-w-0 gap-1 text-sm font-semibold">{c.file}<input data-testid="staging-file" type="file" accept=".xlsx" onChange={(e) => setFile(e.target.files?.[0] || null)} className="min-h-11 min-w-0 rounded-xl border bg-white p-2" /></label>
+        <label className="grid gap-1 text-sm font-semibold">{c.season}<input value="2026-2027" readOnly className="h-11 rounded-xl border bg-white px-3" /></label>
+        <Button data-testid="create-staging" onClick={upload} disabled={!file || busy} className="h-11"><Upload className="h-4 w-4" />{c.upload}</Button>
       </div>
-      <div className="flex min-w-0 flex-wrap gap-2 text-sm"><Button variant="outline" onClick={template}><Download className="h-4 w-4" />{c.template}</Button><span className="min-w-0 whitespace-normal rounded-xl bg-teal-50 px-3 py-2 text-teal-900">{c.expected}</span><span className="min-w-0 whitespace-normal rounded-xl bg-amber-50 px-3 py-2 text-amber-900">{c.october}</span></div>
+      <div className="flex flex-wrap items-center gap-2"><Button variant="outline" onClick={template}><Download className="h-4 w-4" />{c.template}</Button><span className="rounded-xl bg-teal-50 px-3 py-2 text-xs text-teal-900">{c.noOriginal}</span></div>
       {error && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</div>}
-      {!analysis ? <div className="rounded-2xl border-2 border-dashed p-8 text-center text-slate-500">{busy ? "…" : c.empty}</div> : <>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">{SUMMARY_ORDER.map((key) => <div key={key} className="rounded-xl border bg-white p-3"><p className="text-xs text-slate-500">{c[SUMMARY_LABEL[key]]}</p><p className="text-2xl font-bold">{analysis.summary[key]}</p></div>)}</div>
-        {analysis.blocking_errors > 0 && <div className="flex gap-2 rounded-xl bg-red-50 p-3 text-sm font-semibold text-red-800"><AlertTriangle className="h-5 w-5 shrink-0" />{c.severe}</div>}
-        <div className="max-h-64 overflow-auto rounded-xl border"><table className="w-full min-w-[620px] text-left text-sm"><thead className="sticky top-0 bg-slate-100"><tr><th className="p-2">{c.row}</th><th className="p-2">{c.status}</th><th className="p-2">{c.code}</th><th className="p-2">{c.message}</th><th className="p-2">{c.decision}</th></tr></thead><tbody>{analysis.rows.map((row, index) => <tr key={`${row.row}-${index}`} className="border-t"><td className="p-2">{row.row}</td><td className="p-2 font-semibold">{ROW_STATUS[lang]?.[row.status] || row.status}</td><td className="p-2">{row.code}</td><td className="p-2">{lang === "eu" ? ROW_MESSAGES_EU[row.code] || row.message : row.message}</td><td className="p-2">{row.status === "conflict" && <select aria-label={`${c.conflict} ${row.row}`} value={decisions[row.conflict_id] || ""} onChange={(e) => setDecisions((d) => ({...d, [row.conflict_id]: e.target.value}))} className="h-10 rounded-lg border px-2"><option value="">{c.conflict}</option><option value="skip">{c.skip}</option></select>}</td></tr>)}</tbody></table></div>
-        <div className="flex flex-col gap-3 rounded-2xl border p-4 sm:flex-row sm:items-center sm:justify-between"><label className="flex items-start gap-3 text-sm"><input type="checkbox" checked={express} onChange={(e) => setExpress(e.target.checked)} className="mt-1 h-4 w-4" /><span>{c.confirmLabel}</span></label><div className="flex flex-col gap-2 sm:flex-row"><Button variant="outline" onClick={report}><Download className="h-4 w-4" />{c.report}</Button><Button data-testid="confirm-import" disabled={!allowed || busy} onClick={confirm}><CheckCircle2 className="h-4 w-4" />{c.confirm}</Button></div></div>
-        {pendingConflicts.length > 0 && <p className="text-sm text-amber-700">{pendingConflicts.length} · {c.conflict}</p>}
+      <section aria-labelledby="drafts-title"><h3 id="drafts-title" className="mb-2 font-heading font-bold">{c.drafts}</h3><div className="flex gap-2 overflow-x-auto pb-1">{drafts.map((item) => <Button key={item.id} variant={draft?.id === item.id ? "default" : "outline"} onClick={() => openDraft(item.id)} className="shrink-0">{item.season} · {item.summary.rows_received} · {item.summary.preparation_percent}%</Button>)}</div></section>
+      {!draft ? <div className="rounded-2xl border-2 border-dashed p-8 text-center text-slate-500">{busy ? "…" : c.empty}</div> : <>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-9">{SUMMARY_CARDS.map(([key, label]) => <div key={key} className={`rounded-xl border p-3 ${key === "preparation_percent" ? "bg-teal-50" : "bg-white"}`}><p className="text-xs text-slate-500">{c[label]}</p><p className="text-xl font-bold">{draft.summary[key]}{key === "october_selected" ? "/54" : key === "preparation_percent" ? "%" : ""}</p></div>)}</div>
+        {draft.summary.teams_over_capacity > 0 && <div className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">{draft.summary.capacities.filter((x) => x.over_capacity).map((x) => `${x.team}: ${x.count}/${x.limit}`).join(" · ")}</div>}
+        <div className="grid gap-2 rounded-2xl border p-3 sm:grid-cols-2 lg:grid-cols-6"><input aria-label={c.filter} placeholder={c.filter} value={filters.query} onChange={(e) => setFilters({...filters, query: e.target.value})} className="h-11 rounded-xl border px-3" /><select aria-label={c.category} value={filters.category} onChange={(e) => setFilters({...filters, category: e.target.value})} className="h-11 rounded-xl border px-3"><option value="">{c.allCategories}</option>{categories.map((value) => <option key={value}>{value}</option>)}</select><select aria-label={c.team} value={filters.team} onChange={(e) => setFilters({...filters, team: e.target.value})} className="h-11 rounded-xl border px-3"><option value="">{c.allTeams}</option><option value="__missing__">{c.noTeam}</option>{teams.map((value) => <option key={value}>{value}</option>)}</select><input aria-label={c.age} type="number" min="4" max="30" placeholder={c.age} value={filters.age || ""} onChange={(e) => setFilters({...filters, age: e.target.value})} className="h-11 rounded-xl border px-3" /><select aria-label={c.previousTeam} value={filters.previousTeam || ""} onChange={(e) => setFilters({...filters, previousTeam: e.target.value})} className="h-11 rounded-xl border px-3"><option value="">{c.previousTeam}</option>{previousTeams.map((value) => <option key={value}>{value}</option>)}</select><select aria-label={c.allStates} value={filters.status || ""} onChange={(e) => setFilters({...filters, status: e.target.value})} className="h-11 rounded-xl border px-3"><option value="">{c.allStates}</option><option value="incidents">{c.withIncidents}</option><option value="ready">{c.ready}</option></select></div>
+        <section className="rounded-2xl border p-3"><h3 className="mb-2 font-heading font-bold">{c.bulk} · {selected.length} {c.selected}</h3><div className="grid gap-2 sm:grid-cols-[180px_1fr_auto]"><select value={bulk.field} onChange={(e) => setBulk({...bulk, field: e.target.value})} className="h-11 rounded-xl border px-3"><option value="equipo">{c.team}</option><option value="categoria">{c.category}</option><option value="modalidad">{c.modality}</option></select><input value={bulk.value} onChange={(e) => setBulk({...bulk, value: e.target.value})} className="h-11 rounded-xl border px-3" /><Button onClick={() => applyBulk()} disabled={!selected.length || !bulk.value}>{c.apply}</Button></div></section>
+        <div className="grid max-h-[38vh] gap-2 overflow-y-auto pr-1 md:grid-cols-2">{visible.map((record) => <article key={record.id} className="rounded-2xl border bg-white p-3" data-testid="staging-record"><div className="flex items-start gap-3"><input type="checkbox" aria-label={`${c.selected} ${record.source_row}`} checked={selected.includes(record.id)} onChange={(e) => setSelected(e.target.checked ? [...selected, record.id] : selected.filter((id) => id !== record.id))} className="mt-1 h-5 w-5" /><div className="min-w-0 flex-1"><p className="truncate font-bold">{record.nombre} {record.apellidos}</p><p className="text-xs text-slate-500">#{record.source_row} · {record.categoria || c.noMode} · {record.equipo || c.noTeam} · {record.modalidad || "—"}</p>{!record.modalidad && record.modality_suggestion && <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg bg-sky-50 p-2 text-xs text-sky-900"><span>{c.suggestion}: <b>{record.modality_suggestion}</b></span><Button size="sm" variant="outline" onClick={() => applyBulk("modalidad", record.modality_suggestion, [record.id])}>{c.acceptSuggestion}</Button></div>}<div className="mt-2 flex flex-wrap gap-1">{(record.equipamiento_items || []).map((item) => <span key={item} className="rounded-full bg-violet-50 px-2 py-1 text-xs">{item}</span>)}</div><p className={`mt-2 text-xs ${record.bank_status === "valid" ? "text-emerald-700" : "text-amber-700"}`}>{record.bank_status === "valid" ? `${c.bankValid}: ${record.iban_masked}` : c.bankPending}</p><div className="mt-2 flex flex-wrap gap-1">{["equipo", "categoria", "modalidad", "progenitor1_telefono", "progenitor1_email", "talla_camiseta", "iban"].map((field) => <Button key={field} size="sm" variant="ghost" onClick={() => updateField(record, field)}><Pencil className="h-3 w-3" />{field}</Button>)}</div></div><label className="flex shrink-0 flex-col items-center gap-1 text-[10px]"><input type="checkbox" checked={record.selected_october} disabled={!record.october_eligible} onChange={() => toggleOctober(record.id)} className="h-5 w-5" />Oct.</label></div></article>)}</div>
+        <p className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">{c.octoberHelp}</p>
+        {draft.duplicates?.some((item) => !item.decision) && <section><h3 className="mb-2 flex items-center gap-2 font-heading font-bold"><Users className="h-4 w-4" />{c.duplicateTitle}</h3><div className="space-y-2">{draft.duplicates.filter((item) => !item.decision).map((group) => <div key={group.id} className="flex flex-col gap-2 rounded-xl border p-3 sm:flex-row sm:items-center sm:justify-between"><span>{group.record_ids.length} · #{group.record_ids.map((id) => records.find((r) => r.id === id)?.source_row).join(", #")}</span><div className="flex flex-wrap gap-1"><Button size="sm" variant="outline" onClick={() => resolveDuplicate(group, "keep_first")}>{c.keepFirst}</Button><Button size="sm" variant="outline" onClick={() => resolveDuplicate(group, "keep_second")}>{c.keepSecond}</Button><Button size="sm" variant="outline" onClick={() => resolveDuplicate(group, "merge")}>{c.merge}</Button><Button size="sm" variant="outline" onClick={() => resolveDuplicate(group, "different_people")}>{c.different}</Button></div></div>)}</div></section>}
+        <section><h3 className="mb-2 flex items-center gap-2 font-heading font-bold"><AlertTriangle className="h-4 w-4" />{c.incidentTitle}</h3><div className="grid gap-2 sm:grid-cols-2">{draft.incidents?.filter((item) => item.resolution === "pending").slice(0, 100).map((incident) => <div key={incident.id} className="flex items-center justify-between gap-2 rounded-xl border p-3 text-sm"><span>#{incident.source_row} · {incident.field} · {incident.code}</span><div className="flex gap-1"><Button size="sm" variant="outline" onClick={() => resolveIncident(incident, "corrected")}>{c.corrected}</Button>{!incident.blocking && <Button size="sm" variant="ghost" onClick={() => resolveIncident(incident, "not_applicable")}>{c.notApplicable}</Button>}</div></div>)}</div></section>
+        <div className="rounded-2xl border p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="flex items-center gap-2 font-semibold"><Save className="h-4 w-4" />{c.saveContinue}</p>{!draft.summary.can_import && <p className="mt-1 text-sm text-amber-700">{c.blocked} ({draft.summary.blocking_count})</p>}</div><Button variant="destructive" onClick={removeDraft}><Trash2 className="h-4 w-4" />{c.delete}</Button></div><label className="mt-4 flex items-start gap-2 text-sm"><input type="checkbox" checked={express} onChange={(e) => setExpress(e.target.checked)} className="mt-1 h-4 w-4" />{c.finalConfirm}</label><Button data-testid="finalize-staging" className="mt-3 w-full sm:w-auto" disabled={!canFinalizeDraft(draft, express) || busy} onClick={finalize}><CheckCircle2 className="h-4 w-4" />{c.final}</Button></div>
       </>}
-      <section className="border-t pt-4"><h3 className="mb-3 flex items-center gap-2 font-heading font-bold"><History className="h-4 w-4" />{c.history}</h3><div className="space-y-2">{history.map((job) => <div key={job.id} className="flex flex-col gap-2 rounded-xl bg-slate-50 p-3 text-sm sm:flex-row sm:items-center sm:justify-between"><span><b>{job.season}</b> · {job.status} · {job.created_at?.slice(0, 16)} · {job.file_sha256}</span>{job.status === "applied" && <Button variant="outline" size="sm" onClick={() => undo(job)} disabled={busy}><RotateCcw className="h-4 w-4" />{c.undo}</Button>}</div>)}</div></section>
+      <section className="border-t pt-4"><h3 className="mb-2 flex items-center gap-2 font-heading font-bold"><History className="h-4 w-4" />{c.history}</h3>{history.map((job) => <div key={job.id} className="mb-2 flex flex-col gap-2 rounded-xl bg-slate-50 p-3 text-sm sm:flex-row sm:items-center sm:justify-between"><span>{job.season} · {job.status} · {job.created_at?.slice(0, 16)}</span>{job.status === "applied" && <Button size="sm" variant="outline" onClick={() => undo(job)}><RotateCcw className="h-4 w-4" />{c.undo}</Button>}</div>)}</section>
     </DialogContent>
   </Dialog>;
 }

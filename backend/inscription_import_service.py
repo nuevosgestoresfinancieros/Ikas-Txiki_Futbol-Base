@@ -43,6 +43,7 @@ HEADER_ALIASES = {
     "contacto_2_telefono": "progenitor2_telefono",
     "contacto_2_email": "progenitor2_email",
     "domicilio": "domicilio",
+    "equipo_anterior": "equipo_anterior",
     "equipo_26_27": "equipo",
     "categoria": "categoria",
     "modalidad": "modalidad",
