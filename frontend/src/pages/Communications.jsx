@@ -8,9 +8,9 @@ import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { PageHeader, EmptyState } from "@/components/shared";
-import { Field, Area, SelectField, SwitchField } from "@/components/form";
+import { Field, Area, SelectField } from "@/components/form";
 
-const empty = { destinatario_tipo: "equipo", canal: "email", enviado: false };
+const empty = { destinatario_tipo: "equipo", canal: "email", prioridad: "normal" };
 
 const Communications = () => {
   const canCreate = usePermission("communications", "create");
@@ -20,13 +20,14 @@ const Communications = () => {
   const [teams, setTeams] = useState([]);
   const [categories, setCategories] = useState([]);
   const [players, setPlayers] = useState([]);
+  const [providers, setProviders] = useState({});
   const [dialog, setDialog] = useState(false);
   const [form, setForm] = useState(empty);
 
   const load = async () => setItems((await api.get("/communications")).data);
   useEffect(() => {
     load();
-    Promise.all([api.get("/teams"), api.get("/categories"), api.get("/players")]).then(([tm, c, p]) => { setTeams(tm.data); setCategories(c.data); setPlayers(p.data); });
+    Promise.all([api.get("/teams"), api.get("/categories"), api.get("/players"), api.get("/notifications/providers")]).then(([tm, c, p, providerData]) => { setTeams(tm.data); setCategories(c.data); setPlayers(p.data); setProviders(providerData.data); });
     if (params.get("new") && canCreate) { setForm(empty); setDialog(true); params.delete("new"); setParams(params); }
     // eslint-disable-next-line
   }, []);
@@ -73,7 +74,7 @@ const Communications = () => {
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  {i.enviado ? <span className="inline-flex items-center gap-1 text-xs font-bold text-green-600"><Check className="h-4 w-4" />{t("sent")}</span> : <span className="text-xs text-amber-600">{t("pendingPayments").split(" ")[0]}</span>}
+                  {i.estado_envio === "sent" ? <span className="inline-flex items-center gap-1 text-xs font-bold text-green-600"><Check className="h-4 w-4" />{t("sent")}</span> : i.estado_envio === "failed" ? <span className="text-xs font-bold text-red-600">{t("failed")}</span> : <span className="text-xs font-bold text-amber-600">{t("deliveryPending")}</span>}
                   <PermissionGate resource="communications" action="edit"><Button variant="ghost" size="icon" aria-label={`${t("edit")} ${i.asunto || t("communications")}`} data-testid={`edit-comm-${i.id}`} onClick={() => openEdit(i)}><Pencil className="h-4 w-4" /></Button></PermissionGate>
                   <PermissionGate resource="communications" action="delete"><Button variant="ghost" size="icon" aria-label={`${t("delete")} ${i.asunto || t("communications")}`} data-testid={`delete-comm-${i.id}`} onClick={() => remove(i)} className="text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button></PermissionGate>
                 </div>
@@ -91,11 +92,12 @@ const Communications = () => {
               <SelectField label={t("recipientType")} value={form.destinatario_tipo} onChange={(v)=>{set("destinatario_tipo")(v);set("destinatario_id")("");}}
                 options={[{value:"equipo",label:t("byTeam")},{value:"categoria",label:t("byCategory")},{value:"individual",label:t("individual")}]} testid="comm-tipo" />
               <SelectField label={t("recipientType")} value={form.destinatario_id} onChange={set("destinatario_id")} options={destOptions} testid="comm-dest" />
-              <SelectField label={t("channel")} value={form.canal} onChange={set("canal")} options={[{value:"email",label:"Email"},{value:"whatsapp",label:"WhatsApp"}]} testid="comm-canal" />
+              <SelectField label={t("channel")} value={form.canal} onChange={set("canal")} options={[{value:"email",label:"Email"},{value:"whatsapp",label:"WhatsApp"},{value:"sms",label:"SMS"}]} testid="comm-canal" />
             </div>
+            <SelectField label={t("priority")} value={form.prioridad || "normal"} onChange={set("prioridad")} options={["low","normal","high","urgent"].map((value)=>({value,label:t(`priority_${value}`)}))} testid="comm-priority" />
             <Field label={t("subject")} value={form.asunto} onChange={set("asunto")} testid="comm-asunto" />
             <Area label={t("message")} value={form.mensaje} onChange={set("mensaje")} testid="comm-mensaje" rows={5} />
-            <SwitchField label={t("markSent")} checked={form.enviado} onChange={set("enviado")} testid="comm-enviado" />
+            {!providers[form.canal]?.configured && <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{t("providerNotConfiguredPending")}</p>}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialog(false)}>{t("cancel")}</Button>

@@ -10,6 +10,7 @@ import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import GlobalSearch from "@/components/GlobalSearch";
+import NotificationCenter from "@/components/NotificationCenter";
 import { can, ROUTE_RESOURCES } from "@/auth";
 
 const navGroups = [
@@ -280,14 +281,13 @@ const Layout = ({ children, onLogout, user }) => {
       </Sheet>
 
       <div className="lg:pl-72">
+        <div className="fixed right-5 top-5 z-20 hidden lg:block"><NotificationCenter user={user} /></div>
         <header className="sticky top-0 z-20 flex min-h-16 items-center justify-between border-b border-white/10 bg-[#102a43]/95 px-3 text-white shadow-md backdrop-blur-xl lg:hidden">
           <Button data-testid="open-sidebar-btn" variant="ghost" size="icon" aria-label={t("openMenu")} className="text-white hover:bg-white/10 hover:text-white" onClick={() => setOpen(true)}>
             <Menu className="h-6 w-6" aria-hidden="true" />
           </Button>
           <span className="max-w-[60vw] truncate font-heading font-bold">{current ? t(current.key) : "Ikas-Txiki"}</span>
-          <Button data-testid="mobile-search-btn" variant="ghost" size="icon" aria-label={t("globalSearch")} className="text-white hover:bg-white/10 hover:text-white" onClick={() => setSearchOpen(true)}>
-            <Search className="h-5 w-5" aria-hidden="true" />
-          </Button>
+          <div className="flex items-center"><NotificationCenter user={user} dark /><Button data-testid="mobile-search-btn" variant="ghost" size="icon" aria-label={t("globalSearch")} className="text-white hover:bg-white/10 hover:text-white" onClick={() => setSearchOpen(true)}><Search className="h-5 w-5" aria-hidden="true" /></Button></div>
         </header>
 
         <main id="main-content" tabIndex="-1" className="mx-auto max-w-[1440px] px-4 pb-28 pt-5 sm:px-6 sm:pt-7 lg:px-8 lg:pb-10 lg:pt-8 xl:px-10">

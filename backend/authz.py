@@ -13,7 +13,7 @@ RESOURCES = (
     "dashboard", "users", "players", "families", "teams", "trainings",
     "matches", "callups", "attendance", "payments", "authorizations",
     "inscriptions", "communications", "reports", "stats", "search",
-    "equipment", "settings", "data", "calendar", "portal",
+    "equipment", "settings", "data", "calendar", "portal", "notifications",
 )
 
 
@@ -40,6 +40,7 @@ ROLE_PERMISSIONS: Dict[str, Dict[str, Set[str]]] = {
         "search": _actions("read"),
         "equipment": _actions("read", "edit", "export"),
         "calendar": _actions("read", "create", "edit", "delete", "export"),
+        "notifications": _actions("read", "edit"),
     },
     "coach": {
         "dashboard": _actions("read"),
@@ -55,6 +56,7 @@ ROLE_PERMISSIONS: Dict[str, Dict[str, Set[str]]] = {
         "search": _actions("read"),
         "equipment": _actions("read"),
         "calendar": _actions("read", "create", "edit", "delete", "export"),
+        "notifications": _actions("read", "edit"),
     },
     "family": {
         "dashboard": _actions("read"),
@@ -72,6 +74,7 @@ ROLE_PERMISSIONS: Dict[str, Dict[str, Set[str]]] = {
         "search": _actions("read"),
         "calendar": _actions("read", "export"),
         "portal": _actions("read"),
+        "notifications": _actions("read", "edit"),
     },
     "player": {
         "dashboard": _actions("read"),
@@ -87,6 +90,7 @@ ROLE_PERMISSIONS: Dict[str, Dict[str, Set[str]]] = {
         "search": _actions("read"),
         "calendar": _actions("read", "export"),
         "portal": _actions("read"),
+        "notifications": _actions("read", "edit"),
     },
 }
 
@@ -99,7 +103,7 @@ PATH_RESOURCES = {
     "inscriptions": "inscriptions", "communications": "communications",
     "reports": "reports", "stats": "stats", "search": "search",
     "equipment": "equipment", "settings": "settings", "dashboard": "dashboard",
-    "users": "users", "categories": "teams", "compute-category": "players", "calendar": "calendar", "portal": "portal",
+    "users": "users", "categories": "teams", "compute-category": "players", "calendar": "calendar", "portal": "portal", "notifications": "notifications",
     "export-excel": "data", "import-excel": "data", "clear-all": "data",
     "seed-demo": "data",
 }

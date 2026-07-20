@@ -48,6 +48,7 @@ from calendar_service import (
     next_calendar_event, subscription_capability,
 )
 from portal_service import document_status, portal_attendance, portal_callups, safe_payment, safe_player, upcoming
+from notification_service import dispatch_email, make_notification, notification_enabled, provider_configuration
 
 
 ROOT_DIR = Path(__file__).parent
@@ -259,7 +260,14 @@ async def user_player_ids(user: dict) -> list[str]:
 
 async def scope_for_collection(coll: str, user: Optional[dict] = None) -> Optional[dict]:
     user = user or current_user_context.get()
-    if not user or user.get("role") == "admin":
+    if not user:
+        return {"id": {"$in": []}}
+    if coll == "notifications":
+        return {"$or": [
+            {"recipient_user_id": user.get("id")},
+            {"recipient_username": user.get("username")},
+        ]}
+    if user.get("role") == "admin":
         return None
     role = user.get("role")
     team_ids = ids(user.get("assigned_team_ids") or [])
@@ -325,6 +333,11 @@ async def ensure_data_scope(coll: str, data: dict) -> None:
     if coll == "club_events" and data.get("equipo_id") not in team_ids:
         raise HTTPException(status_code=403, detail="El evento no pertenece a tus equipos asignados")
     player_ids = set(await user_player_ids(user))
+    if coll == "communications" and data.get("destinatario_tipo") == "categoria":
+        category_team_ids = set(ids(await db.teams.distinct("id", {"categoria": data.get("destinatario_id")})))
+        if not category_team_ids or not category_team_ids.issubset(team_ids):
+            raise HTTPException(status_code=403, detail="La categoría contiene equipos fuera de tu ámbito")
+        return
     if coll == "players" and data.get("familia_id"):
         family_scope = await scope_for_collection("families", user)
         if not await db.families.find_one(merge_query({"id": data["familia_id"]}, family_scope)):
@@ -347,6 +360,46 @@ async def list_docs(coll: str, query: dict = None):
     scoped = merge_query(query, await scope_for_collection(coll))
     cursor = db[coll].find(scoped, {"_id": 0}).sort("created_at", -1)
     return await cursor.to_list(5000)
+
+
+async def notification_users(team_ids: Optional[list[str]] = None, player_ids: Optional[list[str]] = None,
+                             family_ids: Optional[list[str]] = None, include_admins: bool = False) -> list[dict]:
+    clauses = []
+    if team_ids:
+        clauses.append({"assigned_team_ids": {"$in": team_ids}})
+    if player_ids:
+        clauses.append({"player_id": {"$in": player_ids}})
+    if family_ids:
+        clauses.append({"family_id": {"$in": family_ids}})
+    if include_admins:
+        clauses.append({"role": "admin"})
+    if not clauses:
+        return []
+    return await db.users.find({"active": {"$ne": False}, "$or": clauses}, {"_id": 0}).to_list(5000)
+
+
+async def enqueue_notifications(users: list[dict], notification_type: str, title: str, message: str,
+                                link: Optional[str] = None, priority: str = "normal",
+                                related: Optional[dict] = None, dedupe_key: Optional[str] = None) -> int:
+    created = 0
+    for user in users:
+        if not notification_enabled(user.get("notification_preferences") or {}, notification_type):
+            continue
+        document = make_notification(user, notification_type, title, message, link, priority, related,
+                                     dedupe_key=dedupe_key)
+        query = {"recipient_user_id": user.get("id"), "dedupe_key": dedupe_key} if dedupe_key else {"id": document["id"]}
+        result = await db.notifications.update_one(query, {"$setOnInsert": document}, upsert=True)
+        created += int(bool(result.upserted_id))
+    return created
+
+
+async def users_for_team_players(team_id: Optional[str], player_ids: Optional[list[str]] = None,
+                                 include_admins: bool = False) -> list[dict]:
+    ids_for_players = player_ids or []
+    if team_id and not ids_for_players:
+        ids_for_players = await db.players.distinct("id", {"equipo_id": team_id})
+    family_ids = await db.players.distinct("familia_id", {"id": {"$in": ids_for_players}}) if ids_for_players else []
+    return await notification_users([team_id] if team_id else [], ids(ids_for_players), ids(family_ids), include_admins)
 
 
 async def get_doc(coll: str, _id: str):
@@ -769,7 +822,15 @@ async def get_match(match_id: str):
 
 @api_router.put("/matches/{match_id}")
 async def edit_match(match_id: str, match: Match):
-    return await update_doc("matches", match_id, match.model_dump())
+    previous = await get_doc("matches", match_id)
+    updated = await update_doc("matches", match_id, match.model_dump())
+    changed = any(previous.get(field) != updated.get(field) for field in ("fecha", "hora", "campo"))
+    if changed:
+        users = await users_for_team_players(updated.get("equipo_id"))
+        await enqueue_notifications(users, "schedule.changed", "Cambio de partido / Partida aldaketa",
+                                    str(updated.get("rival") or "Partido"), "/partidos", "urgent",
+                                    {"match_id": match_id}, f"schedule.changed:match:{match_id}:{updated.get('updated_at')}")
+    return updated
 
 
 @api_router.delete("/matches/{match_id}")
@@ -991,6 +1052,11 @@ async def create_callup(callup: Callup):
         "team_id": created.get("equipo_id"), "actor_user_id": actor.get("id"),
         "created_at": now_iso(), "delivered": False,
     })
+    player_ids = ids(item.get("player_id") for item in created.get("convocados", []))
+    users = await users_for_team_players(created.get("equipo_id"), player_ids)
+    await enqueue_notifications(users, "callup.created", "Nueva convocatoria / Deialdi berria",
+                                str(created.get("instrucciones") or "Ikas-Txiki"), "/convocatorias", "high",
+                                {"callup_id": created["id"]}, f"callup.created:{created['id']}")
     return normalize_callup(created)
 
 
@@ -1145,6 +1211,11 @@ async def respond_callup(callup_id: str, response: CallupResponse):
         "player_id": response.player_id, "actor_user_id": user.get("id"),
         "history": history, "created_at": now_iso(), "delivered": False,
     })
+    staff = await notification_users([callup.get("equipo_id")], include_admins=True)
+    await enqueue_notifications(staff, "callup.response", "Respuesta de convocatoria / Deialdiaren erantzuna",
+                                response.status, f"/convocatorias", "normal",
+                                {"callup_id": callup_id, "player_id": response.player_id},
+                                f"callup.response:{callup_id}:{response.player_id}:{updated.get('responded_at')}")
     return {"player_id": response.player_id, **updated}
 
 
@@ -1731,7 +1802,14 @@ async def edit_training(tr_id: str, tr: Training):
     payload["attendance_history"] = [*(existing.get("attendance_history") or []), *changes]
     if changes:
         payload["attendance_updated_by"] = {"id": actor.get("id"), "role": actor.get("role"), "at": now_iso()}
-    return await update_doc("trainings", tr_id, payload)
+    updated = await update_doc("trainings", tr_id, payload)
+    schedule_changed = any(existing.get(field) != updated.get(field) for field in ("fecha", "hora", "campo"))
+    if schedule_changed:
+        users = await users_for_team_players(updated.get("equipo_id"))
+        await enqueue_notifications(users, "schedule.changed", "Cambio de entrenamiento / Entrenamendu aldaketa",
+                                    str(updated.get("campo") or "Entrenamiento"), "/entrenamientos", "urgent",
+                                    {"training_id": tr_id}, f"schedule.changed:training:{tr_id}:{updated.get('updated_at')}")
+    return updated
 
 
 @api_router.delete("/trainings/{tr_id}")
@@ -1781,6 +1859,98 @@ async def remove_stats(stats_id: str):
     return await delete_doc("stats", stats_id)
 
 
+# ================= NOTIFICATIONS =================
+async def generate_user_reminders(user: dict) -> None:
+    now = datetime.now(timezone.utc)
+    until = now + timedelta(hours=48)
+    for collection, notification_type, link, label in (
+        ("matches", "match.upcoming", "/partidos", "Partido próximo / Hurrengo partida"),
+        ("trainings", "training.upcoming", "/entrenamientos", "Entrenamiento próximo / Hurrengo entrenamendua"),
+    ):
+        for item in await list_docs(collection):
+            try:
+                moment = datetime.fromisoformat(f"{item.get('fecha')}T{item.get('hora') or '00:00'}").replace(tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                continue
+            if now <= moment <= until:
+                detail = item.get("rival") or item.get("ejercicios") or item.get("campo") or "Ikas-Txiki"
+                await enqueue_notifications([user], notification_type, label, str(detail), link, "high",
+                                            {"id": item.get("id")}, f"{notification_type}:{item.get('id')}:{user.get('id')}")
+
+    player_ids = set(await user_player_ids(user))
+    for callup in await list_docs("callups"):
+        pending = [row for row in callup.get("convocados", [])
+                   if row.get("estado") in {"pending", "pendiente"}
+                   and (not player_ids or row.get("player_id") in player_ids)]
+        if pending:
+            await enqueue_notifications([user], "callup.pending", "Convocatoria pendiente / Deialdia zain",
+                                        f"{len(pending)} respuesta(s) pendiente(s)", "/convocatorias", "high",
+                                        {"callup_id": callup.get("id")}, f"callup.pending:{callup.get('id')}:{user.get('id')}")
+
+    if user.get("role") in {"family", "player"} and player_ids:
+        for payment in await list_docs("payments") if user.get("role") == "family" else []:
+            if payment.get("estado") in {"pendiente", "parcial", "devuelto"}:
+                await enqueue_notifications([user], "payment.pending", "Pago pendiente / Ordainketa zain",
+                                            str(payment.get("concepto") or "Cuota"), "/portal", "high",
+                                            {"payment_id": payment.get("id")}, f"payment.pending:{payment.get('id')}:{user.get('id')}")
+        for player in await list_docs("players"):
+            if player.get("estado_documental") != "completo":
+                await enqueue_notifications([user], "document.pending", "Documentación pendiente / Dokumentazioa zain",
+                                            f"{player.get('nombre', '')} {player.get('apellidos', '')}".strip(), "/portal", "normal",
+                                            {"player_id": player.get("id")}, f"document.pending:{player.get('id')}:{user.get('id')}")
+        for authorization in await list_docs("authorizations"):
+            if authorization.get("estado") == "pendiente":
+                await enqueue_notifications([user], "authorization.pending", "Autorización pendiente / Baimena zain",
+                                            str(authorization.get("tipo") or "Autorización"), "/portal", "normal",
+                                            {"authorization_id": authorization.get("id")},
+                                            f"authorization.pending:{authorization.get('id')}:{user.get('id')}")
+
+
+@api_router.get("/notifications")
+async def get_notifications(unread_only: bool = False):
+    user = current_user_context.get() or {}
+    await generate_user_reminders(user)
+    notifications = await list_docs("notifications", {"read_at": None} if unread_only else None)
+    now = now_iso()
+    notifications = [item for item in notifications if not item.get("expires_at") or item["expires_at"] > now]
+    return {"items": notifications, "unread": sum(1 for item in notifications if not item.get("read_at"))}
+
+
+@api_router.patch("/notifications/{notification_id}/read")
+async def read_notification(notification_id: str):
+    query = merge_query({"id": notification_id}, await scope_for_collection("notifications"))
+    result = await db.notifications.update_one(query, {"$set": {"read_at": now_iso()}})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Notificación no encontrada")
+    return {"ok": True}
+
+
+@api_router.patch("/notifications/read-all")
+async def read_all_notifications():
+    query = merge_query({"read_at": None}, await scope_for_collection("notifications"))
+    result = await db.notifications.update_many(query, {"$set": {"read_at": now_iso()}})
+    return {"ok": True, "updated": result.modified_count}
+
+
+@api_router.patch("/notifications/preferences")
+async def update_notification_preferences(preferences: NotificationPreferences):
+    user = current_user_context.get() or {}
+    if not user.get("id"):
+        raise HTTPException(status_code=422, detail="El usuario administrativo debe existir en la colección users")
+    result = await db.users.update_one(
+        {"$or": [{"id": user["id"]}, {"username": user.get("username")}]},
+        {"$set": {"notification_preferences": preferences.model_dump(), "updated_at": now_iso()}},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=422, detail="El usuario debe existir en la colección users")
+    return {"ok": True, "notification_preferences": preferences.model_dump()}
+
+
+@api_router.get("/notifications/providers")
+async def notification_providers():
+    return provider_configuration()
+
+
 # ================= COMMUNICATIONS =================
 class Communication(BaseModel):
     destinatario_tipo: str = "equipo"  # equipo, categoria, individual
@@ -1791,14 +1961,89 @@ class Communication(BaseModel):
     mensaje: Optional[str] = None
     enviado: bool = False
     fecha_envio: Optional[str] = None
+    prioridad: str = "normal"
+
+    @field_validator("canal")
+    @classmethod
+    def validate_channel(cls, value: str):
+        if value not in {"email", "whatsapp", "sms"}:
+            raise ValueError("Canal no válido")
+        return value
+
+    @field_validator("prioridad")
+    @classmethod
+    def validate_priority(cls, value: str):
+        if value not in {"low", "normal", "high", "urgent"}:
+            raise ValueError("Prioridad no válida")
+        return value
+
+
+async def communication_targets(data: dict) -> tuple[list[dict], list[str]]:
+    target_type = data.get("destinatario_tipo")
+    target_id = data.get("destinatario_id")
+    team_ids: list[str] = []
+    player_ids: list[str] = []
+    family_ids: list[str] = []
+    if target_type == "equipo" and target_id:
+        team_ids = [target_id]
+        player_ids = ids(await db.players.distinct("id", {"equipo_id": target_id}))
+    elif target_type == "categoria" and target_id:
+        team_ids = ids(await db.teams.distinct("id", {"categoria": target_id}))
+        player_ids = ids(await db.players.distinct("id", {"equipo_id": {"$in": team_ids}}))
+    elif target_type == "individual" and target_id:
+        if await db.players.find_one({"id": target_id}):
+            player_ids = [target_id]
+        elif await db.families.find_one({"id": target_id}):
+            family_ids = [target_id]
+    if player_ids:
+        family_ids = sorted(set(family_ids + ids(await db.players.distinct("familia_id", {"id": {"$in": player_ids}}))))
+    users = await notification_users(team_ids, player_ids, family_ids)
+    emails = set()
+    async for player in db.players.find({"id": {"$in": player_ids}}, {"_id": 0, "email_formulario": 1, "progenitor1_email": 1, "progenitor2_email": 1}):
+        emails.update(value for value in (player.get("email_formulario"), player.get("progenitor1_email"), player.get("progenitor2_email")) if value)
+    async for family in db.families.find({"id": {"$in": family_ids}}, {"_id": 0, "progenitor1_email": 1, "progenitor2_email": 1}):
+        emails.update(value for value in (family.get("progenitor1_email"), family.get("progenitor2_email")) if value)
+    return users, sorted(emails)
 
 
 @api_router.post("/communications")
 async def create_communication(comm: Communication):
     data = comm.model_dump()
-    if data.get("enviado") and not data.get("fecha_envio"):
-        data["fecha_envio"] = now_iso()
-    return await insert_doc("communications", data)
+    data.update({"enviado": False, "fecha_envio": None, "estado_envio": "pending", "error_envio": None})
+    created = await insert_doc("communications", data)
+    users, emails = await communication_targets(data)
+    await enqueue_notifications(
+        users, "communication.created", "Nueva comunicación / Komunikazio berria",
+        str(data.get("asunto") or "Ikas-Txiki"), "/comunicacion", data.get("prioridad") or "normal",
+        {"communication_id": created["id"]}, f"communication.created:{created['id']}",
+    )
+    logs = []
+    if data.get("canal") == "email":
+        if emails:
+            logs = [dispatch_email(email, data.get("asunto") or "Ikas-Txiki", data.get("mensaje") or "") for email in emails]
+        else:
+            logs = [{"id": new_id(), "channel": "email", "recipient": None, "provider": "smtp",
+                     "status": "pending", "error": "recipient_missing", "created_at": now_iso(), "sent_at": None}]
+    else:
+        provider = provider_configuration().get(data.get("canal"), {"configured": False, "provider": "optional"})
+        logs = [{"id": new_id(), "channel": data.get("canal"), "recipient": None,
+                 "provider": provider["provider"], "status": "pending",
+                 "error": "provider_optional_not_activated" if provider["configured"] else "provider_not_configured",
+                 "created_at": now_iso(), "sent_at": None}]
+    for log in logs:
+        log["communication_id"] = created["id"]
+    if logs:
+        await db.delivery_logs.insert_many(logs)
+    state = "sent" if logs and all(log["status"] == "sent" for log in logs) else (
+        "failed" if any(log["status"] == "failed" for log in logs) else "pending"
+    )
+    await db.communications.update_one({"id": created["id"]}, {"$set": {
+        "enviado": state == "sent", "estado_envio": state,
+        "fecha_envio": now_iso() if state == "sent" else None,
+        "error_envio": next((log["error"] for log in logs if log.get("error")), None),
+        "delivery_log_ids": [log["id"] for log in logs],
+    }})
+    return await get_doc("communications", created["id"])
 
 
 @api_router.get("/communications")
@@ -1809,8 +2054,8 @@ async def get_communications():
 @api_router.put("/communications/{comm_id}")
 async def edit_communication(comm_id: str, comm: Communication):
     data = comm.model_dump()
-    if data.get("enviado") and not data.get("fecha_envio"):
-        data["fecha_envio"] = now_iso()
+    data.pop("enviado", None)
+    data.pop("fecha_envio", None)
     return await update_doc("communications", comm_id, data)
 
 
