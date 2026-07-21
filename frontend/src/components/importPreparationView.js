@@ -34,10 +34,29 @@ export const modalityOptionLabel = (modality, lang = "es") => {
 export const activeModalitiesFromApi = (payload = []) =>
   payload.filter((item) => item?.active && item.code);
 
-export const canApplyPreparationBulk = (selected = [], bulk = {}, modalities = []) => {
+export const existingCategoriesFromApi = (payload = []) =>
+  payload.filter((item) => item?.name).map((item) => item.name);
+
+export const activeTeamsFromApi = (payload = []) =>
+  payload.filter((item) => item?.id && item?.nombre && item.estado === "activo");
+
+export const teamsForCategory = (teams = [], category = "") =>
+  teams.filter((item) => category && item.estado === "activo" && item.categoria === category);
+
+export const canApplyPreparationBulk = (
+  selected = [], bulk = {}, modalities = [], categories = [], teams = [], records = [], catalogAssignments = true,
+) => {
   if (!selected.length || !bulk.value) return false;
-  if (bulk.field !== "modalidad") return true;
-  return modalities.some((item) => item.active && item.code === bulk.value);
+  if (bulk.field === "modalidad") return modalities.some((item) => item.active && item.code === bulk.value);
+  if (!catalogAssignments && ["categoria", "equipo"].includes(bulk.field)) return true;
+  if (bulk.field === "categoria") return categories.includes(bulk.value);
+  if (bulk.field === "equipo") {
+    const team = teams.find((item) => item.id === bulk.value && item.estado === "activo");
+    const selectedRecords = records.filter((item) => selected.includes(item.id));
+    return Boolean(team && selectedRecords.length === selected.length
+      && selectedRecords.every((item) => item.categoria === team.categoria));
+  }
+  return true;
 };
 
 export const applyPreparationFilterChange = (filters = {}, patch = {}) => ({

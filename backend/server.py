@@ -1687,6 +1687,7 @@ class ImportConfirmRequest(ImportPlanRequest):
 class StagingRecordUpdate(BaseModel):
     field: str
     value: Any = None
+    confirm_suggestion: bool = False
 
 
 class StagingBulkUpdate(BaseModel):
@@ -2072,11 +2073,31 @@ async def get_import_staging_simulation(draft_id: str):
             "summary": draft_summary(draft)}
 
 
+def _existing_category(value: Any) -> Optional[str]:
+    requested = str(value or "").strip()
+    return next((item["name"] for item in CATEGORIES if item["name"] == requested), None)
+
+
+async def _active_staging_team(team_id: Any) -> Optional[dict]:
+    requested = str(team_id or "").strip()
+    if not requested:
+        return None
+    team = await db.teams.find_one(
+        {"id": requested, "estado": "activo"},
+        {"_id": 0, "id": 1, "nombre": 1, "categoria": 1, "estado": 1},
+    )
+    if not team or team.get("id") != requested or team.get("estado") != "activo":
+        return None
+    return team
+
+
 @api_router.patch("/inscription-imports/staging/{draft_id}/records/{record_id}")
 async def update_staging_record(draft_id: str, record_id: str, request: StagingRecordUpdate):
     draft = await _staging_doc(draft_id)
     current_record = next((row for row in draft.get("records", []) if row.get("id") == record_id), {})
     previous_value = current_record.get(request.field)
+    additional_updates = {}
+    historical = draft.get("source_format") == HISTORICAL_FORMAT
     if request.field == "iban":
         normalized = normalize_key(request.value)
         raw = str(request.value or "").replace(" ", "").upper()
@@ -2088,6 +2109,27 @@ async def update_staging_record(draft_id: str, record_id: str, request: StagingR
         issue_field = "bank"
     elif request.field in ALLOWED_RECORD_FIELDS - {"equipamiento_items"}:
         update_path, value, issue_field = f"records.$.{request.field}", str(request.value or "").strip(), request.field
+        if historical and request.field in {"categoria", "equipo", "modalidad"} and not request.confirm_suggestion:
+            raise HTTPException(status_code=422, detail="La asignación requiere confirmación administrativa expresa")
+        if historical and request.field in {"categoria", "equipo"}:
+            if draft.get("status") != "draft":
+                raise HTTPException(status_code=409, detail="Solo se puede modificar un borrador activo")
+            if request.field == "categoria":
+                value = _existing_category(value)
+                if not value:
+                    raise HTTPException(status_code=422, detail="La categoría no existe o no está activa")
+                if current_record.get("equipo_id"):
+                    current_team = await _active_staging_team(current_record.get("equipo_id"))
+                    if not current_team or current_team.get("categoria") != value:
+                        raise HTTPException(status_code=422, detail="La categoría no es compatible con el equipo asignado")
+            else:
+                selected_team = await _active_staging_team(value)
+                if not selected_team:
+                    raise HTTPException(status_code=422, detail="El equipo no existe o está inactivo")
+                if selected_team.get("categoria") != current_record.get("categoria"):
+                    raise HTTPException(status_code=422, detail="El equipo no pertenece a la categoría del registro")
+                value = selected_team["nombre"]
+                additional_updates["records.$.equipo_id"] = selected_team["id"]
         if request.field == "modalidad":
             if draft.get("status") != "draft":
                 raise HTTPException(status_code=409, detail="Solo se puede modificar un borrador activo")
@@ -2103,12 +2145,17 @@ async def update_staging_record(draft_id: str, record_id: str, request: StagingR
         raise HTTPException(status_code=422, detail="Campo no editable")
     now = datetime.now(timezone.utc)
     event_detail = {"record_id": record_id, "field": request.field}
-    if request.field == "modalidad":
+    if request.field in {"modalidad", "categoria", "equipo"}:
         event_detail.update({"previous_value": previous_value or None, "new_value": value or None})
+        if request.field == "equipo":
+            event_detail.update({
+                "previous_id": current_record.get("equipo_id"),
+                "new_id": additional_updates.get("records.$.equipo_id"),
+            })
     event = audit_event(_staging_actor(), "record_updated", event_detail)
     result = await db.import_staging.update_one(
         {"id": draft_id, "records.id": record_id},
-        {"$set": {update_path: value, "updated_at": now, "expires_at": expiry(_staging_ttl_hours())}, "$push": {"audit": event}},
+        {"$set": {update_path: value, **additional_updates, "updated_at": now, "expires_at": expiry(_staging_ttl_hours())}, "$push": {"audit": event}},
     )
     if not result.modified_count:
         raise HTTPException(status_code=404, detail="Registro no encontrado")
@@ -2126,6 +2173,22 @@ async def bulk_update_staging(draft_id: str, request: StagingBulkUpdate):
         raise HTTPException(status_code=422, detail="Asignación masiva no permitida para este campo")
     value = request.value.strip()
     draft = await _staging_doc(draft_id)
+    historical = draft.get("source_format") == HISTORICAL_FORMAT
+    selected_team = None
+    if historical and request.field in {"categoria", "equipo"}:
+        if draft.get("status") != "draft":
+            raise HTTPException(status_code=409, detail="Solo se puede modificar un borrador activo")
+        if not request.confirm_suggestion:
+            raise HTTPException(status_code=422, detail="La asignación requiere confirmación administrativa expresa")
+        if request.field == "categoria":
+            value = _existing_category(value)
+            if not value:
+                raise HTTPException(status_code=422, detail="La categoría no existe o no está activa")
+        else:
+            selected_team = await _active_staging_team(value)
+            if not selected_team:
+                raise HTTPException(status_code=422, detail="El equipo no existe o está inactivo")
+            value = selected_team["nombre"]
     if request.field == "modalidad":
         if draft.get("status") != "draft":
             raise HTTPException(status_code=409, detail="Solo se puede modificar un borrador activo")
@@ -2139,23 +2202,41 @@ async def bulk_update_staging(draft_id: str, request: StagingBulkUpdate):
     active_record_ids = {row["id"] for row in effective_records(draft)}
     if not selected or not selected.issubset(active_record_ids):
         raise HTTPException(status_code=422, detail="Selección de registros no válida")
+    selected_rows = [row for row in effective_records(draft) if row.get("id") in selected]
+    if historical and request.field == "categoria":
+        for row in selected_rows:
+            if row.get("equipo_id"):
+                current_team = await _active_staging_team(row.get("equipo_id"))
+                if not current_team or current_team.get("categoria") != value:
+                    raise HTTPException(status_code=422, detail="La categoría no es compatible con un equipo asignado")
+    if historical and request.field == "equipo":
+        if any(row.get("categoria") != selected_team.get("categoria") for row in selected_rows):
+            raise HTTPException(status_code=422, detail="El equipo no pertenece a la categoría de todos los registros seleccionados")
     now = datetime.now(timezone.utc)
-    modality_changes = []
-    if request.field == "modalidad":
-        modality_changes = [
-            {"record_id": row["id"], "previous_value": row.get("modalidad") or None, "new_value": value}
-            for row in draft.get("records", []) if row.get("id") in selected
+    assignment_changes = []
+    if request.field in {"modalidad", "categoria", "equipo"}:
+        assignment_changes = [
+            {
+                "record_id": row["id"], "previous_value": row.get(request.field) or None,
+                "new_value": value,
+                **({"previous_id": row.get("equipo_id"), "new_id": selected_team["id"]}
+                   if request.field == "equipo" else {}),
+            }
+            for row in selected_rows
         ]
+    record_updates = {"records.$[row]." + request.field: value}
+    if request.field == "equipo" and selected_team:
+        record_updates["records.$[row].equipo_id"] = selected_team["id"]
     await db.import_staging.update_one(
         {"id": draft_id},
         {"$set": {
-            "records.$[row]." + request.field: value,
+            **record_updates,
             **({"records.$[row].suggestion_confirmed": True} if request.field == "modalidad" else {}),
             "incidents.$[issue].resolution": "corrected", "updated_at": now,
             "expires_at": expiry(_staging_ttl_hours()),
         }, "$push": {"audit": audit_event(_staging_actor(), "bulk_updated", {
             "field": request.field, "records": len(selected),
-            **({"changes": modality_changes} if modality_changes else {}),
+            **({"changes": assignment_changes} if assignment_changes else {}),
         })}},
         array_filters=[{"row.id": {"$in": list(selected)}}, {"issue.record_id": {"$in": list(selected)}, "issue.field": request.field}],
     )

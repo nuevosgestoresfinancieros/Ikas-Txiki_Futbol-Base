@@ -102,7 +102,9 @@ def test_individual_modality_change_is_catalog_validated_and_audited(monkeypatch
     token = current_user_context.set({"id": "admin-safe", "role": "admin", "active": True})
     try:
         result = run(server.update_staging_record(
-            "draft-safe", "row-1", server.StagingRecordUpdate(field="modalidad", value="F7"),
+            "draft-safe", "row-1", server.StagingRecordUpdate(
+                field="modalidad", value="F7", confirm_suggestion=True,
+            ),
         ))
     finally:
         current_user_context.reset(token)

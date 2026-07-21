@@ -176,6 +176,7 @@ def draft_summary(draft: Mapping[str, Any]) -> dict:
     ]
     blocking_incidents = [item for item in pending_incidents if item.get("blocking")]
     missing_team = sum(1 for row in active if not row.get("equipo"))
+    missing_category = sum(1 for row in active if not row.get("categoria"))
     missing_modality = sum(1 for row in active if row.get("modalidad") not in {"F7", "F11"})
     october = sum(1 for row in active if row.get("selected_october"))
     capacities = team_capacities(active)
@@ -193,6 +194,7 @@ def draft_summary(draft: Mapping[str, Any]) -> dict:
         "rows_received": len(draft.get("records", [])),
         "unique_expected": len(active) - (predicted_duplicates if unresolved_duplicates else 0),
         "duplicates_pending": unresolved_duplicates, "missing_team": missing_team,
+        "missing_category": missing_category,
         "missing_modality": missing_modality, "incidents_pending": len(pending_incidents),
         "october_selected": october, "october_required": 0 if historical else 54, "teams_over_capacity": capacity_over,
         "preparation_percent": round(complete_steps / 6 * 100), "blocking_count": blockers,

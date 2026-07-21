@@ -1,4 +1,4 @@
-import { activeModalitiesFromApi, applyPreparationFilterChange, canApplyPreparationBulk, canFinalizeDraft, clearPreparationSelection, filterPreparationRecords, historicalReviewCounts, isHistoricalDraft, modalityOptionLabel, preparationProgressLabel, selectedOctoberIds, selectVisiblePreparationRecords } from "./importPreparationView";
+import { activeModalitiesFromApi, activeTeamsFromApi, applyPreparationFilterChange, canApplyPreparationBulk, canFinalizeDraft, clearPreparationSelection, existingCategoriesFromApi, filterPreparationRecords, historicalReviewCounts, isHistoricalDraft, modalityOptionLabel, preparationProgressLabel, selectedOctoberIds, selectVisiblePreparationRecords, teamsForCategory } from "./importPreparationView";
 
 const records = [
   { id: "one", nombre: "Ane", apellidos: "Ficticia", categoria: "Alevín", equipo: "F7 A", selected_october: true },
@@ -48,6 +48,29 @@ test("renders modality names from the API in Spanish and Basque", () => {
 test("loads only active modality options from the API payload", () => {
   const payload = [{ code: "F7", active: true }, { code: "F11", active: false }];
   expect(activeModalitiesFromApi(payload)).toEqual([{ code: "F7", active: true }]);
+});
+
+test("loads existing categories and active teams from API payloads", () => {
+  expect(existingCategoriesFromApi([{ name: "Alevín" }, { min_age: 8 }])).toEqual(["Alevín"]);
+  const teams = [
+    { id: "a", nombre: "A", categoria: "Alevín", estado: "activo" },
+    { id: "b", nombre: "B", categoria: "Infantil", estado: "cerrado" },
+  ];
+  expect(activeTeamsFromApi(teams)).toEqual([teams[0]]);
+  expect(teamsForCategory(teams, "Alevín")).toEqual([teams[0]]);
+  expect(teamsForCategory(teams, "Infantil")).toEqual([]);
+});
+
+test("category and team assignment require valid compatible API values", () => {
+  const categories = ["Alevín", "Infantil"];
+  const teams = [{ id: "team-a", nombre: "A", categoria: "Alevín", estado: "activo" }];
+  const selectedRecords = [{ id: "one", categoria: "Alevín" }, { id: "two", categoria: "Infantil" }];
+  expect(canApplyPreparationBulk(["one"], { field: "categoria", value: "Alevín" }, [], categories)).toBe(true);
+  expect(canApplyPreparationBulk(["one"], { field: "categoria", value: "Inventada" }, [], categories)).toBe(false);
+  expect(canApplyPreparationBulk(["one"], { field: "equipo", value: "team-a" }, [], categories, teams, selectedRecords)).toBe(true);
+  expect(canApplyPreparationBulk(["two"], { field: "equipo", value: "team-a" }, [], categories, teams, selectedRecords)).toBe(false);
+  expect(canApplyPreparationBulk(["one"], { field: "equipo", value: "manipulated" }, [], categories, teams, selectedRecords)).toBe(false);
+  expect(canApplyPreparationBulk(["one"], { field: "equipo", value: "legacy free text" }, [], [], [], selectedRecords, false)).toBe(true);
 });
 
 test.each([
