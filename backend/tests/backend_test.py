@@ -1,18 +1,8 @@
 """Backend API tests for Ikas-Txiki Manager"""
-import os
 import pytest
-import requests
 from datetime import date
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/") or "https://ikas-futbol-base.preview.emergentagent.com"
-API = f"{BASE_URL}/api"
-
-
-@pytest.fixture(scope="module")
-def session():
-    s = requests.Session()
-    s.headers.update({"Content-Type": "application/json"})
-    return s
+API = "/api"
 
 
 @pytest.fixture(scope="module")
@@ -209,6 +199,13 @@ class TestCallups:
         c = next(x for x in r.json() if x["id"] == created_ids["callups"][0])
         assert c["num_convocados"] == 1
 
+    def test_callup_pdf_is_vector_document(self, session, created_ids):
+        r = session.get(f"{API}/callups/{created_ids['callups'][0]}/pdf")
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("application/pdf")
+        assert r.content.startswith(b"%PDF-")
+        assert len(r.content) > 2_000
+
 
 # ---------- Payments ----------
 class TestPayments:
@@ -255,6 +252,13 @@ class TestAuthorizations:
         r = session.get(f"{API}/authorizations")
         a = next(x for x in r.json() if x["id"] == created_ids["authorizations"][0])
         assert "TEST_Iker" in a["player_nombre"]
+
+    def test_authorization_pdf_is_complete_document(self, session, created_ids):
+        r = session.get(f"{API}/authorizations/{created_ids['authorizations'][0]}/pdf")
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("application/pdf")
+        assert r.content.startswith(b"%PDF-")
+        assert len(r.content) > 3_000
 
 
 # ---------- Settings ----------

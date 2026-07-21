@@ -1,19 +1,9 @@
 """Backend API tests for Phase 2 modules:
 Inscriptions, Trainings, Stats, Communications, Reports & updated Dashboard.
 """
-import os
 import pytest
-import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/") or "https://ikas-futbol-base.preview.emergentagent.com"
-API = f"{BASE_URL}/api"
-
-
-@pytest.fixture(scope="module")
-def session():
-    s = requests.Session()
-    s.headers.update({"Content-Type": "application/json"})
-    return s
+API = "/api"
 
 
 @pytest.fixture(scope="module")
@@ -205,7 +195,7 @@ class TestStats:
 
 # ---------- Communications ----------
 class TestCommunications:
-    def test_create_communication_marked_sent(self, session, ctx):
+    def test_create_communication_remains_pending_without_provider(self, session, ctx):
         r = session.post(f"{API}/communications", json={
             "destinatario_tipo": "equipo", "destinatario_id": ctx["teams"][0],
             "destinatario_nombre": "TEST_Ph2 Team",
@@ -214,8 +204,9 @@ class TestCommunications:
         })
         assert r.status_code == 200, r.text
         d = r.json()
-        assert d["enviado"] is True
-        assert d["fecha_envio"]  # auto-set
+        assert d["enviado"] is False
+        assert d["estado_envio"] == "pending"
+        assert d["fecha_envio"] is None
         ctx["communications"].append(d["id"])
 
     def test_list_communications(self, session, ctx):

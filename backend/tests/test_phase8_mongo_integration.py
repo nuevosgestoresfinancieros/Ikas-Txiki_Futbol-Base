@@ -1,5 +1,7 @@
 """Integración de Fase 8 contra una base MongoDB temporal explícita."""
 import os
+import importlib
+import sys
 from pathlib import Path
 
 import pytest
@@ -9,7 +11,7 @@ MONGO_URL = os.environ.get("PHASE8_MONGO_URL")
 pytestmark = pytest.mark.skipif(not MONGO_URL, reason="requiere PHASE8_MONGO_URL temporal")
 
 
-def test_admin_import_duplicate_undo_and_non_admin_denied(monkeypatch):
+def test_admin_import_duplicate_undo_and_non_admin_denied(monkeypatch, request):
     monkeypatch.setenv("MONGO_URL", MONGO_URL)
     monkeypatch.setenv("DB_NAME", "ikas_txiki_phase8_test")
     monkeypatch.setenv("JWT_SECRET", "phase8-local-only-secret-key-000000000000")
@@ -19,7 +21,9 @@ def test_admin_import_duplicate_undo_and_non_admin_denied(monkeypatch):
 
     from fastapi.testclient import TestClient
     from pymongo import MongoClient
-    import server
+    sys.modules.pop("server", None)
+    server = importlib.import_module("server")
+    request.addfinalizer(lambda: sys.modules.pop("server", None))
 
     template = Path(server.ROOT_DIR / "templates" / "plantilla_inscripciones_2026-2027.xlsx").read_bytes()
     mongo = MongoClient(MONGO_URL)

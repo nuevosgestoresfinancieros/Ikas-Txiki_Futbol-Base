@@ -14,37 +14,37 @@ const TALLAS = ["", "2XS", "XS", "S", "M", "L", "XL", "2XL", "3XL",
 
 const TALLAS_MEDIAS = ["", "XS", "S", "M", "L", "XL", "XXL", "NO APLICA"];
 
-const Cell = ({ value, editing, onChange, type = "text", options }) => {
+const Cell = ({ value, editing, onChange, type = "text", options, label, yesLabel, noLabel }) => {
   if (!editing) {
     if (type === "bool") {
       return value
-        ? <span className="inline-flex items-center gap-1 text-emerald-600 text-xs font-medium"><Check className="h-3.5 w-3.5" />Sí</span>
-        : <span className="inline-flex items-center gap-1 text-slate-400 text-xs"><X className="h-3.5 w-3.5" />No</span>;
+        ? <span className="inline-flex items-center gap-1 text-emerald-600 text-xs font-medium"><Check className="h-3.5 w-3.5" />{yesLabel}</span>
+        : <span className="inline-flex items-center gap-1 text-slate-400 text-xs"><X className="h-3.5 w-3.5" />{noLabel}</span>;
     }
     return <span className="text-sm text-slate-700">{value || <span className="text-slate-300">—</span>}</span>;
   }
   if (type === "bool") {
     return (
-      <input type="checkbox" checked={!!value} onChange={(e) => onChange(e.target.checked)}
+      <input type="checkbox" aria-label={label} checked={!!value} onChange={(e) => onChange(e.target.checked)}
         className="h-4 w-4 rounded border-slate-300 text-primary cursor-pointer" />
     );
   }
   if (type === "date") {
     return (
-      <input type="date" value={value || ""} onChange={(e) => onChange(e.target.value)}
+      <input type="date" aria-label={label} value={value || ""} onChange={(e) => onChange(e.target.value)}
         className="w-32 rounded border border-slate-200 px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary" />
     );
   }
   if (options) {
     return (
-      <select value={value || ""} onChange={(e) => onChange(e.target.value)}
+      <select aria-label={label} value={value || ""} onChange={(e) => onChange(e.target.value)}
         className="w-28 rounded border border-slate-200 px-1 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary bg-white">
         {options.map((o) => <option key={o} value={o}>{o || "—"}</option>)}
       </select>
     );
   }
   return (
-    <input type="text" value={value || ""} onChange={(e) => onChange(e.target.value)}
+    <input type="text" aria-label={label} value={value || ""} onChange={(e) => onChange(e.target.value)}
       className="w-20 rounded border border-slate-200 px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary" />
   );
 };
@@ -95,11 +95,11 @@ const Equipment = () => {
     setSaving(true);
     try {
       await api.put(`/equipment/${playerId}`, editForm);
-      toast.success("Equipación actualizada");
+      toast.success(t("equipmentUpdated"));
       setEditingId(null);
       load();
     } catch {
-      toast.error("Error al guardar");
+      toast.error(t("equipmentSaveError"));
     }
     setSaving(false);
   };
@@ -114,14 +114,14 @@ const Equipment = () => {
 
   // Exportar CSV equipamiento
   const exportCSV = () => {
-    const headers = ["Nombre","Apellidos","Equipo","Categoría","Dorsal",
-      "Talla Camiseta","Talla Pantalón","Talla Chándal","Talla Medias","Talla Calzado",
-      "Equipación Entregada","Fecha Entrega","Observaciones"];
+    const headers = [t("name"), t("surname"), t("equipmentTeam"), t("category"), t("equipmentBib"),
+      t("equipmentShirt"), t("equipmentShorts"), t("equipmentTracksuit"), t("equipmentSocks"), t("equipmentShoes"),
+      t("equipmentDelivered"), t("equipmentDeliveryDate"), t("equipmentNotes")];
     const rows = filtered.map((p) => [
       p.nombre, p.apellidos, p.equipo_nombre, p.categoria || "", p.dorsal || "",
       p.talla_camiseta || "", p.talla_pantalon || "", p.talla_chandal || "",
       p.talla_medias || "", p.talla_calzado || "",
-      p.equipacion_entregada ? "Sí" : "No",
+      p.equipacion_entregada ? t("yes") : t("no"),
       p.fecha_entrega_equipacion || "", p.observaciones_material || ""
     ]);
     const csv = [headers, ...rows].map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
@@ -136,11 +136,11 @@ const Equipment = () => {
   return (
     <div data-testid="equipment-page">
       <PageHeader
-        title="Equipamiento"
+        title={t("equipment")}
         icon={Shirt}
         action={
           <PermissionGate resource="equipment" action="export"><Button onClick={exportCSV} variant="outline" className="h-11 px-4 gap-2">
-            <Download className="h-4 w-4" /> Exportar CSV
+            <Download className="h-4 w-4" /> {t("equipmentExport")}
           </Button></PermissionGate>
         }
       />
@@ -148,10 +148,10 @@ const Equipment = () => {
       {/* Estadísticas resumen */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
         {[
-          { label: "Total jugadores", value: total, color: "text-slate-800" },
-          { label: "Equipación entregada", value: entregadas, color: "text-emerald-600" },
-          { label: "Pendiente de entregar", value: pendientes, color: "text-amber-600" },
-          { label: "Sin talla registrada", value: sinTalla, color: "text-red-500" },
+          { label: t("equipmentTotalPlayers"), value: total, color: "text-slate-800" },
+          { label: t("equipmentDelivered"), value: entregadas, color: "text-emerald-600" },
+          { label: t("equipmentPending"), value: pendientes, color: "text-amber-600" },
+          { label: t("equipmentMissingSize"), value: sinTalla, color: "text-red-500" },
         ].map((s) => (
           <div key={s.label} className="surface-card p-4 text-center">
             <p className={`text-2xl font-bold font-heading ${s.color}`}>{s.value}</p>
@@ -163,18 +163,18 @@ const Equipment = () => {
       {/* Filtros */}
       <div className="flex flex-wrap gap-3 mb-4 items-center">
         <Filter className="h-4 w-4 text-slate-400" />
-        <select value={filterTeam} onChange={(e) => setFilterTeam(e.target.value)}
+        <select aria-label={t("equipmentTeam")} value={filterTeam} onChange={(e) => setFilterTeam(e.target.value)}
           className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30">
-          <option value="">Todos los equipos</option>
+          <option value="">{t("equipmentAllTeams")}</option>
           {teamOptions.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
         </select>
-        <select value={filterEntregada} onChange={(e) => setFilterEntregada(e.target.value)}
+        <select aria-label={t("equipmentDelivered")} value={filterEntregada} onChange={(e) => setFilterEntregada(e.target.value)}
           className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30">
-          <option value="">Todas las entregas</option>
-          <option value="si">Entregada</option>
-          <option value="no">Pendiente</option>
+          <option value="">{t("equipmentAllDeliveries")}</option>
+          <option value="si">{t("delivered")}</option>
+          <option value="no">{t("pendingDelivery")}</option>
         </select>
-        <span className="text-xs text-slate-400 ml-auto">{filtered.length} jugadores</span>
+        <span className="text-xs text-slate-400 ml-auto">{filtered.length} {t("equipmentPlayerCount")}</span>
       </div>
 
       {/* Tabla */}
@@ -183,23 +183,23 @@ const Equipment = () => {
           <table className="w-full text-sm min-w-[900px]">
             <thead className="bg-slate-50 text-left text-xs font-bold uppercase tracking-wider text-slate-500 sticky top-0">
               <tr>
-                <th className="px-4 py-3 min-w-[160px]">Jugador</th>
-                <th className="px-3 py-3">Equipo</th>
-                <th className="px-3 py-3">Dorsal</th>
-                <th className="px-3 py-3">Camiseta</th>
-                <th className="px-3 py-3">Pantalón</th>
-                <th className="px-3 py-3">Chándal</th>
-                <th className="px-3 py-3">Medias</th>
-                <th className="px-3 py-3">Calzado</th>
-                <th className="px-3 py-3">Entregada</th>
-                <th className="px-3 py-3">Fecha entrega</th>
-                <th className="px-3 py-3 min-w-[140px]">Observaciones</th>
-                <th className="px-3 py-3 text-right">Acciones</th>
+                <th className="px-4 py-3 min-w-[160px]">{t("equipmentPlayer")}</th>
+                <th className="px-3 py-3">{t("equipmentTeam")}</th>
+                <th className="px-3 py-3">{t("equipmentBib")}</th>
+                <th className="px-3 py-3">{t("equipmentShirt")}</th>
+                <th className="px-3 py-3">{t("equipmentShorts")}</th>
+                <th className="px-3 py-3">{t("equipmentTracksuit")}</th>
+                <th className="px-3 py-3">{t("equipmentSocks")}</th>
+                <th className="px-3 py-3">{t("equipmentShoes")}</th>
+                <th className="px-3 py-3">{t("delivered")}</th>
+                <th className="px-3 py-3">{t("equipmentDeliveryDate")}</th>
+                <th className="px-3 py-3 min-w-[140px]">{t("equipmentNotes")}</th>
+                <th className="px-3 py-3 text-right">{t("equipmentActions")}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.length === 0 ? (
-                <tr><td colSpan={12} className="px-4 py-10 text-center text-slate-400">No hay jugadores con los filtros seleccionados</td></tr>
+                <tr><td colSpan={12} className="px-4 py-10 text-center text-slate-400">{t("equipmentNoResults")}</td></tr>
               ) : filtered.map((p) => {
                 const isEditing = editingId === p.id;
                 const row = isEditing ? editForm : p;
@@ -211,33 +211,33 @@ const Equipment = () => {
                     </td>
                     <td className="px-3 py-2.5 text-xs text-slate-600">{p.equipo_nombre}</td>
                     <td className="px-3 py-2.5">
-                      <Cell value={row.dorsal} editing={isEditing} onChange={setField("dorsal")} />
+                      <Cell label={t("equipmentBib")} value={row.dorsal} editing={isEditing} onChange={setField("dorsal")} />
                     </td>
                     <td className="px-3 py-2.5">
-                      <Cell value={row.talla_camiseta} editing={isEditing} onChange={setField("talla_camiseta")} options={isEditing ? TALLAS : undefined} />
+                      <Cell label={t("equipmentShirt")} value={row.talla_camiseta} editing={isEditing} onChange={setField("talla_camiseta")} options={isEditing ? TALLAS : undefined} />
                     </td>
                     <td className="px-3 py-2.5">
-                      <Cell value={row.talla_pantalon} editing={isEditing} onChange={setField("talla_pantalon")} options={isEditing ? TALLAS : undefined} />
+                      <Cell label={t("equipmentShorts")} value={row.talla_pantalon} editing={isEditing} onChange={setField("talla_pantalon")} options={isEditing ? TALLAS : undefined} />
                     </td>
                     <td className="px-3 py-2.5">
-                      <Cell value={row.talla_chandal} editing={isEditing} onChange={setField("talla_chandal")} options={isEditing ? TALLAS : undefined} />
+                      <Cell label={t("equipmentTracksuit")} value={row.talla_chandal} editing={isEditing} onChange={setField("talla_chandal")} options={isEditing ? TALLAS : undefined} />
                     </td>
                     <td className="px-3 py-2.5">
-                      <Cell value={row.talla_medias} editing={isEditing} onChange={setField("talla_medias")} options={isEditing ? TALLAS_MEDIAS : undefined} />
+                      <Cell label={t("equipmentSocks")} value={row.talla_medias} editing={isEditing} onChange={setField("talla_medias")} options={isEditing ? TALLAS_MEDIAS : undefined} />
                     </td>
                     <td className="px-3 py-2.5">
-                      <Cell value={row.talla_calzado} editing={isEditing} onChange={setField("talla_calzado")} />
+                      <Cell label={t("equipmentShoes")} value={row.talla_calzado} editing={isEditing} onChange={setField("talla_calzado")} />
                     </td>
                     <td className="px-3 py-2.5">
-                      <Cell value={row.equipacion_entregada} editing={isEditing} onChange={setField("equipacion_entregada")} type="bool" />
+                      <Cell label={t("equipmentDelivered")} yesLabel={t("yes")} noLabel={t("no")} value={row.equipacion_entregada} editing={isEditing} onChange={setField("equipacion_entregada")} type="bool" />
                     </td>
                     <td className="px-3 py-2.5">
-                      <Cell value={row.fecha_entrega_equipacion} editing={isEditing} onChange={setField("fecha_entrega_equipacion")} type="date" />
+                      <Cell label={t("equipmentDeliveryDate")} value={row.fecha_entrega_equipacion} editing={isEditing} onChange={setField("fecha_entrega_equipacion")} type="date" />
                     </td>
                     <td className="px-3 py-2.5">
                       {isEditing ? (
                         <input value={editForm.observaciones_material} onChange={(e) => setField("observaciones_material")(e.target.value)}
-                          placeholder="Observaciones…"
+                          aria-label={t("equipmentNotes")} placeholder={`${t("equipmentNotes")}…`}
                           className="w-full rounded border border-slate-200 px-1.5 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary" />
                       ) : (
                         <span className="text-xs text-slate-500">{p.observaciones_material || <span className="text-slate-300">—</span>}</span>
@@ -269,7 +269,7 @@ const Equipment = () => {
 
       {/* Leyenda */}
       <p className="text-xs text-slate-400 mt-3 text-center">
-        Clic en ✏️ para editar la equipación de un jugador. Los cambios se guardan en la ficha del jugador.
+        {t("equipmentEditHint")}
       </p>
     </div>
   );

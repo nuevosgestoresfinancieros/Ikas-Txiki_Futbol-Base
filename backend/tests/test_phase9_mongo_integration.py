@@ -1,6 +1,8 @@
 """Flujo completo de preparación contra MongoDB temporal y datos ficticios."""
 import io
+import importlib
 import os
+import sys
 
 import pytest
 from openpyxl import Workbook
@@ -26,7 +28,7 @@ def fictitious_workbook() -> bytes:
     buffer = io.BytesIO(); workbook.save(buffer); return buffer.getvalue()
 
 
-def test_staging_admin_flow_permissions_isolation_and_delete(monkeypatch):
+def test_staging_admin_flow_permissions_isolation_and_delete(monkeypatch, request):
     db_name = "ikas_txiki_phase9_test"
     monkeypatch.setenv("MONGO_URL", MONGO_URL)
     monkeypatch.setenv("DB_NAME", db_name)
@@ -38,7 +40,9 @@ def test_staging_admin_flow_permissions_isolation_and_delete(monkeypatch):
 
     from fastapi.testclient import TestClient
     from pymongo import MongoClient
-    import server
+    sys.modules.pop("server", None)
+    server = importlib.import_module("server")
+    request.addfinalizer(lambda: sys.modules.pop("server", None))
 
     mongo = MongoClient(MONGO_URL); temp_db = mongo[db_name]; mongo.drop_database(db_name)
     workbook_content = fictitious_workbook()

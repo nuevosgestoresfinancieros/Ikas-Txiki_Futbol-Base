@@ -2,19 +2,10 @@
 seed-demo, clear-all, export-excel, import-excel.
 Destructive: wipes DB. Re-seeds at the end.
 """
-import os
 import io
 import pytest
-import requests
 
-BASE_URL = (os.environ.get("REACT_APP_BACKEND_URL") or "https://ikas-futbol-base.preview.emergentagent.com").rstrip("/")
-API = f"{BASE_URL}/api"
-
-
-@pytest.fixture(scope="module")
-def session():
-    s = requests.Session()
-    return s
+API = "/api"
 
 
 # ---------- Seed demo ----------
