@@ -12,10 +12,11 @@ from copy import deepcopy
 from datetime import datetime
 from typing import Any, Iterable, Literal, Mapping, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 MODALITY_CODE_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,15}$")
+COMPATIBILITY_CODES = frozenset({"F7", "F11"})
 
 
 def normalize_alias(value: Any) -> str:
@@ -74,6 +75,61 @@ class NormalizedModality(BaseModel):
     matched_alias: Optional[str] = None
 
 
+class ModalityCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    code: str
+    name_es: str = Field(min_length=1, max_length=80)
+    name_eu: str = Field(min_length=1, max_length=80)
+    active: bool = True
+    sort_order: int = Field(ge=0, le=10_000)
+    aliases: list[str] = Field(default_factory=list)
+    max_players: int = Field(gt=0, le=100)
+
+    @field_validator("code")
+    @classmethod
+    def validate_supported_code(cls, value: str) -> str:
+        code = value.strip().upper()
+        if code not in COMPATIBILITY_CODES:
+            raise ValueError("En esta fase solo están autorizadas F7 y F11")
+        return code
+
+
+class ModalityUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    name_es: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    name_eu: Optional[str] = Field(default=None, min_length=1, max_length=80)
+    active: Optional[bool] = None
+    sort_order: Optional[int] = Field(default=None, ge=0, le=10_000)
+    aliases: Optional[list[str]] = None
+    max_players: Optional[int] = Field(default=None, gt=0, le=100)
+
+    @model_validator(mode="after")
+    def reject_empty_update(self):
+        if not self.model_fields_set:
+            raise ValueError("La actualización de modalidad está vacía")
+        return self
+
+
+class ModalityStatusRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    active: bool
+
+
+class ModalityReorderRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    codes: list[str] = Field(min_length=1)
+
+    @field_validator("codes")
+    @classmethod
+    def normalize_codes(cls, values: list[str]) -> list[str]:
+        codes = [value.strip().upper() for value in values]
+        if len(codes) != len(set(codes)):
+            raise ValueError("El orden contiene códigos duplicados")
+        return codes
+
+
 DEFAULT_MODALITIES = (
     ModalityDefinition(
         code="F7", name_es="Fútbol 7", name_eu="7ko futbola", active=True,
@@ -109,12 +165,23 @@ def validate_catalog(entries: Iterable[ModalityDefinition | Mapping[str, Any]]) 
     return sorted(catalog, key=lambda item: (item.sort_order, item.code))
 
 
+def validate_compatibility_catalog(
+    entries: Iterable[ModalityDefinition | Mapping[str, Any]],
+) -> list[ModalityDefinition]:
+    """Limita temporalmente el catálogo administrable a F7 y F11."""
+    catalog = validate_catalog(entries)
+    unsupported = sorted({entry.code for entry in catalog} - COMPATIBILITY_CODES)
+    if unsupported:
+        raise ValueError(f"Modalidades no autorizadas en esta fase: {', '.join(unsupported)}")
+    return catalog
+
+
 def catalog_from_settings(settings: Optional[Mapping[str, Any]] = None) -> list[ModalityDefinition]:
     """Lee ``settings.modalities`` sin persistir ni completar el documento recibido."""
     raw = (settings or {}).get("modalities")
     if raw is None:
         return [item.model_copy(deep=True) for item in DEFAULT_MODALITIES]
-    return validate_catalog(deepcopy(raw))
+    return validate_compatibility_catalog(deepcopy(raw))
 
 
 def normalize_modality(

@@ -2,8 +2,9 @@ import pytest
 from pydantic import ValidationError
 
 from modality_service import (
-    DEFAULT_MODALITIES, ModalityDefinition, active_modalities, catalog_from_settings,
-    modality_capacity, normalize_modality, validate_catalog,
+    DEFAULT_MODALITIES, ModalityCreateRequest, ModalityDefinition, active_modalities,
+    catalog_from_settings, modality_capacity, normalize_modality, validate_catalog,
+    validate_compatibility_catalog,
 )
 
 
@@ -58,6 +59,18 @@ def test_alias_cannot_belong_to_two_modalities():
 def test_duplicate_codes_are_rejected():
     with pytest.raises(ValueError, match="Código de modalidad duplicado"):
         validate_catalog([DEFAULT_MODALITIES[0], DEFAULT_MODALITIES[0].model_copy(deep=True)])
+
+
+def test_phase_rejects_modalities_other_than_f7_and_f11():
+    unsupported = DEFAULT_MODALITIES[0].model_copy(update={"code": "F8"})
+
+    with pytest.raises(ValueError, match="no autorizadas"):
+        validate_compatibility_catalog([unsupported])
+    with pytest.raises(ValidationError, match="solo están autorizadas F7 y F11"):
+        ModalityCreateRequest(
+            code="F8", name_es="Fútbol 8", name_eu="8ko futbola",
+            aliases=["F8"], sort_order=30, max_players=20,
+        )
 
 
 def test_empty_catalog_is_rejected():

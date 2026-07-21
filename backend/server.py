@@ -65,6 +65,11 @@ from historical_import_adapter import (
     HISTORICAL_FORMAT, historical_quality_summary, historical_simulation,
     parse_historical_excel, prepare_historical_staging,
 )
+from modality_service import (
+    ModalityCreateRequest, ModalityDefinition, ModalityReorderRequest,
+    ModalityStatusRequest, ModalityUpdateRequest, catalog_from_settings,
+    validate_compatibility_catalog,
+)
 
 
 ROOT_DIR = Path(__file__).parent
@@ -2706,6 +2711,12 @@ class Settings(BaseModel):
     cuota_base: Optional[float] = 0
     descuento_hermano: Optional[float] = 0
     attendance_alert_threshold: int = Field(default=3, ge=1, le=20)
+    modalities: List[ModalityDefinition] = Field(default_factory=lambda: catalog_from_settings({}))
+
+    @field_validator("modalities")
+    @classmethod
+    def validate_modalities(cls, values: List[ModalityDefinition]) -> List[ModalityDefinition]:
+        return validate_compatibility_catalog(values)
 
 
 SETTINGS_ID = "global"
@@ -2715,21 +2726,125 @@ SETTINGS_ID = "global"
 async def get_settings():
     doc = await db.settings.find_one({"id": SETTINGS_ID}, {"_id": 0})
     if not doc:
-        default = Settings().model_dump()
+        default = Settings().model_dump(mode="json")
+        default_modalities = default.pop("modalities")
         default["id"] = SETTINGS_ID
         default["categories"] = CATEGORIES
         await db.settings.insert_one(dict(default))
+        default["modalities"] = default_modalities
         return clean(default)
     doc["categories"] = CATEGORIES
+    doc["modalities"] = [entry.model_dump(mode="json") for entry in catalog_from_settings(doc)]
     return doc
 
 
 @api_router.put("/settings")
 async def update_settings(settings: Settings):
-    data = settings.model_dump()
+    data = settings.model_dump(mode="json")
     data["id"] = SETTINGS_ID
     await db.settings.update_one({"id": SETTINGS_ID}, {"$set": data}, upsert=True)
     return await get_settings()
+
+
+async def _load_modality_catalog() -> list[ModalityDefinition]:
+    settings = await db.settings.find_one({"id": SETTINGS_ID}, {"_id": 0, "modalities": 1}) or {}
+    return catalog_from_settings(settings)
+
+
+async def _save_modality_catalog(catalog: List[ModalityDefinition]) -> None:
+    payload = [entry.model_dump(mode="json") for entry in validate_compatibility_catalog(catalog)]
+    await db.settings.update_one(
+        {"id": SETTINGS_ID},
+        {"$set": {"modalities": payload, "updated_at": now_iso()}},
+        upsert=True,
+    )
+
+
+async def _modality_usage(code: str) -> Dict[str, int]:
+    query = {"modalidad": code}
+    usage = {
+        "teams": await db.teams.count_documents(query),
+        "inscriptions": await db.inscriptions.count_documents(query),
+        "players": await db.players.count_documents(query),
+        "staging_records": await db.import_staging.count_documents({"records.modalidad": code, "status": "draft"}),
+    }
+    return {key: value for key, value in usage.items() if value}
+
+
+def _modality_actor() -> Dict[str, Any]:
+    return current_user_context.get() or {}
+
+
+def _stamp_modality(entry: ModalityDefinition, actor: Dict[str, Any]) -> ModalityDefinition:
+    return entry.model_copy(update={"updated_at": datetime.now(timezone.utc), "updated_by": actor.get("id")})
+
+
+@api_router.get("/modalities")
+async def get_modalities(include_inactive: bool = False):
+    actor = _modality_actor()
+    catalog = await _load_modality_catalog()
+    if include_inactive and actor.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Solo el administrador puede consultar modalidades inactivas")
+    visible = catalog if include_inactive else [entry for entry in catalog if entry.active]
+    return [entry.model_dump(mode="json") for entry in visible]
+
+
+@api_router.post("/modalities", status_code=201)
+async def create_modality(request: ModalityCreateRequest):
+    actor = _modality_actor()
+    catalog = await _load_modality_catalog()
+    if any(entry.code == request.code for entry in catalog):
+        raise HTTPException(status_code=409, detail="El código de modalidad ya existe")
+    entry = _stamp_modality(ModalityDefinition(**request.model_dump()), actor)
+    try:
+        updated = validate_compatibility_catalog([*catalog, entry])
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await _save_modality_catalog(updated)
+    return entry.model_dump(mode="json")
+
+
+@api_router.put("/modalities/{code}")
+async def update_modality(code: str, request: ModalityUpdateRequest):
+    actor = _modality_actor()
+    normalized_code = code.strip().upper()
+    catalog = await _load_modality_catalog()
+    current = next((entry for entry in catalog if entry.code == normalized_code), None)
+    if not current:
+        raise HTTPException(status_code=404, detail="Modalidad no encontrada")
+    changes = request.model_dump(exclude_none=True)
+    if changes.get("active") is False and current.active:
+        usage = await _modality_usage(normalized_code)
+        if usage:
+            raise HTTPException(status_code=409, detail={"message": "La modalidad está en uso y no puede desactivarse", "usage": usage})
+    try:
+        candidate_data = current.model_dump()
+        candidate_data.update(changes)
+        candidate = _stamp_modality(ModalityDefinition.model_validate(candidate_data), actor)
+        updated = validate_compatibility_catalog(
+            [candidate if entry.code == normalized_code else entry for entry in catalog]
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    await _save_modality_catalog(updated)
+    return candidate.model_dump(mode="json")
+
+
+@api_router.patch("/modalities/{code}/status")
+async def set_modality_status(code: str, request: ModalityStatusRequest):
+    return await update_modality(code, ModalityUpdateRequest(active=request.active))
+
+
+@api_router.post("/modalities/reorder")
+async def reorder_modalities(request: ModalityReorderRequest):
+    actor = _modality_actor()
+    catalog = await _load_modality_catalog()
+    if set(request.codes) != {entry.code for entry in catalog}:
+        raise HTTPException(status_code=422, detail="El orden debe incluir exactamente todo el catálogo")
+    positions = {code: (index + 1) * 10 for index, code in enumerate(request.codes)}
+    updated = [_stamp_modality(entry.model_copy(update={"sort_order": positions[entry.code]}), actor) for entry in catalog]
+    await _save_modality_catalog(updated)
+    return [entry.model_dump(mode="json") for entry in validate_compatibility_catalog(updated)]
 
 
 @api_router.get("/categories")
