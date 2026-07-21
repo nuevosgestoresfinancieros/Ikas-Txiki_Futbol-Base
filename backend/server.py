@@ -70,6 +70,11 @@ from modality_service import (
     ModalityStatusRequest, ModalityUpdateRequest, catalog_from_settings,
     normalize_modality, validate_compatibility_catalog,
 )
+from report_service import (
+    ReportValidationError, build_attendance as build_attendance_report,
+    build_roster as build_roster_report, catalog_for_role, paginate,
+    safe_rows as safe_report_rows, validate_report_filters,
+)
 
 
 ROOT_DIR = Path(__file__).parent
@@ -2976,6 +2981,99 @@ async def reorder_modalities(request: ModalityReorderRequest):
 @api_router.get("/categories")
 async def get_categories():
     return CATEGORIES
+
+
+# ================= PROFESSIONAL REPORTS =================
+class ReportPreviewRequest(BaseModel):
+    report_id: str
+    filters: Dict[str, Any] = Field(default_factory=dict)
+    page: int = Field(default=1, ge=1)
+    page_size: int = Field(default=25, ge=1, le=100)
+
+
+async def report_context() -> dict:
+    """Carga exclusivamente documentos ya acotados por el usuario autenticado."""
+    settings = await db.settings.find_one({"id": SETTINGS_ID}, {"_id": 0}) or {}
+    async def projected(coll: str, fields: set[str]) -> list[dict]:
+        projection = {field: 1 for field in fields}
+        projection["_id"] = 0
+        scope = await scope_for_collection(coll)
+        return await db[coll].find(scope or {}, projection).to_list(5000)
+
+    return {
+        "players": await projected("players", {"id", "nombre", "apellidos", "equipo_id", "categoria", "modalidad", "dorsal", "estado"}),
+        "teams": await projected("teams", {"id", "nombre", "categoria", "modalidad", "temporada", "estado", "active"}),
+        "trainings": await projected("trainings", {"id", "equipo_id", "fecha", "asistencia.player_id", "asistencia.estado"}),
+        "modalities": catalog_from_settings(settings),
+    }
+
+
+def report_filter_options(context: dict) -> dict:
+    players, teams = context["players"], context["teams"]
+    return {
+        "seasons": sorted({team.get("temporada") for team in teams if team.get("temporada")}),
+        "categories": sorted({value for value in [
+            *(team.get("categoria") for team in teams), *(player.get("categoria") for player in players),
+        ] if value}),
+        "teams": sorted([{"id": team.get("id"), "name": team.get("nombre"), "category": team.get("categoria"),
+                          "season": team.get("temporada"), "modality": normalize_modality(team.get("modalidad"), context["modalities"]).code}
+                         for team in teams if team.get("id")], key=lambda item: (item.get("name") or "").casefold()),
+        "modalities": [{"code": item.code, "name_es": item.name_es, "name_eu": item.name_eu}
+                       for item in context["modalities"] if item.active],
+        "players": sorted([{"id": player.get("id"), "name": f"{player.get('nombre') or ''} {player.get('apellidos') or ''}".strip(),
+                            "team_id": player.get("equipo_id"), "category": player.get("categoria")}
+                           for player in players if player.get("id")], key=lambda item: item["name"].casefold()),
+        "states": sorted({player.get("estado") for player in players if player.get("estado")}),
+    }
+
+
+def enforce_report_filters(filters: dict, options: dict) -> None:
+    protected = {
+        "team_id": {item["id"] for item in options["teams"]},
+        "player_id": {item["id"] for item in options["players"]},
+        "category": set(options["categories"]), "season": set(options["seasons"]),
+        "modality": {item["code"] for item in options["modalities"]}, "status": set(options["states"]),
+    }
+    for key, allowed in protected.items():
+        if filters.get(key) and filters[key] not in allowed:
+            raise HTTPException(status_code=403, detail="El filtro solicitado no pertenece a tu ámbito")
+    for key in ("date_from", "date_to"):
+        if filters.get(key):
+            try:
+                date.fromisoformat(str(filters[key]))
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail="Fecha de informe no válida") from exc
+
+
+@api_router.get("/reports/catalog")
+async def get_reports_catalog():
+    actor = current_user_context.get() or {}
+    context = await report_context()
+    return {"reports": catalog_for_role(str(actor.get("role"))), "filter_options": report_filter_options(context)}
+
+
+@api_router.post("/reports/preview")
+async def preview_report(request: ReportPreviewRequest):
+    actor = current_user_context.get() or {}
+    allowed_reports = {item["id"] for item in catalog_for_role(str(actor.get("role")))}
+    if request.report_id not in allowed_reports:
+        raise HTTPException(status_code=403, detail="Informe no autorizado")
+    try:
+        filters = validate_report_filters(request.report_id, request.filters)
+    except ReportValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    context = await report_context()
+    options = report_filter_options(context)
+    enforce_report_filters(filters, options)
+    if request.report_id == "roster":
+        rows, totals = build_roster_report(context["players"], context["teams"], filters, context["modalities"])
+    else:
+        rows, totals = build_attendance_report(context["players"], context["teams"], context["trainings"], filters, str(actor.get("role")))
+    rows = safe_report_rows(rows)
+    page_rows, pagination = paginate(rows, request.page, request.page_size)
+    definition = next(item for item in catalog_for_role(str(actor.get("role"))) if item["id"] == request.report_id)
+    return {"report": definition, "filters": filters, "rows": page_rows, "totals": totals,
+            "pagination": pagination, "filter_options": options}
 
 
 @api_router.get("/compute-category")
