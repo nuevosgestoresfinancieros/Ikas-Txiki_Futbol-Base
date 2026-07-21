@@ -61,6 +61,10 @@ from import_staging_service import (
     ALLOWED_RECORD_FIELDS, audit_event, draft_summary, effective_records, expiry, field_is_valid,
     prepare_records, public_draft, valid_iban as staging_valid_iban,
 )
+from historical_import_adapter import (
+    HISTORICAL_FORMAT, historical_quality_summary, historical_simulation,
+    parse_historical_excel, prepare_historical_staging,
+)
 
 
 ROOT_DIR = Path(__file__).parent
@@ -1691,6 +1695,10 @@ class StagingDuplicateDecision(BaseModel):
     decision: str
 
 
+class StagingHistoricalReview(BaseModel):
+    decision: str
+
+
 class StagingOctoberSelection(BaseModel):
     record_ids: List[str]
 
@@ -2004,11 +2012,20 @@ async def create_import_staging(file: UploadFile = File(...), season: str = Form
     previous = await db.import_staging.find_one({"source_sha256": digest, "season": season, "status": "draft"})
     if previous:
         return public_draft(previous)
+    parsed_historical = None
     try:
-        rows = parse_excel(content)
+        try:
+            parsed_historical = parse_historical_excel(content, new_id)
+        except ImportValidationError as historical_error:
+            if "hoja histórica" not in str(historical_error):
+                raise
+            rows = parse_excel(content)
     except ImportValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    records, duplicates, incidents = prepare_records(rows, JWT_SECRET)
+    if parsed_historical:
+        records, duplicates, incidents = prepare_historical_staging(parsed_historical, JWT_SECRET)
+    else:
+        records, duplicates, incidents = prepare_records(rows, JWT_SECRET)
     now = datetime.now(timezone.utc)
     draft = {
         "id": new_id(), "season": season, "status": "draft", "source_sha256": digest,
@@ -2017,6 +2034,14 @@ async def create_import_staging(file: UploadFile = File(...), season: str = Form
         "created_by_user_id": _staging_actor(), "created_at": now, "updated_at": now,
         "expires_at": expiry(_staging_ttl_hours()),
     }
+    if parsed_historical:
+        existing_players = await db.players.find({}, {"_id": 0, "nombre": 1, "apellidos": 1, "fecha_nacimiento": 1}).to_list(10000)
+        draft.update({
+            "source_format": HISTORICAL_FORMAT, "auxiliary_rows": parsed_historical["auxiliary_rows"],
+            "fuzzy_matches": parsed_historical["fuzzy_matches"], "family_candidates": parsed_historical["family_candidates"],
+            "quality": historical_quality_summary(parsed_historical),
+            "simulation": historical_simulation(parsed_historical, existing_players),
+        })
     await db.import_staging.insert_one(draft)
     return public_draft(draft)
 
@@ -2031,6 +2056,15 @@ async def list_import_staging():
 @api_router.get("/inscription-imports/staging/{draft_id}")
 async def get_import_staging(draft_id: str):
     return public_draft(await _staging_doc(draft_id))
+
+
+@api_router.get("/inscription-imports/staging/{draft_id}/simulation")
+async def get_import_staging_simulation(draft_id: str):
+    draft = await _staging_doc(draft_id)
+    if draft.get("source_format") != HISTORICAL_FORMAT:
+        raise HTTPException(status_code=409, detail="El borrador no utiliza el adaptador histórico")
+    return {"quality": draft.get("quality", {}), "simulation": draft.get("simulation", {}),
+            "summary": draft_summary(draft)}
 
 
 @api_router.patch("/inscription-imports/staging/{draft_id}/records/{record_id}")
@@ -2120,6 +2154,31 @@ async def resolve_staging_duplicate(draft_id: str, group_id: str, request: Stagi
     return public_draft(await _staging_doc(draft_id))
 
 
+@api_router.post("/inscription-imports/staging/{draft_id}/reviews/{kind}/{group_id}")
+async def resolve_historical_review(draft_id: str, kind: str, group_id: str, request: StagingHistoricalReview):
+    config = {
+        "fuzzy": ("fuzzy_matches", {"same_person", "different_people"}),
+        "family": ("family_candidates", {"confirm_shared", "keep_separate"}),
+    }
+    if kind not in config or request.decision not in config.get(kind, (None, set()))[1]:
+        raise HTTPException(status_code=422, detail="Decisión de revisión histórica no válida")
+    field, _ = config[kind]
+    draft = await _staging_doc(draft_id)
+    if draft.get("source_format") != HISTORICAL_FORMAT:
+        raise HTTPException(status_code=409, detail="El borrador no utiliza el adaptador histórico")
+    if not any(item.get("id") == group_id for item in draft.get(field, [])):
+        raise HTTPException(status_code=404, detail="Grupo de revisión no encontrado")
+    result = await db.import_staging.update_one(
+        {"id": draft_id, f"{field}.id": group_id},
+        {"$set": {f"{field}.$.decision": request.decision, "updated_at": datetime.now(timezone.utc),
+                  "expires_at": expiry(_staging_ttl_hours())},
+         "$push": {"audit": audit_event(_staging_actor(), "historical_review", {"kind": kind, "group_id": group_id, "decision": request.decision})}},
+    )
+    if not result.modified_count:
+        raise HTTPException(status_code=409, detail="La revisión ya estaba registrada")
+    return public_draft(await _staging_doc(draft_id))
+
+
 @api_router.post("/inscription-imports/staging/{draft_id}/october")
 async def select_staging_october(draft_id: str, request: StagingOctoberSelection):
     draft = await _staging_doc(draft_id)
@@ -2171,6 +2230,8 @@ async def confirm_import_staging(draft_id: str, request: StagingConfirmRequest):
     if request.confirmed is not True:
         raise HTTPException(status_code=422, detail="La importación requiere confirmación expresa")
     draft = await _staging_doc(draft_id)
+    if draft.get("source_format") == HISTORICAL_FORMAT:
+        raise HTTPException(status_code=409, detail="La base histórica está habilitada únicamente para simulación")
     summary = draft_summary(draft)
     if not summary["can_import"]:
         raise HTTPException(status_code=409, detail="El borrador mantiene bloqueos pendientes")

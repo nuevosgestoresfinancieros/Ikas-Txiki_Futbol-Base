@@ -1,4 +1,4 @@
-import { canFinalizeDraft, filterPreparationRecords, preparationProgressLabel, selectedOctoberIds } from "./importPreparationView";
+import { canFinalizeDraft, filterPreparationRecords, historicalReviewCounts, isHistoricalDraft, preparationProgressLabel, selectedOctoberIds } from "./importPreparationView";
 
 const records = [
   { id: "one", nombre: "Ane", apellidos: "Ficticia", categoria: "Alevín", equipo: "F7 A", selected_october: true },
@@ -22,4 +22,15 @@ test("final import needs a ready draft and express confirmation", () => {
 test("october selection and progress are deterministic", () => {
   expect(selectedOctoberIds(records)).toEqual(["one"]);
   expect(preparationProgressLabel({ preparation_percent: 67 })).toBe("67%");
+});
+
+test("historical drafts remain simulation-only and expose aggregate review counts", () => {
+  const draft = {
+    source_format: "historical_bbdd_v1", summary: { can_import: false },
+    fuzzy_matches: [{ id: "f1", decision: null }, { id: "f2", decision: "different_people" }],
+    family_candidates: [{ id: "g1", decision: null }], simulation: { official_writes: 0 },
+  };
+  expect(isHistoricalDraft(draft)).toBe(true);
+  expect(historicalReviewCounts(draft)).toEqual({ fuzzy: 1, families: 1, officialWrites: 0 });
+  expect(canFinalizeDraft(draft, true)).toBe(false);
 });

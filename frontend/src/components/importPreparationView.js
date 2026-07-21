@@ -24,3 +24,11 @@ export const canFinalizeDraft = (draft, expresslyConfirmed) =>
   Boolean(draft?.summary?.can_import && expresslyConfirmed);
 
 export const preparationProgressLabel = (summary = {}) => `${summary.preparation_percent || 0}%`;
+
+export const isHistoricalDraft = (draft) => draft?.source_format === "historical_bbdd_v1";
+
+export const historicalReviewCounts = (draft = {}) => ({
+  fuzzy: (draft.fuzzy_matches || []).filter((item) => !item.decision).length,
+  families: (draft.family_candidates || []).filter((item) => !item.decision).length,
+  officialWrites: draft.simulation?.official_writes || 0,
+});

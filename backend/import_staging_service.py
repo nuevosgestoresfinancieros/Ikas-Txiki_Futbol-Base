@@ -12,7 +12,7 @@ from inscription_import_service import (
 
 
 MODALITY_SUGGESTIONS = {
-    "querubin": "F7", "prebenjamin": "F7", "benjamin": "F7", "alevin": "F7",
+    "chupetin": "F7", "querubin": "F7", "prebenjamin": "F7", "benjamin": "F7", "alevin": "F7",
     "infantil": "F11", "cadete": "F11", "juvenil": "F11",
 }
 ALLOWED_RECORD_FIELDS = {
@@ -48,7 +48,11 @@ def audit_event(actor_id: str | None, action: str, detail: Mapping[str, Any] | N
 
 
 def modality_suggestion(category: Any) -> str | None:
-    return MODALITY_SUGGESTIONS.get(normalize_key(category))
+    key = normalize_key(category)
+    if key in MODALITY_SUGGESTIONS:
+        return MODALITY_SUGGESTIONS[key]
+    # Las categorías femeninas y variantes nominales solo producen sugerencias.
+    return next((mode for base, mode in MODALITY_SUGGESTIONS.items() if base in key.split("_")), None)
 
 
 def _bank_payload(value: Any, secret: str) -> dict:
@@ -65,11 +69,14 @@ def prepare_records(rows: list[dict], secret: str) -> tuple[list[dict], list[dic
     records: list[dict] = []
     by_identity: dict[str, list[str]] = {}
     for source in rows:
-        rid = record_id()
+        rid = source.get("_staging_id") or record_id()
         record = {key: source.get(key) for key in ALLOWED_RECORD_FIELDS if key in source}
+        bank = _bank_payload(source.get("iban"), secret)
+        if source.get("_bank_issue"):
+            bank = {"status": "pending", "iban_encrypted": None, "iban_last4": None}
         record.update({
             "id": rid, "source_row": source.get("_row"), "selected_october": False,
-            "excluded": False, "issue_resolutions": {}, "bank": _bank_payload(source.get("iban"), secret),
+            "excluded": False, "issue_resolutions": {}, "bank": bank,
             "modality_suggestion": modality_suggestion(source.get("categoria")),
             "suggestion_confirmed": False,
         })
@@ -173,19 +180,25 @@ def draft_summary(draft: Mapping[str, Any]) -> dict:
     october = sum(1 for row in active if row.get("selected_october"))
     capacities = team_capacities(active)
     capacity_over = sum(1 for item in capacities if item["over_capacity"])
-    blockers = unresolved_duplicates + len(blocking_incidents) + (1 if october != 54 else 0)
+    historical = draft.get("source_format") == "historical_bbdd_v1"
+    pending_fuzzy = sum(1 for item in draft.get("fuzzy_matches", []) if not item.get("decision"))
+    pending_families = sum(1 for item in draft.get("family_candidates", []) if not item.get("decision"))
+    october_blocker = 0 if historical else (1 if october != 54 else 0)
+    blockers = unresolved_duplicates + pending_fuzzy + pending_families + len(blocking_incidents) + october_blocker
     complete_steps = sum((
         unresolved_duplicates == 0, len(blocking_incidents) == 0, missing_team == 0,
-        missing_modality == 0, october == 54, capacity_over == 0,
+        missing_modality == 0, (True if historical else october == 54), capacity_over == 0,
     ))
     return {
         "rows_received": len(draft.get("records", [])),
         "unique_expected": len(active) - (predicted_duplicates if unresolved_duplicates else 0),
         "duplicates_pending": unresolved_duplicates, "missing_team": missing_team,
         "missing_modality": missing_modality, "incidents_pending": len(pending_incidents),
-        "october_selected": october, "october_required": 54, "teams_over_capacity": capacity_over,
+        "october_selected": october, "october_required": 0 if historical else 54, "teams_over_capacity": capacity_over,
         "preparation_percent": round(complete_steps / 6 * 100), "blocking_count": blockers,
-        "can_import": blockers == 0, "capacities": capacities,
+        "can_import": blockers == 0 and not historical, "simulation_only": historical,
+        "fuzzy_matches_pending": pending_fuzzy, "family_candidates_pending": pending_families,
+        "auxiliary_rows_excluded": len(draft.get("auxiliary_rows", [])), "capacities": capacities,
     }
 
 
@@ -205,9 +218,12 @@ def team_capacities(records: Iterable[Mapping[str, Any]]) -> list[dict]:
 
 def public_draft(draft: Mapping[str, Any], include_records: bool = True) -> dict:
     result = {key: draft.get(key) for key in (
-        "id", "season", "status", "created_at", "updated_at", "expires_at", "source_sha256",
+        "id", "season", "status", "source_format", "created_at", "updated_at", "expires_at", "source_sha256",
     )}
     result["summary"] = draft_summary(draft)
+    if draft.get("source_format") == "historical_bbdd_v1":
+        result["quality"] = draft.get("quality", {})
+        result["simulation"] = draft.get("simulation", {})
     if include_records:
         active_ids = {row["id"] for row in effective_records(draft)}
         pending_incident_ids = {
@@ -216,7 +232,18 @@ def public_draft(draft: Mapping[str, Any], include_records: bool = True) -> dict
         }
         result["records"] = []
         for row in draft.get("records", []):
-            clean = {key: value for key, value in row.items() if key != "bank"}
+            clean = {key: value for key, value in row.items() if key not in {"bank", "historical"}}
+            if draft.get("source_format") == "historical_bbdd_v1":
+                for field in ("progenitor1_telefono", "progenitor2_telefono", "progenitor1_email", "progenitor2_email", "domicilio"):
+                    if clean.get(field):
+                        clean[field] = "••••"
+                historical = row.get("historical") or {}
+                clean["historical_summary"] = {
+                    "team_seasons": len(historical.get("team_history") or {}),
+                    "equipment_seasons": len(historical.get("equipment_history") or {}),
+                    "federation_seasons": len(historical.get("federation_history") or {}),
+                    "sensitive_notes_quarantined": bool((historical.get("sensitive_quarantine") or {}).get("other_notes_present")),
+                }
             clean["active"] = row.get("id") in active_ids
             clean["october_eligible"] = row.get("tipo") == "renovacion"
             clean["has_pending_incidents"] = row.get("id") in pending_incident_ids
@@ -228,6 +255,8 @@ def public_draft(draft: Mapping[str, Any], include_records: bool = True) -> dict
             )
             result["records"].append(clean)
         result["duplicates"] = draft.get("duplicates", [])
+        result["fuzzy_matches"] = draft.get("fuzzy_matches", [])
+        result["family_candidates"] = draft.get("family_candidates", [])
         result["incidents"] = draft.get("incidents", [])
         result["audit"] = draft.get("audit", [])
     return result
