@@ -71,10 +71,10 @@ from modality_service import (
     normalize_modality, validate_compatibility_catalog,
 )
 from report_service import (
-    ReportValidationError, build_attendance as build_attendance_report,
-    build_roster as build_roster_report, catalog_for_role, paginate,
-    safe_rows as safe_report_rows, validate_report_filters,
+    MAX_EXPORT_ROWS, ReportValidationError, build_report, catalog_for_role,
+    enforce_export_limit, paginate, validate_report_filters,
 )
+from report_export_service import generate_pdf as generate_report_pdf, generate_xlsx as generate_report_xlsx, safe_filename
 
 
 ROOT_DIR = Path(__file__).parent
@@ -2991,17 +2991,30 @@ class ReportPreviewRequest(BaseModel):
     page_size: int = Field(default=25, ge=1, le=100)
 
 
+class ReportExportRequest(BaseModel):
+    report_id: str
+    filters: Dict[str, Any] = Field(default_factory=dict)
+    lang: str = "es"
+
+    @field_validator("lang")
+    @classmethod
+    def validate_lang(cls, value: str) -> str:
+        if value not in {"es", "eu"}:
+            raise ValueError("Idioma no válido")
+        return value
+
+
 async def report_context() -> dict:
     """Carga exclusivamente documentos ya acotados por el usuario autenticado."""
     settings = await db.settings.find_one({"id": SETTINGS_ID}, {"_id": 0}) or {}
-    async def projected(coll: str, fields: set[str]) -> list[dict]:
+    async def projected(coll: str, fields: set[str], maximum: int = 5000) -> list[dict]:
         projection = {field: 1 for field in fields}
         projection["_id"] = 0
         scope = await scope_for_collection(coll)
-        return await db[coll].find(scope or {}, projection).to_list(5000)
+        return await db[coll].find(scope or {}, projection).to_list(maximum)
 
     return {
-        "players": await projected("players", {"id", "nombre", "apellidos", "equipo_id", "categoria", "modalidad", "dorsal", "estado"}),
+        "players": await projected("players", {"id", "nombre", "apellidos", "equipo_id", "categoria", "modalidad", "dorsal", "estado"}, MAX_EXPORT_ROWS + 1),
         "teams": await projected("teams", {"id", "nombre", "categoria", "modalidad", "temporada", "estado", "active"}),
         "trainings": await projected("trainings", {"id", "equipo_id", "fecha", "asistencia.player_id", "asistencia.estado"}),
         "modalities": catalog_from_settings(settings),
@@ -3052,28 +3065,64 @@ async def get_reports_catalog():
     return {"reports": catalog_for_role(str(actor.get("role"))), "filter_options": report_filter_options(context)}
 
 
-@api_router.post("/reports/preview")
-async def preview_report(request: ReportPreviewRequest):
+async def prepare_report(report_id: str, requested_filters: dict) -> dict:
     actor = current_user_context.get() or {}
     allowed_reports = {item["id"] for item in catalog_for_role(str(actor.get("role")))}
-    if request.report_id not in allowed_reports:
+    if report_id not in allowed_reports:
         raise HTTPException(status_code=403, detail="Informe no autorizado")
     try:
-        filters = validate_report_filters(request.report_id, request.filters)
+        filters = validate_report_filters(report_id, requested_filters)
     except ReportValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     context = await report_context()
     options = report_filter_options(context)
     enforce_report_filters(filters, options)
-    if request.report_id == "roster":
-        rows, totals = build_roster_report(context["players"], context["teams"], filters, context["modalities"])
-    else:
-        rows, totals = build_attendance_report(context["players"], context["teams"], context["trainings"], filters, str(actor.get("role")))
-    rows = safe_report_rows(rows)
+    try:
+        definition, rows, totals = build_report(report_id, context, filters, str(actor.get("role")))
+    except ReportValidationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return {"report": definition, "filters": filters, "rows": rows, "totals": totals,
+            "filter_options": options}
+
+
+@api_router.post("/reports/preview")
+async def preview_report(request: ReportPreviewRequest):
+    result = await prepare_report(request.report_id, request.filters)
+    rows = result["rows"]
     page_rows, pagination = paginate(rows, request.page, request.page_size)
-    definition = next(item for item in catalog_for_role(str(actor.get("role"))) if item["id"] == request.report_id)
-    return {"report": definition, "filters": filters, "rows": page_rows, "totals": totals,
-            "pagination": pagination, "filter_options": options}
+    return {**result, "rows": page_rows, "pagination": pagination}
+
+
+async def report_branding() -> dict:
+    return await db.settings.find_one({"id": SETTINGS_ID}, {"_id": 0, "club_nombre": 1, "club_logo": 1}) or {}
+
+
+async def export_professional_report(request: ReportExportRequest, export_format: str):
+    result = await prepare_report(request.report_id, request.filters)
+    try:
+        rows = enforce_export_limit(result["rows"])
+    except ReportValidationError as exc:
+        raise HTTPException(status_code=413, detail=str(exc)) from exc
+    branding = await report_branding()
+    renderer = generate_report_pdf if export_format == "pdf" else generate_report_xlsx
+    content = renderer(result["report"], rows, result["totals"], result["filters"],
+                       result["filter_options"], branding, request.lang)
+    filename = safe_filename(request.report_id, request.lang, export_format)
+    media_type = "application/pdf" if export_format == "pdf" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    return StreamingResponse(io.BytesIO(content), media_type=media_type, headers={
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+    })
+
+
+@api_router.post("/reports/export.pdf")
+async def export_professional_pdf(request: ReportExportRequest):
+    return await export_professional_report(request, "pdf")
+
+
+@api_router.post("/reports/export.xlsx")
+async def export_professional_xlsx(request: ReportExportRequest):
+    return await export_professional_report(request, "xlsx")
 
 
 @api_router.get("/compute-category")
@@ -3653,6 +3702,7 @@ app.add_middleware(
     allow_origins=cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition"],
 )
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')

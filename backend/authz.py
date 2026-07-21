@@ -152,6 +152,8 @@ def route_permission(request: Request) -> tuple[str, str]:
         return "callups", "respond"
     if first == "reports" and "preview" in parts:
         return "reports", "read"
+    if first == "reports" and any(part.startswith("export.") for part in parts):
+        return "reports", "export"
     if first in {"clear-all", "seed-demo", "import-excel", "inscription-imports"}:
         return resource, "administer"
     if first == "export-excel" or "pdf" in parts or "signed-file" in parts or any(part.endswith((".pdf", ".xlsx", ".ics")) for part in parts):

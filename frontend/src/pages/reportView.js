@@ -9,9 +9,31 @@ export const reportPreviewRequest = (reportId, filters = {}, page = 1, pageSize 
   page_size: pageSize,
 });
 
+export const professionalExportRequest = (reportId, filters = {}, lang = "es") => ({
+  report_id: reportId,
+  filters: Object.fromEntries(Object.entries(filters).filter(([, value]) => value !== "" && value !== "all" && value != null)),
+  lang: lang === "eu" ? "eu" : "es",
+});
+
+export const exportFilename = (contentDisposition, fallback) => {
+  const match = String(contentDisposition || "").match(/filename="?([^";]+)"?/i);
+  return match?.[1]?.replace(/[^a-zA-Z0-9._-]/g, "-") || fallback;
+};
+
+export const canExportReport = (definition, preview, format) =>
+  Boolean(definition?.exports?.includes(format) && preview?.pagination?.total_rows > 0);
+
+export const professionalExportState = ({ format = "", error = "", preview = null } = {}) => {
+  if (format) return "generating";
+  if (error) return "error";
+  if (!preview?.pagination?.total_rows) return "empty";
+  return "ready";
+};
+
 export const reportFilterChange = (filters = {}, patch = {}) => ({
   filters: { ...filters, ...patch },
   page: 1,
+  preview: null,
 });
 
 export const scopedReportOptions = (options = {}, filters = {}) => {

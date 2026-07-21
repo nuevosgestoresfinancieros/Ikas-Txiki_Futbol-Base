@@ -1,4 +1,4 @@
-"""Motor puro y seguro para las vistas previas de informes profesionales."""
+"""Motor puro y seguro para vistas previas y exportaciones profesionales."""
 from __future__ import annotations
 
 from math import ceil
@@ -10,6 +10,7 @@ from modality_service import ModalityDefinition, normalize_modality
 
 REPORT_ROLES = frozenset({"admin", "coordinator", "coach", "family", "player"})
 MAX_PAGE_SIZE = 100
+MAX_EXPORT_ROWS = 5000
 
 REPORTS = {
     "roster": {
@@ -18,6 +19,7 @@ REPORTS = {
         "roles": REPORT_ROLES,
         "filters": ["season", "category", "team_id", "modality", "status", "search"],
         "columns": ["name", "surname", "team", "category", "modality", "number", "status"],
+        "exports": ["pdf", "xlsx"],
     },
     "attendance": {
         "id": "attendance", "area": "sport",
@@ -25,6 +27,7 @@ REPORTS = {
         "roles": REPORT_ROLES,
         "filters": ["date_from", "date_to", "category", "team_id", "player_id", "period", "group_by"],
         "columns": ["name", "team", "sessions", "present", "justified", "unjustified", "injury", "percentage"],
+        "exports": ["pdf", "xlsx"],
     },
 }
 
@@ -150,3 +153,22 @@ def build_attendance(players: Iterable[dict], teams: Iterable[dict], trainings: 
 
 def safe_rows(rows: Iterable[Mapping[str, Any]]) -> list[dict]:
     return [{key: value for key, value in row.items() if key in SAFE_COLUMNS} for row in rows]
+
+
+def build_report(report_id: str, context: Mapping[str, Any], filters: Mapping[str, Any], role: str) -> tuple[dict, list[dict], dict]:
+    """Único punto de cálculo para que vista previa y exportaciones coincidan."""
+    definition = REPORTS.get(report_id)
+    if not definition or role not in definition["roles"]:
+        raise ReportValidationError("Informe no autorizado")
+    if report_id == "roster":
+        rows, totals = build_roster(context["players"], context["teams"], filters, context["modalities"])
+    else:
+        rows, totals = build_attendance(context["players"], context["teams"], context["trainings"], filters, role)
+    return {key: value for key, value in definition.items() if key != "roles"}, safe_rows(rows), totals
+
+
+def enforce_export_limit(rows: Iterable[Mapping[str, Any]], maximum: int = MAX_EXPORT_ROWS) -> list[dict]:
+    rows = list(rows)
+    if len(rows) > maximum:
+        raise ReportValidationError(f"La exportación supera el límite de {maximum} filas")
+    return rows

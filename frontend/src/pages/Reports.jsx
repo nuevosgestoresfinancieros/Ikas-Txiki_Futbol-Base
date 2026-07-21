@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { FileText, Download, Printer, RotateCw, Search } from "lucide-react";
+import { FileText, Download, Printer, RotateCw, Search, Sheet } from "lucide-react";
 import api from "@/api";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
@@ -7,7 +7,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { PageHeader } from "@/components/shared";
-import { initialReportFilters, reportFilterChange, reportFilterSummary, reportPreviewRequest, safeReportCell, scopedReportOptions } from "./reportView";
+import { canExportReport, exportFilename, initialReportFilters, professionalExportRequest, professionalExportState, reportFilterChange, reportFilterSummary, reportPreviewRequest, safeReportCell, scopedReportOptions } from "./reportView";
 
 const Reports = () => {
   const { t, lang } = useI18n();
@@ -25,6 +25,9 @@ const Reports = () => {
   const [previewPage, setPreviewPage] = useState(1);
   const [previewLoading, setPreviewLoading] = useState(true);
   const [previewError, setPreviewError] = useState("");
+  const [exportingFormat, setExportingFormat] = useState("");
+  const [exportError, setExportError] = useState("");
+  const [lastExportFormat, setLastExportFormat] = useState("");
 
   useEffect(() => {
     Promise.all([api.get("/teams"), api.get("/categories")]).then(([tm, c]) => { setTeams(tm.data); setCategories(c.data); });
@@ -61,8 +64,29 @@ const Reports = () => {
 
   const scopedOptions = useMemo(() => scopedReportOptions(reportOptions, professionalFilters), [reportOptions, professionalFilters]);
   const selectedDefinition = catalog.find((item) => item.id === professionalReport);
+  const exportState = professionalExportState({ format: exportingFormat, error: exportError, preview });
   const changeProfessionalFilter = (patch) => {
-    const next = reportFilterChange(professionalFilters, patch); setProfessionalFilters(next.filters); setPreviewPage(next.page);
+    const next = reportFilterChange(professionalFilters, patch);
+    setProfessionalFilters(next.filters); setPreviewPage(next.page); setPreview(next.preview); setExportError("");
+  };
+
+  const downloadProfessional = async (format) => {
+    if (!canExportReport(selectedDefinition, preview, format) || exportingFormat) {
+      if (!preview?.pagination?.total_rows) setExportError(t("professionalExportNoResults"));
+      return;
+    }
+    setExportError(""); setExportingFormat(format); setLastExportFormat(format);
+    try {
+      const response = await api.post(`/reports/export.${format}`, professionalExportRequest(professionalReport, professionalFilters, lang), { responseType: "blob" });
+      const fallback = `ikas-txiki_${professionalReport}_${lang}.${format}`;
+      const filename = exportFilename(response.headers["content-disposition"], fallback);
+      const url = URL.createObjectURL(response.data);
+      const anchor = document.createElement("a");
+      anchor.href = url; anchor.download = filename; document.body.appendChild(anchor); anchor.click(); anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setExportError(error.response?.status === 413 ? t("professionalExportLimitError") : t("professionalExportError"));
+    } finally { setExportingFormat(""); }
   };
 
   const teamName = useCallback((id) => teams.find((x) => x.id === id)?.nombre || "—", [teams]);
@@ -122,13 +146,13 @@ const Reports = () => {
           <p className="mt-1 text-sm text-slate-500">{t("professionalReportsHelp")}</p>
         </div>
         {previewError && !catalog.length ? <div role="alert" className="surface-card p-5 text-center"><p className="text-red-700">{previewError}</p><Button className="mt-3" onClick={loadCatalog}><RotateCw className="h-4 w-4" />{t("retry")}</Button></div> : (
-          <div className="grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">
-            <aside className="surface-card p-4" aria-label={t("professionalReportCatalog")}>
+          <div className="grid min-w-0 gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">
+            <aside className="surface-card min-w-0 p-4" aria-label={t("professionalReportCatalog")}>
               <h3 className="mb-3 font-heading font-bold">{t("professionalReportCatalog")}</h3>
               <div className="grid gap-2">{catalog.map((item) => <button key={item.id} type="button" onClick={() => { setProfessionalReport(item.id); setProfessionalFilters(initialReportFilters(item.id)); setPreview(null); setPreviewPage(1); }} aria-pressed={professionalReport === item.id} className={`min-h-11 rounded-xl border px-3 py-2 text-left text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 ${professionalReport === item.id ? "border-primary bg-primary text-white" : "bg-white text-slate-700 hover:border-primary"}`}>{item.name?.[lang] || item.name?.es || item.id}</button>)}</div>
             </aside>
-            <div className="space-y-4">
-              <section className="surface-card p-4" aria-labelledby="professional-filters-title">
+            <div className="min-w-0 space-y-4">
+              <section className="surface-card min-w-0 overflow-hidden p-4" aria-labelledby="professional-filters-title">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><h3 id="professional-filters-title" className="font-heading font-bold">{t("reportFilters")}</h3><span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold">{selectedDefinition?.name?.[lang] || selectedDefinition?.name?.es}</span></div>
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {selectedDefinition?.filters.includes("season") && <label className="grid gap-1 text-sm font-semibold">{t("season")}<select value={professionalFilters.season || ""} onChange={(event) => changeProfessionalFilter({ season: event.target.value, team_id: "", player_id: "" })} className="h-11 rounded-xl border px-3"><option value="">{t("all")}</option>{(reportOptions.seasons || []).map((value) => <option key={value}>{value}</option>)}</select></label>}
@@ -144,9 +168,15 @@ const Reports = () => {
                   {selectedDefinition?.filters.includes("search") && <label className="grid gap-1 text-sm font-semibold">{t("search")}<span className="relative"><Search className="absolute left-3 top-3.5 h-4 w-4 text-slate-400" /><input value={professionalFilters.search || ""} onChange={(event) => changeProfessionalFilter({ search: event.target.value })} className="h-11 w-full rounded-xl border pl-9 pr-3" /></span></label>}
                 </div>
                 <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div className="flex flex-wrap gap-2" aria-label={t("appliedFilters")}>{reportFilterSummary(professionalFilters, reportOptions).map(([key, value]) => <span key={key} className="rounded-full bg-slate-100 px-3 py-1 text-xs">{t(`reportFilter_${key}`)}: {value}</span>)}</div><Button onClick={() => runPreview(1)} disabled={previewLoading}><Search className="h-4 w-4" />{t("previewReport")}</Button></div>
+                <div className="mt-4 flex flex-wrap items-center gap-2 border-t pt-4" aria-label={t("professionalExports")}>
+                  {selectedDefinition?.exports?.includes("pdf") && <Button variant="outline" onClick={() => downloadProfessional("pdf")} disabled={!canExportReport(selectedDefinition, preview, "pdf") || Boolean(exportingFormat)} aria-label={t("downloadProfessionalPDF")}><Download className="h-4 w-4" />{exportingFormat === "pdf" ? t("preparingExport") : t("downloadProfessionalPDF")}</Button>}
+                  {selectedDefinition?.exports?.includes("xlsx") && <Button variant="outline" onClick={() => downloadProfessional("xlsx")} disabled={!canExportReport(selectedDefinition, preview, "xlsx") || Boolean(exportingFormat)} aria-label={t("downloadProfessionalExcel")}><Sheet className="h-4 w-4" />{exportingFormat === "xlsx" ? t("preparingExport") : t("downloadProfessionalExcel")}</Button>}
+                  <span className="text-xs text-slate-500" aria-live="polite">{exportState === "generating" ? t("professionalExportPreparing") : (exportState === "empty" ? t("professionalExportNoResults") : "")}</span>
+                </div>
               </section>
+              {exportError && <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-900"><p>{exportError}</p>{lastExportFormat && <Button variant="outline" className="mt-3" onClick={() => downloadProfessional(lastExportFormat)} disabled={Boolean(exportingFormat)}><RotateCw className="h-4 w-4" />{t("retry")}</Button>}</div>}
               {previewError && <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-4 text-red-800"><p>{previewError}</p><Button variant="outline" className="mt-3" onClick={() => runPreview(previewPage)}><RotateCw className="h-4 w-4" />{t("retry")}</Button></div>}
-              <section className="surface-card overflow-hidden" aria-busy={previewLoading} aria-live="polite">
+              <section className="surface-card min-w-0 overflow-hidden" aria-busy={previewLoading} aria-live="polite">
                 {previewLoading ? <div className="p-10 text-center text-slate-500" role="status">{t("loading")}</div> : !preview || preview.rows.length === 0 ? <div className="p-10 text-center text-slate-500">{t("noData")}</div> : <><div className="grid grid-cols-2 gap-2 border-b bg-slate-50 p-3 sm:grid-cols-4">{Object.entries(preview.totals || {}).map(([key, value]) => <div key={key} className="rounded-lg bg-white p-2 text-center"><p className="text-lg font-bold">{value}</p><p className="text-xs text-slate-500">{t(`reportTotal_${key}`)}</p></div>)}</div><div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-slate-50 text-left text-xs uppercase text-slate-500"><tr>{preview.report.columns.map((column) => <th key={column} className="px-4 py-3">{t(`reportColumn_${column}`)}</th>)}</tr></thead><tbody className="divide-y">{preview.rows.map((row, index) => <tr key={`${preview.pagination.page}-${index}`}>{preview.report.columns.map((column) => <td key={column} className="px-4 py-3 text-slate-700">{safeReportCell(row[column])}</td>)}</tr>)}</tbody></table></div><div className="flex items-center justify-between border-t p-3"><span className="text-sm text-slate-500">{preview.pagination.total_rows} {t("rows")}</span><div className="flex items-center gap-2"><Button variant="outline" size="sm" disabled={preview.pagination.page <= 1} onClick={() => runPreview(preview.pagination.page - 1)}>{t("previous")}</Button><span className="text-sm">{preview.pagination.page}/{preview.pagination.total_pages}</span><Button variant="outline" size="sm" disabled={preview.pagination.page >= preview.pagination.total_pages} onClick={() => runPreview(preview.pagination.page + 1)}>{t("next")}</Button></div></div></>}
               </section>
             </div>
