@@ -22,6 +22,24 @@ export const selectedOctoberIds = (records = []) => records.filter((row) => row.
 
 export const clearPreparationSelection = () => [];
 
+export const selectVisiblePreparationRecords = (records = []) =>
+  [...new Set(records.map((record) => record.id).filter(Boolean))];
+
+export const modalityOptionLabel = (modality, lang = "es") => {
+  if (!modality) return "";
+  const name = lang === "eu" ? modality.name_eu : modality.name_es;
+  return `${name || modality.code} (${modality.code})`;
+};
+
+export const activeModalitiesFromApi = (payload = []) =>
+  payload.filter((item) => item?.active && item.code);
+
+export const canApplyPreparationBulk = (selected = [], bulk = {}, modalities = []) => {
+  if (!selected.length || !bulk.value) return false;
+  if (bulk.field !== "modalidad") return true;
+  return modalities.some((item) => item.active && item.code === bulk.value);
+};
+
 export const applyPreparationFilterChange = (filters = {}, patch = {}) => ({
   filters: { ...filters, ...patch },
   selected: clearPreparationSelection(),

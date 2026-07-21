@@ -1,4 +1,4 @@
-import { applyPreparationFilterChange, canFinalizeDraft, clearPreparationSelection, filterPreparationRecords, historicalReviewCounts, isHistoricalDraft, preparationProgressLabel, selectedOctoberIds } from "./importPreparationView";
+import { activeModalitiesFromApi, applyPreparationFilterChange, canApplyPreparationBulk, canFinalizeDraft, clearPreparationSelection, filterPreparationRecords, historicalReviewCounts, isHistoricalDraft, modalityOptionLabel, preparationProgressLabel, selectedOctoberIds, selectVisiblePreparationRecords } from "./importPreparationView";
 
 const records = [
   { id: "one", nombre: "Ane", apellidos: "Ficticia", categoria: "Alevín", equipo: "F7 A", selected_october: true },
@@ -26,6 +26,28 @@ test("october selection and progress are deterministic", () => {
 
 test("clears the current preparation selection explicitly", () => {
   expect(clearPreparationSelection(["one", "two"])).toEqual([]);
+});
+
+test("selects every visible record without duplicates", () => {
+  expect(selectVisiblePreparationRecords([records[0], records[0], records[1]])).toEqual(["one", "two"]);
+});
+
+test("bulk modality requires selected records and an active catalog option", () => {
+  const modalities = [{ code: "F7", active: true }, { code: "F11", active: false }];
+  expect(canApplyPreparationBulk([], { field: "modalidad", value: "F7" }, modalities)).toBe(false);
+  expect(canApplyPreparationBulk(["one"], { field: "modalidad", value: "F11" }, modalities)).toBe(false);
+  expect(canApplyPreparationBulk(["one"], { field: "modalidad", value: "F7" }, modalities)).toBe(true);
+});
+
+test("renders modality names from the API in Spanish and Basque", () => {
+  const modality = { code: "F7", name_es: "Fútbol 7", name_eu: "7ko futbola" };
+  expect(modalityOptionLabel(modality, "es")).toBe("Fútbol 7 (F7)");
+  expect(modalityOptionLabel(modality, "eu")).toBe("7ko futbola (F7)");
+});
+
+test("loads only active modality options from the API payload", () => {
+  const payload = [{ code: "F7", active: true }, { code: "F11", active: false }];
+  expect(activeModalitiesFromApi(payload)).toEqual([{ code: "F7", active: true }]);
 });
 
 test.each([

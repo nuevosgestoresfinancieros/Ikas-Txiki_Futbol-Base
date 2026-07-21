@@ -2075,6 +2075,8 @@ async def get_import_staging_simulation(draft_id: str):
 @api_router.patch("/inscription-imports/staging/{draft_id}/records/{record_id}")
 async def update_staging_record(draft_id: str, record_id: str, request: StagingRecordUpdate):
     draft = await _staging_doc(draft_id)
+    current_record = next((row for row in draft.get("records", []) if row.get("id") == record_id), {})
+    previous_value = current_record.get(request.field)
     if request.field == "iban":
         normalized = normalize_key(request.value)
         raw = str(request.value or "").replace(" ", "").upper()
@@ -2087,17 +2089,23 @@ async def update_staging_record(draft_id: str, record_id: str, request: StagingR
     elif request.field in ALLOWED_RECORD_FIELDS - {"equipamiento_items"}:
         update_path, value, issue_field = f"records.$.{request.field}", str(request.value or "").strip(), request.field
         if request.field == "modalidad":
+            if draft.get("status") != "draft":
+                raise HTTPException(status_code=409, detail="Solo se puede modificar un borrador activo")
             value = value.upper()
-            if value not in {"", "F7", "F11"}:
-                raise HTTPException(status_code=422, detail="La modalidad debe ser F7 o F11")
-        candidate = dict(next((row for row in draft.get("records", []) if row.get("id") == record_id), {}))
+            active_codes = {entry.code for entry in await _load_modality_catalog() if entry.active}
+            if value and value not in active_codes:
+                raise HTTPException(status_code=422, detail="La modalidad no existe o está inactiva")
+        candidate = dict(current_record)
         candidate[request.field] = value
         if not field_is_valid(candidate, request.field):
             raise HTTPException(status_code=422, detail="El valor no tiene un formato válido")
     else:
         raise HTTPException(status_code=422, detail="Campo no editable")
     now = datetime.now(timezone.utc)
-    event = audit_event(_staging_actor(), "record_updated", {"record_id": record_id, "field": request.field})
+    event_detail = {"record_id": record_id, "field": request.field}
+    if request.field == "modalidad":
+        event_detail.update({"previous_value": previous_value or None, "new_value": value or None})
+    event = audit_event(_staging_actor(), "record_updated", event_detail)
     result = await db.import_staging.update_one(
         {"id": draft_id, "records.id": record_id},
         {"$set": {update_path: value, "updated_at": now, "expires_at": expiry(_staging_ttl_hours())}, "$push": {"audit": event}},
@@ -2117,17 +2125,27 @@ async def bulk_update_staging(draft_id: str, request: StagingBulkUpdate):
     if request.field not in {"equipo", "categoria", "modalidad"}:
         raise HTTPException(status_code=422, detail="Asignación masiva no permitida para este campo")
     value = request.value.strip()
-    if request.field == "modalidad":
-        value = value.upper()
-        if value not in {"F7", "F11"}:
-            raise HTTPException(status_code=422, detail="La modalidad debe ser F7 o F11")
-        if not request.confirm_suggestion:
-            raise HTTPException(status_code=422, detail="La sugerencia de modalidad requiere confirmación expresa")
     draft = await _staging_doc(draft_id)
+    if request.field == "modalidad":
+        if draft.get("status") != "draft":
+            raise HTTPException(status_code=409, detail="Solo se puede modificar un borrador activo")
+        value = value.upper()
+        active_codes = {entry.code for entry in await _load_modality_catalog() if entry.active}
+        if value not in active_codes:
+            raise HTTPException(status_code=422, detail="La modalidad no existe o está inactiva")
+        if not request.confirm_suggestion:
+            raise HTTPException(status_code=422, detail="La asignación de modalidad requiere confirmación expresa")
     selected = set(request.record_ids)
-    if not selected or not selected.issubset({row["id"] for row in draft.get("records", [])}):
+    active_record_ids = {row["id"] for row in effective_records(draft)}
+    if not selected or not selected.issubset(active_record_ids):
         raise HTTPException(status_code=422, detail="Selección de registros no válida")
     now = datetime.now(timezone.utc)
+    modality_changes = []
+    if request.field == "modalidad":
+        modality_changes = [
+            {"record_id": row["id"], "previous_value": row.get("modalidad") or None, "new_value": value}
+            for row in draft.get("records", []) if row.get("id") in selected
+        ]
     await db.import_staging.update_one(
         {"id": draft_id},
         {"$set": {
@@ -2137,6 +2155,7 @@ async def bulk_update_staging(draft_id: str, request: StagingBulkUpdate):
             "expires_at": expiry(_staging_ttl_hours()),
         }, "$push": {"audit": audit_event(_staging_actor(), "bulk_updated", {
             "field": request.field, "records": len(selected),
+            **({"changes": modality_changes} if modality_changes else {}),
         })}},
         array_filters=[{"row.id": {"$in": list(selected)}}, {"issue.record_id": {"$in": list(selected)}, "issue.field": request.field}],
     )
