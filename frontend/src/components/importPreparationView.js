@@ -20,6 +20,13 @@ export const filterPreparationRecords = (records = [], filters = {}) => records.
 
 export const selectedOctoberIds = (records = []) => records.filter((row) => row.selected_october).map((row) => row.id);
 
+export const clearPreparationSelection = () => [];
+
+export const applyPreparationFilterChange = (filters = {}, patch = {}) => ({
+  filters: { ...filters, ...patch },
+  selected: clearPreparationSelection(),
+});
+
 export const canFinalizeDraft = (draft, expresslyConfirmed) =>
   Boolean(draft?.summary?.can_import && expresslyConfirmed);
 

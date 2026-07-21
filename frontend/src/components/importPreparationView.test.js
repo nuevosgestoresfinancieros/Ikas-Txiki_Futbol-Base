@@ -1,4 +1,4 @@
-import { canFinalizeDraft, filterPreparationRecords, historicalReviewCounts, isHistoricalDraft, preparationProgressLabel, selectedOctoberIds } from "./importPreparationView";
+import { applyPreparationFilterChange, canFinalizeDraft, clearPreparationSelection, filterPreparationRecords, historicalReviewCounts, isHistoricalDraft, preparationProgressLabel, selectedOctoberIds } from "./importPreparationView";
 
 const records = [
   { id: "one", nombre: "Ane", apellidos: "Ficticia", categoria: "Alevín", equipo: "F7 A", selected_october: true },
@@ -22,6 +22,20 @@ test("final import needs a ready draft and express confirmation", () => {
 test("october selection and progress are deterministic", () => {
   expect(selectedOctoberIds(records)).toEqual(["one"]);
   expect(preparationProgressLabel({ preparation_percent: 67 })).toBe("67%");
+});
+
+test("clears the current preparation selection explicitly", () => {
+  expect(clearPreparationSelection(["one", "two"])).toEqual([]);
+});
+
+test.each([
+  { query: "ane" }, { category: "Alevín" }, { team: "F7 A" },
+  { age: "11" }, { previousTeam: "F7 B" }, { status: "incidents" },
+])("clears the selection when a preparation filter changes: %o", (patch) => {
+  expect(applyPreparationFilterChange({ query: "", category: "" }, patch)).toEqual({
+    filters: { query: "", category: "", ...patch },
+    selected: [],
+  });
 });
 
 test("historical drafts remain simulation-only and expose aggregate review counts", () => {
