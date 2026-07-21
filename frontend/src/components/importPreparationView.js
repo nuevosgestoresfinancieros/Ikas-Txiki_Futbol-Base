@@ -49,11 +49,21 @@ export const officialModalityCode = (value, modalities = []) => {
 export const existingCategoriesFromApi = (payload = []) =>
   payload.filter((item) => item?.name).map((item) => item.name);
 
+const categoryKey = (value) => String(value ?? "").normalize("NFD")
+  .replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase().replace(/[^a-z0-9]+/g, "");
+
+const teamIsUsable = (team) => !team?.estado || ["activo", "active"].includes(categoryKey(team.estado));
+
+export const teamMatchesCategory = (team, category = "") => {
+  const teamCategory = categoryKey(team?.categoria); const requested = categoryKey(category);
+  return Boolean(requested && (teamCategory === requested || teamCategory.startsWith(requested)));
+};
+
 export const activeTeamsFromApi = (payload = []) =>
-  payload.filter((item) => item?.id && item?.nombre && item.estado === "activo");
+  payload.filter((item) => item?.id && item?.nombre && teamIsUsable(item));
 
 export const teamsForCategory = (teams = [], category = "") =>
-  teams.filter((item) => category && item.estado === "activo" && item.categoria === category);
+  teams.filter((item) => teamIsUsable(item) && teamMatchesCategory(item, category));
 
 export const canApplyPreparationBulk = (
   selected = [], bulk = {}, modalities = [], categories = [], teams = [], records = [], catalogAssignments = true,
@@ -63,10 +73,10 @@ export const canApplyPreparationBulk = (
   if (!catalogAssignments && ["categoria", "equipo"].includes(bulk.field)) return true;
   if (bulk.field === "categoria") return categories.includes(bulk.value);
   if (bulk.field === "equipo") {
-    const team = teams.find((item) => item.id === bulk.value && item.estado === "activo");
+    const team = teams.find((item) => item.id === bulk.value && teamIsUsable(item));
     const selectedRecords = records.filter((item) => selected.includes(item.id));
     return Boolean(team && selectedRecords.length === selected.length
-      && selectedRecords.every((item) => item.categoria === team.categoria));
+      && selectedRecords.every((item) => teamMatchesCategory(team, item.categoria)));
   }
   return true;
 };

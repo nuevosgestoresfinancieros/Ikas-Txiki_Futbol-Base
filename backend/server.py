@@ -18,7 +18,7 @@ import time
 from collections import defaultdict, deque
 from pathlib import Path
 from pydantic import BaseModel, Field, field_validator
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Mapping
 import uuid
 import pandas as pd
 from reportlab.lib import colors
@@ -2078,15 +2078,34 @@ def _existing_category(value: Any) -> Optional[str]:
     return next((item["name"] for item in CATEGORIES if item["name"] == requested), None)
 
 
+def _category_key(value: Any) -> str:
+    return normalize_key(value)
+
+
+def _team_category_matches(team_category: Any, official_category: Any) -> bool:
+    """Match legacy team labels to an official category without rewriting either."""
+    requested = _existing_category(official_category)
+    if not requested:
+        return False
+    team_key = _category_key(team_category)
+    official_key = _category_key(requested)
+    return team_key == official_key or team_key.startswith(official_key)
+
+
+def _team_is_usable(team: Mapping[str, Any]) -> bool:
+    """Legacy teams without a status are usable; explicit non-active states are not."""
+    return normalize_key(team.get("estado")) in {"", "activo", "active"}
+
+
 async def _active_staging_team(team_id: Any) -> Optional[dict]:
     requested = str(team_id or "").strip()
     if not requested:
         return None
     team = await db.teams.find_one(
-        {"id": requested, "estado": "activo"},
+        {"id": requested},
         {"_id": 0, "id": 1, "nombre": 1, "categoria": 1, "estado": 1},
     )
-    if not team or team.get("id") != requested or team.get("estado") != "activo":
+    if not team or team.get("id") != requested or not _team_is_usable(team):
         return None
     return team
 
@@ -2129,13 +2148,13 @@ async def update_staging_record(draft_id: str, record_id: str, request: StagingR
                     raise HTTPException(status_code=422, detail="La categoría no existe o no está activa")
                 if current_record.get("equipo_id"):
                     current_team = await _active_staging_team(current_record.get("equipo_id"))
-                    if not current_team or current_team.get("categoria") != value:
+                    if not current_team or not _team_category_matches(current_team.get("categoria"), value):
                         raise HTTPException(status_code=422, detail="La categoría no es compatible con el equipo asignado")
             else:
                 selected_team = await _active_staging_team(value)
                 if not selected_team:
                     raise HTTPException(status_code=422, detail="El equipo no existe o está inactivo")
-                if selected_team.get("categoria") != current_record.get("categoria"):
+                if not _team_category_matches(selected_team.get("categoria"), current_record.get("categoria")):
                     raise HTTPException(status_code=422, detail="El equipo no pertenece a la categoría del registro")
                 value = selected_team["nombre"]
                 additional_updates["records.$.equipo_id"] = selected_team["id"]
@@ -2214,10 +2233,10 @@ async def bulk_update_staging(draft_id: str, request: StagingBulkUpdate):
         for row in selected_rows:
             if row.get("equipo_id"):
                 current_team = await _active_staging_team(row.get("equipo_id"))
-                if not current_team or current_team.get("categoria") != value:
+                if not current_team or not _team_category_matches(current_team.get("categoria"), value):
                     raise HTTPException(status_code=422, detail="La categoría no es compatible con un equipo asignado")
     if historical and request.field == "equipo":
-        if any(row.get("categoria") != selected_team.get("categoria") for row in selected_rows):
+        if any(not _team_category_matches(selected_team.get("categoria"), row.get("categoria")) for row in selected_rows):
             raise HTTPException(status_code=422, detail="El equipo no pertenece a la categoría de todos los registros seleccionados")
     now = datetime.now(timezone.utc)
     assignment_changes = []

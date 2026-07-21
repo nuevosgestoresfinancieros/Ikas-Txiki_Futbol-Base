@@ -108,7 +108,7 @@ def test_historical_team_rejects_incompatible_category(monkeypatch):
 
 
 def test_historical_team_resolves_real_id_updates_counter_and_audits(monkeypatch):
-    team = {"id": "team-a", "nombre": "Equipo A", "categoria": "Alevín", "estado": "activo"}
+    team = {"id": "team-a", "nombre": "Equipo A", "categoria": "ALEVIN", "temporada": "2025-2026", "estado": "activo"}
     before = draft(category="Alevín")
     after = draft(category="Alevín", team="Equipo A", team_id="team-a")
     update = AsyncMock()
@@ -131,6 +131,34 @@ def test_historical_team_resolves_real_id_updates_counter_and_audits(monkeypatch
         "record_id": "record-1", "previous_value": None, "new_value": "Equipo A",
         "previous_id": None, "new_id": "team-a",
     }]
+
+
+@pytest.mark.parametrize("team_category", ["BENJAMIN", "BENJAMIN FEM.", "BENJAMIN D"])
+def test_legacy_team_categories_match_the_official_category_without_rewriting(monkeypatch, team_category):
+    team = {"id": "legacy-team", "nombre": "Equipo heredado", "categoria": team_category,
+            "temporada": "2025-2026", "estado": "activo"}
+    before = draft(category="Benjamín")
+    after = draft(category="Benjamín", team="Equipo heredado", team_id="legacy-team")
+    update = AsyncMock()
+    monkeypatch.setattr(server, "_staging_doc", AsyncMock(side_effect=[before, after]))
+    monkeypatch.setattr(server, "db", fake_database(update=update, team=team))
+
+    result = run(server.bulk_update_staging(
+        "historical-draft", request("equipo", "legacy-team"),
+    ))
+
+    assert result["simulation"]["official_writes"] == 0
+    assert update.await_args.args[1]["$set"]["records.$[row].equipo_id"] == "legacy-team"
+    assert team["categoria"] == team_category
+
+
+def test_legacy_team_without_status_is_usable_but_explicit_pending_is_not(monkeypatch):
+    usable = {"id": "legacy-team", "nombre": "Equipo heredado", "categoria": "INFANTIL"}
+    monkeypatch.setattr(server, "db", fake_database(team=usable))
+    assert run(server._active_staging_team("legacy-team")) == usable
+
+    monkeypatch.setattr(server, "db", fake_database(team={**usable, "estado": "pendiente"}))
+    assert run(server._active_staging_team("legacy-team")) is None
 
 
 def test_individual_catalog_assignment_cannot_bypass_confirmation(monkeypatch):

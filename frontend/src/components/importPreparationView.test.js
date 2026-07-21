@@ -1,4 +1,4 @@
-import { activeModalitiesFromApi, activeTeamsFromApi, applyPreparationFilterChange, canApplyPreparationBulk, canFinalizeDraft, clearPreparationSelection, existingCategoriesFromApi, filterPreparationRecords, historicalReviewCounts, isHistoricalDraft, modalityOptionLabel, officialModalityCode, preparationProgressLabel, selectedOctoberIds, selectVisiblePreparationRecords, teamsForCategory } from "./importPreparationView";
+import { activeModalitiesFromApi, activeTeamsFromApi, applyPreparationFilterChange, canApplyPreparationBulk, canFinalizeDraft, clearPreparationSelection, existingCategoriesFromApi, filterPreparationRecords, historicalReviewCounts, isHistoricalDraft, modalityOptionLabel, officialModalityCode, preparationProgressLabel, selectedOctoberIds, selectVisiblePreparationRecords, teamMatchesCategory, teamsForCategory } from "./importPreparationView";
 
 const records = [
   { id: "one", nombre: "Ane", apellidos: "Ficticia", categoria: "Alevín", equipo: "F7 A", selected_october: true },
@@ -73,6 +73,19 @@ test("loads existing categories and active teams from API payloads", () => {
   expect(activeTeamsFromApi(teams)).toEqual([teams[0]]);
   expect(teamsForCategory(teams, "Alevín")).toEqual([teams[0]]);
   expect(teamsForCategory(teams, "Infantil")).toEqual([]);
+});
+
+test("loads the real legacy team schema and matches official category labels", () => {
+  const legacyTeams = [
+    { id: "a", nombre: "A", categoria: "ALEVIN", temporada: "2025-2026", estado: "activo" },
+    { id: "b", nombre: "B", categoria: "BENJAMIN FEM.", temporada: "2025-2026" },
+    { id: "c", nombre: "C", categoria: "INFANTIL", estado: "pendiente" },
+  ];
+  expect(activeTeamsFromApi(legacyTeams)).toEqual([legacyTeams[0], legacyTeams[1]]);
+  expect(teamsForCategory(legacyTeams, "Alevín")).toEqual([legacyTeams[0]]);
+  expect(teamsForCategory(legacyTeams, "Benjamín")).toEqual([legacyTeams[1]]);
+  expect(teamMatchesCategory(legacyTeams[0], "Alevín")).toBe(true);
+  expect(teamMatchesCategory(legacyTeams[0], "Infantil")).toBe(false);
 });
 
 test("category and team assignment require valid compatible API values", () => {
