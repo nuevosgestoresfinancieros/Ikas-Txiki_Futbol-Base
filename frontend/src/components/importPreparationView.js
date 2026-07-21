@@ -34,6 +34,18 @@ export const modalityOptionLabel = (modality, lang = "es") => {
 export const activeModalitiesFromApi = (payload = []) =>
   payload.filter((item) => item?.active && item.code);
 
+const modalityKey = (value) => String(value ?? "").normalize("NFD")
+  .replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase().replace(/[^a-z0-9]+/g, "");
+
+export const officialModalityCode = (value, modalities = []) => {
+  const requested = modalityKey(value);
+  if (!requested) return "";
+  const match = modalities.find((item) => item?.active && [
+    item.code, item.name_es, item.name_eu, ...(item.aliases || []),
+  ].some((candidate) => modalityKey(candidate) === requested));
+  return match?.code || "";
+};
+
 export const existingCategoriesFromApi = (payload = []) =>
   payload.filter((item) => item?.name).map((item) => item.name);
 
@@ -47,7 +59,7 @@ export const canApplyPreparationBulk = (
   selected = [], bulk = {}, modalities = [], categories = [], teams = [], records = [], catalogAssignments = true,
 ) => {
   if (!selected.length || !bulk.value) return false;
-  if (bulk.field === "modalidad") return modalities.some((item) => item.active && item.code === bulk.value);
+  if (bulk.field === "modalidad") return Boolean(officialModalityCode(bulk.value, modalities));
   if (!catalogAssignments && ["categoria", "equipo"].includes(bulk.field)) return true;
   if (bulk.field === "categoria") return categories.includes(bulk.value);
   if (bulk.field === "equipo") {

@@ -5,7 +5,7 @@ import api from "@/api";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useI18n } from "@/i18n";
-import { activeModalitiesFromApi, activeTeamsFromApi, applyPreparationFilterChange, canApplyPreparationBulk, canFinalizeDraft, clearPreparationSelection, existingCategoriesFromApi, filterPreparationRecords, modalityOptionLabel, selectedOctoberIds, selectVisiblePreparationRecords, teamsForCategory } from "./importPreparationView";
+import { activeModalitiesFromApi, activeTeamsFromApi, applyPreparationFilterChange, canApplyPreparationBulk, canFinalizeDraft, clearPreparationSelection, existingCategoriesFromApi, filterPreparationRecords, modalityOptionLabel, officialModalityCode, selectedOctoberIds, selectVisiblePreparationRecords, teamsForCategory } from "./importPreparationView";
 
 const COPY = {
   es: {
@@ -117,14 +117,16 @@ export default function InscriptionImportWizard({ open, onOpenChange, onImported
   };
   const applyBulk = async (field = bulk.field, value = bulk.value, ids = selected) => {
     if (!ids.length || !value) return;
-    const modality = modalities.find((item) => item.code === value); const team = existingTeams.find((item) => item.id === value);
+    const officialValue = field === "modalidad" ? officialModalityCode(value, modalities) : value;
+    if (field === "modalidad" && !officialValue) { setError(c.assignmentError); return; }
+    const modality = modalities.find((item) => item.code === officialValue); const team = existingTeams.find((item) => item.id === officialValue);
     const displayValue = field === "modalidad" ? modalityOptionLabel(modality, lang) : field === "equipo" ? team?.nombre : value;
     const confirmation = c.confirmAssignment.replace("{value}", displayValue || "").replace("{count}", ids.length);
     const needsConfirmation = field === "modalidad" || (historical && ["categoria", "equipo"].includes(field));
     const confirmSuggestion = !needsConfirmation || (Boolean(displayValue) && window.confirm(confirmation));
     if (!confirmSuggestion) return;
     setError(""); setStatus("");
-    try { refresh(await api.post(`/inscription-imports/staging/${draft.id}/bulk`, { record_ids: ids, field, value, confirm_suggestion: confirmSuggestion })); setSelected([]); setStatus(c.assignmentApplied.replace("{count}", ids.length)); }
+    try { refresh(await api.post(`/inscription-imports/staging/${draft.id}/bulk`, { record_ids: ids, field, value: officialValue, confirm_suggestion: confirmSuggestion })); setSelected([]); setStatus(c.assignmentApplied.replace("{count}", ids.length)); }
     catch (e) { setError(e.response?.data?.detail || c.assignmentError); }
   };
   const resolveDuplicate = async (group, decision) => { refresh(await api.post(`/inscription-imports/staging/${draft.id}/duplicates/${group.id}`, { decision })); };

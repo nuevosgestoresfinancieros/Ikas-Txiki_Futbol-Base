@@ -1,4 +1,4 @@
-import { activeModalitiesFromApi, activeTeamsFromApi, applyPreparationFilterChange, canApplyPreparationBulk, canFinalizeDraft, clearPreparationSelection, existingCategoriesFromApi, filterPreparationRecords, historicalReviewCounts, isHistoricalDraft, modalityOptionLabel, preparationProgressLabel, selectedOctoberIds, selectVisiblePreparationRecords, teamsForCategory } from "./importPreparationView";
+import { activeModalitiesFromApi, activeTeamsFromApi, applyPreparationFilterChange, canApplyPreparationBulk, canFinalizeDraft, clearPreparationSelection, existingCategoriesFromApi, filterPreparationRecords, historicalReviewCounts, isHistoricalDraft, modalityOptionLabel, officialModalityCode, preparationProgressLabel, selectedOctoberIds, selectVisiblePreparationRecords, teamsForCategory } from "./importPreparationView";
 
 const records = [
   { id: "one", nombre: "Ane", apellidos: "Ficticia", categoria: "Alevín", equipo: "F7 A", selected_october: true },
@@ -33,10 +33,24 @@ test("selects every visible record without duplicates", () => {
 });
 
 test("bulk modality requires selected records and an active catalog option", () => {
-  const modalities = [{ code: "F7", active: true }, { code: "F11", active: false }];
+  const modalities = [{ code: "F7", active: true, aliases: ["7"] }, { code: "F11", active: false, aliases: ["11"] }];
   expect(canApplyPreparationBulk([], { field: "modalidad", value: "F7" }, modalities)).toBe(false);
   expect(canApplyPreparationBulk(["one"], { field: "modalidad", value: "F11" }, modalities)).toBe(false);
   expect(canApplyPreparationBulk(["one"], { field: "modalidad", value: "F7" }, modalities)).toBe(true);
+  expect(canApplyPreparationBulk(["one"], { field: "modalidad", value: 7 }, modalities)).toBe(true);
+});
+
+test("resolves browser values to active official modality codes", () => {
+  const modalities = [
+    { code: "F7", name_es: "Fútbol 7", active: true, aliases: ["7", "F-7"] },
+    { code: "F11", name_es: "Fútbol 11", active: true, aliases: ["11"] },
+    { code: "F8", active: false, aliases: ["8"] },
+  ];
+  expect(officialModalityCode("F7", modalities)).toBe("F7");
+  expect(officialModalityCode(7, modalities)).toBe("F7");
+  expect(officialModalityCode("fútbol 11", modalities)).toBe("F11");
+  expect(officialModalityCode("8", modalities)).toBe("");
+  expect(officialModalityCode("manipulated", modalities)).toBe("");
 });
 
 test("renders modality names from the API in Spanish and Basque", () => {

@@ -19,6 +19,13 @@ def test_default_catalog_contains_only_compatible_active_modalities():
     assert all(item.updated_by == "system:compatibility" for item in catalog)
 
 
+@pytest.mark.parametrize(("value", "code"), [("7", "F7"), (7, "F7"), ("11", "F11"), (11, "F11")])
+def test_default_catalog_defines_numeric_compatibility_aliases(value, code):
+    result = normalize_modality(value)
+    assert result.status == "recognized"
+    assert result.code == code
+
+
 @pytest.mark.parametrize("original", ["F7", "f-7", "F 7", "Fútbol 7", "futbol 7"])
 def test_normalizes_only_safe_f7_aliases_and_preserves_original(original):
     result = normalize_modality(original)

@@ -46,9 +46,12 @@ def test_bulk_modality_rejects_unknown_or_inactive_catalog_values(monkeypatch):
     update.assert_not_awaited()
 
 
-def test_bulk_modality_updates_only_selected_records_and_audits_change(monkeypatch):
+@pytest.mark.parametrize(("submitted", "expected"), [
+    ("F7", "F7"), ("7", "F7"), ("f11", "F11"), ("11", "F11"),
+])
+def test_bulk_modality_updates_only_selected_records_and_audits_change(monkeypatch, submitted, expected):
     before = historical_draft()
-    after = historical_draft(first="F7")
+    after = historical_draft(first=expected)
     staging_doc = AsyncMock(side_effect=[before, after])
     update = AsyncMock()
     monkeypatch.setattr(server, "_staging_doc", staging_doc)
@@ -57,7 +60,7 @@ def test_bulk_modality_updates_only_selected_records_and_audits_change(monkeypat
     token = current_user_context.set({"id": "admin-safe", "role": "admin", "active": True})
     try:
         result = run(server.bulk_update_staging("draft-safe", server.StagingBulkUpdate(
-            record_ids=["row-1"], field="modalidad", value="F7", confirm_suggestion=True,
+            record_ids=["row-1"], field="modalidad", value=submitted, confirm_suggestion=True,
         )))
     finally:
         current_user_context.reset(token)
@@ -65,13 +68,13 @@ def test_bulk_modality_updates_only_selected_records_and_audits_change(monkeypat
     assert result["summary"]["missing_modality"] == 0
     assert result["simulation"]["official_writes"] == 0
     update_doc = update.await_args.args[1]
-    assert update_doc["$set"]["records.$[row].modalidad"] == "F7"
+    assert update_doc["$set"]["records.$[row].modalidad"] == expected
     assert update.await_args.kwargs["array_filters"][0] == {"row.id": {"$in": ["row-1"]}}
     audit = update_doc["$push"]["audit"]
     assert audit["actor_user_id"] == "admin-safe"
     assert audit["at"] is not None
     assert audit["detail"]["changes"] == [{
-        "record_id": "row-1", "previous_value": None, "new_value": "F7",
+        "record_id": "row-1", "previous_value": None, "new_value": expected,
     }]
 
 
@@ -115,3 +118,24 @@ def test_individual_modality_change_is_catalog_validated_and_audited(monkeypatch
         "record_id": "row-1", "field": "modalidad",
         "previous_value": "F11", "new_value": "F7",
     }
+
+
+@pytest.mark.parametrize(("submitted", "expected"), [(7, "F7"), (11, "F11")])
+def test_individual_compatible_numeric_modality_is_stored_as_official_code(monkeypatch, submitted, expected):
+    before = historical_draft(first="")
+    after = historical_draft(first=expected)
+    monkeypatch.setattr(server, "_staging_doc", AsyncMock(side_effect=[before, after]))
+    monkeypatch.setattr(server, "_load_modality_catalog", AsyncMock(return_value=list(DEFAULT_MODALITIES)))
+    update_one = AsyncMock(return_value=SimpleNamespace(modified_count=1))
+    monkeypatch.setattr(server, "db", SimpleNamespace(import_staging=SimpleNamespace(
+        update_one=update_one, update_many=AsyncMock(),
+    )))
+
+    result = run(server.update_staging_record(
+        "draft-safe", "row-1", server.StagingRecordUpdate(
+            field="modalidad", value=submitted, confirm_suggestion=True,
+        ),
+    ))
+
+    assert result["simulation"]["official_writes"] == 0
+    assert update_one.await_args.args[1]["$set"]["records.$.modalidad"] == expected

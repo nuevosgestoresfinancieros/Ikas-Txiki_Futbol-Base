@@ -68,7 +68,7 @@ from historical_import_adapter import (
 from modality_service import (
     ModalityCreateRequest, ModalityDefinition, ModalityReorderRequest,
     ModalityStatusRequest, ModalityUpdateRequest, catalog_from_settings,
-    validate_compatibility_catalog,
+    normalize_modality, validate_compatibility_catalog,
 )
 
 
@@ -2091,6 +2091,15 @@ async def _active_staging_team(team_id: Any) -> Optional[dict]:
     return team
 
 
+async def _active_staging_modality(value: Any) -> Optional[str]:
+    """Resolve a browser value to the active official catalog code."""
+    catalog = await _load_modality_catalog()
+    normalized = normalize_modality(value, catalog)
+    if normalized.status != "recognized" or not normalized.active:
+        return None
+    return normalized.code
+
+
 @api_router.patch("/inscription-imports/staging/{draft_id}/records/{record_id}")
 async def update_staging_record(draft_id: str, record_id: str, request: StagingRecordUpdate):
     draft = await _staging_doc(draft_id)
@@ -2133,9 +2142,8 @@ async def update_staging_record(draft_id: str, record_id: str, request: StagingR
         if request.field == "modalidad":
             if draft.get("status") != "draft":
                 raise HTTPException(status_code=409, detail="Solo se puede modificar un borrador activo")
-            value = value.upper()
-            active_codes = {entry.code for entry in await _load_modality_catalog() if entry.active}
-            if value and value not in active_codes:
+            value = await _active_staging_modality(value)
+            if not value:
                 raise HTTPException(status_code=422, detail="La modalidad no existe o está inactiva")
         candidate = dict(current_record)
         candidate[request.field] = value
@@ -2192,9 +2200,8 @@ async def bulk_update_staging(draft_id: str, request: StagingBulkUpdate):
     if request.field == "modalidad":
         if draft.get("status") != "draft":
             raise HTTPException(status_code=409, detail="Solo se puede modificar un borrador activo")
-        value = value.upper()
-        active_codes = {entry.code for entry in await _load_modality_catalog() if entry.active}
-        if value not in active_codes:
+        value = await _active_staging_modality(value)
+        if not value:
             raise HTTPException(status_code=422, detail="La modalidad no existe o está inactiva")
         if not request.confirm_suggestion:
             raise HTTPException(status_code=422, detail="La asignación de modalidad requiere confirmación expresa")

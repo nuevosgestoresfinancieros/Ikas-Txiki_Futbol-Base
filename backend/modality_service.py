@@ -133,12 +133,12 @@ class ModalityReorderRequest(BaseModel):
 DEFAULT_MODALITIES = (
     ModalityDefinition(
         code="F7", name_es="Fútbol 7", name_eu="7ko futbola", active=True,
-        sort_order=10, aliases=["F7", "F-7", "F 7", "Fútbol 7", "Futbol 7"],
+        sort_order=10, aliases=["F7", "F-7", "F 7", "7", "Fútbol 7", "Futbol 7"],
         max_players=18, updated_at=None, updated_by="system:compatibility",
     ),
     ModalityDefinition(
         code="F11", name_es="Fútbol 11", name_eu="11ko futbola", active=True,
-        sort_order=20, aliases=["F11", "F-11", "F 11", "Fútbol 11", "Futbol 11"],
+        sort_order=20, aliases=["F11", "F-11", "F 11", "11", "Fútbol 11", "Futbol 11"],
         max_players=25, updated_at=None, updated_by="system:compatibility",
     ),
 )
