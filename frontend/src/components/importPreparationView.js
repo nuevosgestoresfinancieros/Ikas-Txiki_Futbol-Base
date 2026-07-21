@@ -1,6 +1,17 @@
 export const DUPLICATE_ACTIONS = ["keep_first", "keep_second", "merge", "different_people"];
 
-export const filterPreparationRecords = (records = [], filters = {}) => records.filter((record) => {
+export const MODALITY_CONTROL_COPY = {
+  es: {
+    filtersTitle: "Filtros", results: "resultados", modalityFilter: "Filtrar por modalidad", allModalities: "Todas", withoutModality: "Sin modalidad",
+    assignModality: "Asignar modalidad", selectRecordsReason: "Selecciona al menos un registro.", selectModalityReason: "Selecciona F7 o F11 para asignar.",
+  },
+  eu: {
+    filtersTitle: "Iragazkiak", results: "emaitza", modalityFilter: "Modalitatearen arabera iragazi", allModalities: "Guztiak", withoutModality: "Modalitaterik gabe",
+    assignModality: "Modalitatea esleitu", selectRecordsReason: "Hautatu gutxienez erregistro bat.", selectModalityReason: "Hautatu F7 edo F11 esleitzeko.",
+  },
+};
+
+export const filterPreparationRecords = (records = [], filters = {}, modalities = []) => records.filter((record) => {
   const query = (filters.query || "").trim().toLocaleLowerCase();
   const haystack = `${record.nombre || ""} ${record.apellidos || ""}`.toLocaleLowerCase();
   if (query && !haystack.includes(query)) return false;
@@ -10,6 +21,11 @@ export const filterPreparationRecords = (records = [], filters = {}) => records.
   if (filters.status === "incidents" && !record.has_pending_incidents) return false;
   if (filters.status === "ready" && record.has_pending_incidents) return false;
   if (filters.previousTeam && record.equipo_anterior !== filters.previousTeam) return false;
+  if (filters.modality) {
+    const currentModality = officialModalityCode(record.modalidad, modalities);
+    if (filters.modality === "__missing__" && currentModality) return false;
+    if (filters.modality !== "__missing__" && currentModality !== filters.modality) return false;
+  }
   if (filters.age) {
     if (!record.fecha_nacimiento) return false;
     const year = Number(String(record.fecha_nacimiento).slice(0, 4));
@@ -81,9 +97,20 @@ export const canApplyPreparationBulk = (
   return true;
 };
 
+export const modalityAssignmentDisabledReason = (selected = [], value = "", modalities = []) => {
+  if (!selected.length) return "selection";
+  if (!officialModalityCode(value, modalities)) return "modality";
+  return "";
+};
+
 export const applyPreparationFilterChange = (filters = {}, patch = {}) => ({
   filters: { ...filters, ...patch },
   selected: clearPreparationSelection(),
+});
+
+export const applyPreparationAssignmentChange = (bulk = {}, patch = {}, selected = []) => ({
+  bulk: { ...bulk, ...patch },
+  selected,
 });
 
 export const canFinalizeDraft = (draft, expresslyConfirmed) =>

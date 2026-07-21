@@ -1,4 +1,4 @@
-import { activeModalitiesFromApi, activeTeamsFromApi, applyPreparationFilterChange, canApplyPreparationBulk, canFinalizeDraft, clearPreparationSelection, existingCategoriesFromApi, filterPreparationRecords, historicalReviewCounts, isHistoricalDraft, modalityOptionLabel, officialModalityCode, preparationProgressLabel, selectedOctoberIds, selectVisiblePreparationRecords, teamMatchesCategory, teamsForCategory } from "./importPreparationView";
+import { activeModalitiesFromApi, activeTeamsFromApi, applyPreparationAssignmentChange, applyPreparationFilterChange, canApplyPreparationBulk, canFinalizeDraft, clearPreparationSelection, existingCategoriesFromApi, filterPreparationRecords, historicalReviewCounts, isHistoricalDraft, MODALITY_CONTROL_COPY, modalityAssignmentDisabledReason, modalityOptionLabel, officialModalityCode, preparationProgressLabel, selectedOctoberIds, selectVisiblePreparationRecords, teamMatchesCategory, teamsForCategory } from "./importPreparationView";
 
 const records = [
   { id: "one", nombre: "Ane", apellidos: "Ficticia", categoria: "Alevín", equipo: "F7 A", selected_october: true },
@@ -11,6 +11,26 @@ test("filters the preparation list without changing it", () => {
   expect(filterPreparationRecords(records, { age: "11" })[0].id).toBe("two");
   expect(filterPreparationRecords(records, { status: "incidents" })[0].id).toBe("two");
   expect(records).toHaveLength(2);
+});
+
+test("filters canonical, legacy and missing modalities together with other filters", () => {
+  const modalities = [
+    { code: "F7", active: true, aliases: ["7"] },
+    { code: "F11", active: true, aliases: ["11"] },
+  ];
+  const modalityRecords = [
+    { id: "f7", nombre: "A", categoria: "Alevín", modalidad: "F7" },
+    { id: "legacy-f7", nombre: "B", categoria: "Alevín", modalidad: 7 },
+    { id: "f11", nombre: "C", categoria: "Infantil", modalidad: "F11" },
+    { id: "legacy-f11", nombre: "D", categoria: "Infantil", modalidad: "11" },
+    { id: "missing", nombre: "E", categoria: "Alevín", modalidad: "" },
+    { id: "unknown", nombre: "F", categoria: "Alevín", modalidad: "F8" },
+  ];
+  expect(filterPreparationRecords(modalityRecords, {}, modalities)).toHaveLength(6);
+  expect(filterPreparationRecords(modalityRecords, { modality: "F7" }, modalities).map((row) => row.id)).toEqual(["f7", "legacy-f7"]);
+  expect(filterPreparationRecords(modalityRecords, { modality: "F11" }, modalities).map((row) => row.id)).toEqual(["f11", "legacy-f11"]);
+  expect(filterPreparationRecords(modalityRecords, { modality: "__missing__" }, modalities).map((row) => row.id)).toEqual(["missing", "unknown"]);
+  expect(filterPreparationRecords(modalityRecords, { modality: "F7", category: "Infantil" }, modalities)).toEqual([]);
 });
 
 test("final import needs a ready draft and express confirmation", () => {
@@ -38,6 +58,32 @@ test("bulk modality requires selected records and an active catalog option", () 
   expect(canApplyPreparationBulk(["one"], { field: "modalidad", value: "F11" }, modalities)).toBe(false);
   expect(canApplyPreparationBulk(["one"], { field: "modalidad", value: "F7" }, modalities)).toBe(true);
   expect(canApplyPreparationBulk(["one"], { field: "modalidad", value: 7 }, modalities)).toBe(true);
+});
+
+test("explains why a modality assignment cannot be applied", () => {
+  const modalities = [{ code: "F7", active: true, aliases: ["7"] }, { code: "F11", active: true, aliases: ["11"] }];
+  expect(modalityAssignmentDisabledReason([], "F7", modalities)).toBe("selection");
+  expect(modalityAssignmentDisabledReason(["one"], "", modalities)).toBe("modality");
+  expect(modalityAssignmentDisabledReason(["one"], "F8", modalities)).toBe("modality");
+  expect(modalityAssignmentDisabledReason(["one"], "7", modalities)).toBe("");
+  expect(modalityAssignmentDisabledReason(["one"], "F11", modalities)).toBe("");
+});
+
+test("changing the assignment modality preserves the selected records", () => {
+  expect(applyPreparationAssignmentChange(
+    { field: "modalidad", value: "" }, { value: "F11" }, ["one", "two"],
+  )).toEqual({ bulk: { field: "modalidad", value: "F11" }, selected: ["one", "two"] });
+});
+
+test("provides distinct accessible modality filter and assignment copy in ES and EU", () => {
+  expect(MODALITY_CONTROL_COPY.es).toMatchObject({
+    modalityFilter: "Filtrar por modalidad", assignModality: "Asignar modalidad",
+    selectRecordsReason: "Selecciona al menos un registro.", selectModalityReason: "Selecciona F7 o F11 para asignar.",
+  });
+  expect(MODALITY_CONTROL_COPY.eu).toMatchObject({
+    modalityFilter: "Modalitatearen arabera iragazi", assignModality: "Modalitatea esleitu",
+    selectRecordsReason: "Hautatu gutxienez erregistro bat.", selectModalityReason: "Hautatu F7 edo F11 esleitzeko.",
+  });
 });
 
 test("resolves browser values to active official modality codes", () => {
@@ -102,7 +148,7 @@ test("category and team assignment require valid compatible API values", () => {
 
 test.each([
   { query: "ane" }, { category: "Alevín" }, { team: "F7 A" },
-  { age: "11" }, { previousTeam: "F7 B" }, { status: "incidents" },
+  { age: "11" }, { previousTeam: "F7 B" }, { status: "incidents" }, { modality: "F7" },
 ])("clears the selection when a preparation filter changes: %o", (patch) => {
   expect(applyPreparationFilterChange({ query: "", category: "" }, patch)).toEqual({
     filters: { query: "", category: "", ...patch },
