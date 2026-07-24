@@ -25,6 +25,12 @@ test("filters dependent teams and players from authorized options", () => {
 test("provides report defaults, readable summaries and explicit missing values", () => {
   expect(initialReportFilters("attendance").period).toBe("weekly");
   expect(initialReportFilters("roster").modality).toBe("");
+  expect(initialReportFilters("equipment", ["category", "team_id", "delivery"])).toEqual({
+    category: "", team_id: "", delivery: "",
+  });
+  expect(initialReportFilters("attendance_evolution", ["period", "date_from"])).toEqual({
+    period: "weekly", date_from: "",
+  });
   expect(reportFilterSummary({ team_id: "a", category: "Alevín" }, { teams: [{ id: "a", name: "Equipo A" }] })).toEqual([["team_id", "Equipo A"], ["category", "Alevín"]]);
   expect(safeReportCell(null)).toBe("—");
 });
@@ -38,6 +44,13 @@ test("distinguishes loading, error, empty and ready preview states", () => {
 
 test("contains the professional report interface in Spanish and Basque", () => {
   ["professionalReports", "professionalReportCatalog", "reportFilters", "previewReport", "legacyReports", "reportDateFrom", "reportGroupBy", "professionalExports", "downloadProfessionalPDF", "downloadProfessionalExcel", "professionalExportPreparing", "professionalExportNoResults", "professionalExportError", "professionalExportLimitError"].forEach((key) => {
+    expect(translations.es[key]).toBeTruthy();
+    expect(translations.eu[key]).toBeTruthy();
+  });
+  ["reportFilter_type", "reportFilter_movement", "reportFilter_delivery", "reportFilter_contact_type",
+    "reportFilter_payment_method", "reportColumn_missing_documents", "reportColumn_equipment_item",
+    "reportColumn_authorization_type", "reportColumn_expected", "reportColumn_paid",
+    "reportColumn_pending", "reportTotal_rows"].forEach((key) => {
     expect(translations.es[key]).toBeTruthy();
     expect(translations.eu[key]).toBeTruthy();
   });

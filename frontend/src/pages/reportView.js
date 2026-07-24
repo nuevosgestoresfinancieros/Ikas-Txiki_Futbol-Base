@@ -1,6 +1,11 @@
-export const initialReportFilters = (reportId) => reportId === "attendance"
-  ? { date_from: "", date_to: "", category: "", team_id: "", player_id: "", period: "weekly", group_by: "player" }
-  : { season: "", category: "", team_id: "", modality: "", status: "", search: "" };
+const DEFAULT_FILTER_VALUES = { period: "weekly", group_by: "player" };
+
+export const initialReportFilters = (reportId, allowedFilters) => {
+  const fallback = reportId === "attendance"
+    ? ["date_from", "date_to", "category", "team_id", "player_id", "period", "group_by"]
+    : ["season", "category", "team_id", "modality", "status", "search"];
+  return Object.fromEntries((allowedFilters || fallback).map((key) => [key, DEFAULT_FILTER_VALUES[key] || ""]));
+};
 
 export const reportPreviewRequest = (reportId, filters = {}, page = 1, pageSize = 25) => ({
   report_id: reportId,

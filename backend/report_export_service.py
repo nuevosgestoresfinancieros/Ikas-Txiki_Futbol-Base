@@ -33,7 +33,27 @@ REPORT_LABELS = {
         "status_col": "Estado", "sessions": "Sesiones", "present": "Presencias",
         "justified": "Justificadas", "unjustified": "Injustificadas", "injury": "Lesiones",
         "percentage": "Asistencia (%)", "players": "Jugadores", "teams": "Equipos",
-        "groups": "Grupos",
+        "groups": "Grupos", "rows": "Registros", "items": "Artículos", "delivered": "Entregados",
+        "birth_date": "Fecha de nacimiento", "position": "Posición", "license": "Licencia",
+        "joined_at": "Fecha de alta", "date": "Fecha", "time": "Hora", "location": "Lugar",
+        "attendees": "Asistentes", "period_label": "Periodo", "opponent": "Rival",
+        "condition": "Condición", "competition": "Competición", "score": "Resultado",
+        "response": "Respuesta", "responded_at": "Fecha de respuesta", "late": "Fuera de plazo",
+        "attendance_status": "Asistencia real", "consistent": "Coherencia",
+        "capacity": "Capacidad", "occupancy": "Ocupación (%)", "type": "Tipo",
+        "movement": "Movimiento", "document_status": "Estado documental",
+        "missing_documents": "Documentos pendientes", "authorization_type": "Tipo de autorización",
+        "signed_at": "Fecha de firma", "expires_at": "Caducidad", "missing_count": "Campos pendientes",
+        "missing_fields": "Datos pendientes", "equipment_item": "Equipación",
+        "shirt_size": "Talla camiseta", "shorts_size": "Talla pantalón",
+        "tracksuit_size": "Talla chándal", "delivery_date": "Fecha de entrega",
+        "contact_name": "Contacto", "phone": "Teléfono", "email": "Correo",
+        "matches_called": "Convocatorias", "matches_played": "Partidos jugados",
+        "minutes": "Minutos", "goals": "Goles", "assists": "Asistencias",
+        "yellow_cards": "Amarillas", "red_cards": "Rojas", "rating": "Valoración",
+        "concept": "Concepto", "expected": "Previsto", "paid": "Cobrado",
+        "pending": "Pendiente", "payment_method": "Forma de pago", "payment_date": "Fecha de pago",
+        "contact_type": "Tipo de contacto", "delivery": "Entrega", "movement_filter": "Movimiento",
     },
     "eu": {
         "generated": "Sortua", "filters": "Aplikatutako iragazkiak", "all": "Guztiak",
@@ -48,7 +68,27 @@ REPORT_LABELS = {
         "status_col": "Egoera", "sessions": "Saioak", "present": "Bertaratzeak",
         "justified": "Justifikatuak", "unjustified": "Justifikatu gabeak", "injury": "Lesioak",
         "percentage": "Asistentzia (%)", "players": "Jokalariak", "teams": "Taldeak",
-        "groups": "Taldekatzeak",
+        "groups": "Taldekatzeak", "rows": "Erregistroak", "items": "Artikuluak", "delivered": "Entregatuak",
+        "birth_date": "Jaioteguna", "position": "Posizioa", "license": "Lizentzia",
+        "joined_at": "Alta-data", "date": "Data", "time": "Ordua", "location": "Lekua",
+        "attendees": "Bertaratuak", "period_label": "Aldia", "opponent": "Aurkaria",
+        "condition": "Baldintza", "competition": "Lehiaketa", "score": "Emaitza",
+        "response": "Erantzuna", "responded_at": "Erantzun-data", "late": "Epez kanpo",
+        "attendance_status": "Benetako asistentzia", "consistent": "Koherentzia",
+        "capacity": "Edukiera", "occupancy": "Okupazioa (%)", "type": "Mota",
+        "movement": "Mugimendua", "document_status": "Dokumentuen egoera",
+        "missing_documents": "Falta diren dokumentuak", "authorization_type": "Baimen mota",
+        "signed_at": "Sinadura-data", "expires_at": "Iraungitzea", "missing_count": "Falta diren eremuak",
+        "missing_fields": "Falta diren datuak", "equipment_item": "Ekipamendua",
+        "shirt_size": "Kamiseta-taila", "shorts_size": "Praka-taila",
+        "tracksuit_size": "Txandal-taila", "delivery_date": "Entrega-data",
+        "contact_name": "Kontaktua", "phone": "Telefonoa", "email": "Posta elektronikoa",
+        "matches_called": "Deialdiak", "matches_played": "Jokatutako partidak",
+        "minutes": "Minutuak", "goals": "Golak", "assists": "Asistentziak",
+        "yellow_cards": "Txartel horiak", "red_cards": "Txartel gorriak", "rating": "Balorazioa",
+        "concept": "Kontzeptua", "expected": "Aurreikusita", "paid": "Kobratuta",
+        "pending": "Zain", "payment_method": "Ordainketa modua", "payment_date": "Ordainketa-data",
+        "contact_type": "Kontaktu mota", "delivery": "Entrega", "movement_filter": "Mugimendua",
     },
 }
 
@@ -152,7 +192,8 @@ def generate_pdf(report: Mapping[str, Any], rows: list[dict], totals: Mapping[st
     available = page_size[0] - 24 * mm
     weights = {"name": 1.5, "surname": 1.6, "team": 1.5, "category": 1.15, "modality": .8,
                "number": .7, "status": 1.0, "sessions": .8, "present": .8, "justified": .9,
-               "unjustified": 1.0, "injury": .8, "percentage": .9}
+               "unjustified": 1.0, "injury": .8, "percentage": .9, "missing_documents": 2.2,
+               "missing_fields": 2.0, "contact_name": 1.5, "email": 1.8, "concept": 1.5}
     total_weight = sum(weights.get(column, 1) for column in columns) or 1
     widths = [available * weights.get(column, 1) / total_weight for column in columns]
     table = LongTable(table_data, colWidths=widths, repeatRows=1, splitByRow=1)
@@ -194,7 +235,7 @@ def generate_xlsx(report: Mapping[str, Any], rows: list[dict], totals: Mapping[s
     workbook.properties.title = title
     workbook.properties.subject = "Informe deportivo"
     sheet = workbook.active
-    sheet.title = ("Plantilla" if report.get("id") == "roster" else ("Asistencia" if lang == "es" else "Asistentzia"))[:31]
+    sheet.title = re.sub(r"[^A-Za-z0-9 _-]", "", title)[:31] or ("Informe" if lang == "es" else "Txostena")
     sheet.sheet_view.showGridLines = False
     sheet.page_setup.orientation = "landscape"
     sheet.page_setup.paperSize = sheet.PAPERSIZE_A4
@@ -272,7 +313,8 @@ def generate_xlsx(report: Mapping[str, Any], rows: list[dict], totals: Mapping[s
     sheet.print_area = f"A1:{last_column}{last_row}"
     widths = {"name": 22, "surname": 26, "team": 22, "category": 16, "modality": 14, "number": 11,
               "status": 16, "sessions": 12, "present": 12, "justified": 14, "unjustified": 16,
-              "injury": 12, "percentage": 16}
+              "injury": 12, "percentage": 16, "missing_documents": 34, "missing_fields": 32,
+              "contact_name": 24, "phone": 18, "email": 28, "concept": 24}
     for index, column in enumerate(columns, 1):
         sheet.column_dimensions[get_column_letter(index)].width = widths.get(column, 16)
     output = io.BytesIO()

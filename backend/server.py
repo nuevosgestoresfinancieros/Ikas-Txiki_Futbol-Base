@@ -3014,15 +3014,71 @@ async def report_context() -> dict:
         return await db[coll].find(scope or {}, projection).to_list(maximum)
 
     return {
-        "players": await projected("players", {"id", "nombre", "apellidos", "equipo_id", "categoria", "modalidad", "dorsal", "estado"}, MAX_EXPORT_ROWS + 1),
-        "teams": await projected("teams", {"id", "nombre", "categoria", "modalidad", "temporada", "estado", "active"}),
-        "trainings": await projected("trainings", {"id", "equipo_id", "fecha", "asistencia.player_id", "asistencia.estado"}),
+        "players": await projected("players", {
+            "id", "nombre", "apellidos", "fecha_nacimiento", "fecha_inscripcion", "fecha_alta",
+            "fecha_baja", "equipo_id", "familia_id", "categoria", "modalidad", "dorsal",
+            "posicion", "numero_licencia", "estado", "estado_documental",
+            "doc_dni_jugador", "doc_dni_tutor", "doc_foto", "doc_autorizacion",
+            "doc_justificante_pago", "doc_ficha_federativa", "talla_camiseta",
+            "talla_pantalon", "talla_chandal", "equipacion_entregada",
+            "fecha_entrega_equipacion", "equipamiento_items", "equipaciones",
+            "progenitor1_nombre", "progenitor1_telefono", "progenitor1_email",
+            "progenitor2_nombre", "progenitor2_telefono", "progenitor2_email",
+        }, MAX_EXPORT_ROWS + 1),
+        "families": await projected("families", {
+            "id", "progenitor1_nombre", "progenitor1_telefono", "progenitor1_email",
+            "progenitor2_nombre", "progenitor2_telefono", "progenitor2_email",
+        }),
+        "teams": await projected("teams", {
+            "id", "nombre", "categoria", "modalidad", "temporada", "estado", "active",
+            "limite_jugadores",
+        }),
+        "trainings": await projected("trainings", {
+            "id", "equipo_id", "fecha", "hora", "campo", "callup_id",
+            "asistencia.player_id", "asistencia.estado",
+        }, MAX_EXPORT_ROWS + 1),
+        "matches": await projected("matches", {
+            "id", "temporada", "fecha", "hora", "equipo_id", "rival", "condicion",
+            "tipo", "estado", "resultado_propio", "resultado_rival",
+        }),
+        "callups": await projected("callups", {
+            "id", "match_id", "equipo_id", "convocados.player_id", "convocados.estado",
+            "convocados.responded_at", "convocados.late",
+        }),
+        "inscriptions": await projected("inscriptions", {
+            "id", "player_id", "created_at", "fecha_inscripcion", "nombre", "apellidos",
+            "tipo", "temporada", "equipo_id", "categoria", "modalidad", "estado",
+        }),
+        "authorizations": await projected("authorizations", {
+            "id", "player_id", "tipo", "estado", "fecha_firma", "fecha_caducidad",
+        }),
+        "payments": await projected("payments", {
+            "id", "player_id", "created_at", "concepto", "importe_final", "forma_pago",
+            "estado", "fecha_pago",
+        }),
+        "stats": await projected("stats", {
+            "id", "player_id", "temporada", "partidos_convocado", "partidos_jugados",
+            "minutos", "goles", "asistencias", "amarillas", "rojas", "valoracion",
+        }),
         "modalities": catalog_from_settings(settings),
     }
 
 
 def report_filter_options(context: dict) -> dict:
     players, teams = context["players"], context["teams"]
+    states = {
+        value for collection in ("players", "matches", "inscriptions", "authorizations", "payments")
+        for item in context.get(collection, []) for value in [item.get("estado")] if value
+    }
+    states.update({
+        "activo", "baja", "lesionado", "pendiente_documentacion", "en_prueba",
+        "programado", "jugado", "aplazado", "suspendido", "cancelado",
+        "recibida", "revisada", "aceptada", "pendiente", "rechazada",
+        "firmada", "caducada", "pagado", "parcial", "devuelto",
+        "pending", "confirmed", "declined",
+    })
+    states.update(normalize_status(item.get("estado")) for callup in context.get("callups", [])
+                  for item in callup.get("convocados", []) if item.get("estado"))
     return {
         "seasons": sorted({team.get("temporada") for team in teams if team.get("temporada")}),
         "categories": sorted({value for value in [
@@ -3036,7 +3092,13 @@ def report_filter_options(context: dict) -> dict:
         "players": sorted([{"id": player.get("id"), "name": f"{player.get('nombre') or ''} {player.get('apellidos') or ''}".strip(),
                             "team_id": player.get("equipo_id"), "category": player.get("categoria")}
                            for player in players if player.get("id")], key=lambda item: item["name"].casefold()),
-        "states": sorted({player.get("estado") for player in players if player.get("estado")}),
+        "states": sorted(states),
+        "types": ["alta", "renovacion", "general", "imagen", "medica", "desplazamientos",
+                  "recogida", "proteccion_datos"],
+        "movements": ["alta", "baja"],
+        "deliveries": ["delivered", "pending"],
+        "contact_types": ["all", "phone", "email"],
+        "payment_methods": ["domiciliacion", "transferencia", "efectivo", "bizum"],
     }
 
 

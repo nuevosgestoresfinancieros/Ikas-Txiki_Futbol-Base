@@ -33,7 +33,9 @@ def run(awaitable):
 
 @pytest.mark.parametrize("role", ["admin", "coordinator", "coach", "family", "player"])
 def test_catalog_is_available_for_every_authorized_role(role):
-    assert [item["id"] for item in catalog_for_role(role)] == ["roster", "attendance"]
+    ids = [item["id"] for item in catalog_for_role(role)]
+    assert {"roster", "attendance"}.issubset(ids)
+    assert len(ids) > 2
     assert catalog_for_role("unknown") == []
 
 
