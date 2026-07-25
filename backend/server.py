@@ -75,6 +75,11 @@ from report_service import (
     enforce_export_limit, paginate, validate_report_filters,
 )
 from report_export_service import generate_pdf as generate_report_pdf, generate_xlsx as generate_report_xlsx, safe_filename
+from assistant_knowledge import KNOWLEDGE_VERSION, available_modules
+from assistant_service import (
+    ACTION_DEFINITIONS, ExternalAssistantProvider, ProposalStore, answer_help,
+    public_proposal, session_fingerprint,
+)
 
 
 ROOT_DIR = Path(__file__).parent
@@ -102,6 +107,14 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 LOGIN_WINDOW_SECONDS = 10 * 60
 LOGIN_MAX_ATTEMPTS = 6
 login_attempts = defaultdict(deque)
+assistant_attempts = defaultdict(deque)
+assistant_proposals = ProposalStore(int(os.environ.get("ASSISTANT_PROPOSAL_TTL_SECONDS", "600")))
+assistant_provider = ExternalAssistantProvider(
+    transport=None,
+    timeout_seconds=float(os.environ.get("ASSISTANT_PROVIDER_TIMEOUT_SECONDS", "5")),
+)
+ASSISTANT_RATE_WINDOW_SECONDS = 60
+ASSISTANT_RATE_MAX_REQUESTS = 30
 
 def create_access_token(data: dict) -> str:
     expire = datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRE_HOURS)
@@ -3753,6 +3766,351 @@ async def import_excel(file: UploadFile = File(...)):
             await db[coll].insert_many(cleaned)
         summary[coll] = len(cleaned)
     return {"ok": True, "imported": summary}
+
+
+# ================= HYBRID ASSISTANT =================
+class AssistantHelpRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=1200)
+    route: str = Field(default="/", max_length=80)
+    language: str = "es"
+
+    @field_validator("language")
+    @classmethod
+    def validate_assistant_language(cls, value: str):
+        if value not in {"es", "eu"}:
+            raise ValueError("Idioma no válido")
+        return value
+
+
+class AssistantProposalRequest(BaseModel):
+    intent: str
+    target_id: Optional[str] = None
+    data: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AssistantInternalQueryRequest(BaseModel):
+    intent: str
+    target_id: Optional[str] = None
+
+
+class AssistantConfirmRequest(BaseModel):
+    confirmation_nonce: str = Field(min_length=20, max_length=120)
+
+
+ASSISTANT_ALLOWED_FIELDS = {
+    "player.create": {
+        "nombre", "apellidos", "fecha_nacimiento", "centro_escolar", "categoria",
+        "equipo_id", "dorsal", "posicion", "estado", "familia_id",
+    },
+    "player.update": {
+        "nombre", "apellidos", "centro_escolar", "categoria", "equipo_id",
+        "dorsal", "posicion", "estado", "familia_id",
+    },
+    "family.create": {
+        "progenitor1_nombre", "progenitor1_telefono", "progenitor1_email",
+        "progenitor2_nombre", "progenitor2_telefono", "progenitor2_email",
+        "domicilio", "contacto_principal", "preferencia_comunicacion", "observaciones",
+    },
+    "family.update": {
+        "progenitor1_nombre", "progenitor1_telefono", "progenitor1_email",
+        "progenitor2_nombre", "progenitor2_telefono", "progenitor2_email",
+        "domicilio", "contacto_principal", "preferencia_comunicacion", "observaciones",
+    },
+    "player.link_family": {"familia_id"},
+    "player.assign_team": {"equipo_id"},
+    "inscription.create": {
+        "tipo", "nombre", "apellidos", "fecha_nacimiento", "centro_escolar",
+        "nueva_incorporacion", "estado", "categoria", "temporada", "equipo_id",
+        "modalidad", "equipamiento_items", "observaciones",
+    },
+    "attendance.update": {"training_id", "player_id", "estado", "motivo"},
+    "callup.prepare": {
+        "match_id", "equipo_id", "convocados", "hora_quedada", "lugar_quedada",
+        "material", "mensaje_familias", "response_deadline", "player_self_response_allowed",
+    },
+    "equipment.update": {
+        "dorsal", "talla_camiseta", "talla_pantalon", "talla_chandal",
+        "talla_medias", "talla_calzado", "equipacion_entregada",
+        "fecha_entrega_equipacion", "observaciones_material", "equipamiento_items",
+    },
+}
+
+ASSISTANT_INTERNAL_QUERIES = {
+    "player.summary": {"resource": "players", "target_required": True},
+    "team.summary": {"resource": "teams", "target_required": True},
+    "attendance.recent": {"resource": "attendance", "target_required": False},
+}
+
+
+def _assistant_user_id(user: Mapping[str, Any]) -> str:
+    return str(user.get("id") or user.get("username") or "")
+
+
+def _assistant_session(request: Request) -> str:
+    return session_fingerprint(request.cookies.get("ikastxiki_session"))
+
+
+def _assistant_rate_limit(user: Mapping[str, Any]) -> None:
+    key = _assistant_user_id(user)
+    now = time.monotonic()
+    attempts = assistant_attempts[key]
+    while attempts and now - attempts[0] > ASSISTANT_RATE_WINDOW_SECONDS:
+        attempts.popleft()
+    if len(attempts) >= ASSISTANT_RATE_MAX_REQUESTS:
+        raise HTTPException(status_code=429, detail="Límite temporal del asistente alcanzado")
+    attempts.append(now)
+
+
+async def _assistant_existing(intent: str, target_id: Optional[str], data: Mapping[str, Any]) -> Optional[dict]:
+    if intent in {"player.update", "player.link_family", "player.assign_team", "equipment.update"}:
+        return await get_doc("players", str(target_id or ""))
+    if intent == "family.update":
+        return await get_doc("families", str(target_id or ""))
+    if intent == "attendance.update":
+        return await get_doc("trainings", str(data.get("training_id") or ""))
+    return None
+
+
+async def _validate_assistant_relations(intent: str, data: Mapping[str, Any], existing: Optional[dict]) -> None:
+    team_id = data.get("equipo_id")
+    if team_id:
+        team = await get_doc("teams", str(team_id))
+        if team.get("estado") not in (None, "", "activo", "active"):
+            raise HTTPException(status_code=422, detail="El equipo no está activo")
+        category = data.get("categoria") or (existing or {}).get("categoria")
+        if category and team.get("categoria") and normalize_key(team.get("categoria")) != normalize_key(category):
+            raise HTTPException(status_code=422, detail="El equipo no es compatible con la categoría")
+    if data.get("familia_id"):
+        await get_doc("families", str(data["familia_id"]))
+    if intent == "attendance.update":
+        if data.get("estado") not in ATTENDANCE_STATES:
+            raise HTTPException(status_code=422, detail="Estado de asistencia no válido")
+        player = await get_doc("players", str(data.get("player_id") or ""))
+        if existing and existing.get("equipo_id") and player.get("equipo_id") != existing.get("equipo_id"):
+            raise HTTPException(status_code=422, detail="El jugador no pertenece al equipo del entrenamiento")
+    if intent == "callup.prepare":
+        match = await get_doc("matches", str(data.get("match_id") or ""))
+        if data.get("equipo_id") and match.get("equipo_id") != data.get("equipo_id"):
+            raise HTTPException(status_code=422, detail="El partido no pertenece al equipo indicado")
+
+
+async def _assistant_duplicate_hints(intent: str, data: Mapping[str, Any]) -> list[dict]:
+    if intent not in {"player.create", "inscription.create"}:
+        return []
+    name = str(data.get("nombre") or "").strip()
+    surname = str(data.get("apellidos") or "").strip()
+    if not name:
+        return []
+    query = {"nombre": {"$regex": f"^{re.escape(name)}$", "$options": "i"}}
+    if surname:
+        query["apellidos"] = {"$regex": f"^{re.escape(surname)}$", "$options": "i"}
+    matches = await list_docs("players", query)
+    return [{"id": row.get("id"), "label": "Posible coincidencia en tu ámbito"} for row in matches[:5]]
+
+
+def _assistant_clean_data(intent: str, data: Mapping[str, Any]) -> dict:
+    allowed = ASSISTANT_ALLOWED_FIELDS.get(intent)
+    if allowed is None:
+        raise HTTPException(status_code=422, detail="Acción guiada no permitida")
+    unknown = set(data) - allowed
+    if unknown:
+        raise HTTPException(status_code=422, detail="La propuesta contiene campos no permitidos")
+    return {key: value for key, value in data.items() if key in allowed}
+
+
+@api_router.get("/assistant/capabilities")
+async def assistant_capabilities():
+    actor = current_user_context.get() or {}
+    capabilities = []
+    for intent, definition in ACTION_DEFINITIONS.items():
+        if has_permission(actor, definition["resource"], definition["action"]):
+            capabilities.append({
+                "intent": intent, "required": definition["required"],
+                "fields": sorted(ASSISTANT_ALLOWED_FIELDS[intent]),
+            })
+    return {
+        "knowledge_version": KNOWLEDGE_VERSION,
+        "provider_configured": assistant_provider.configured,
+        "modules": available_modules(str(actor.get("role"))),
+        "actions": capabilities,
+        "queries": [
+            {"intent": intent, "target_required": definition["target_required"]}
+            for intent, definition in ASSISTANT_INTERNAL_QUERIES.items()
+            if has_permission(actor, definition["resource"], "read")
+        ],
+        "conversation_persisted": False,
+    }
+
+
+@api_router.post("/assistant/help")
+async def assistant_help(payload: AssistantHelpRequest):
+    actor = current_user_context.get() or {}
+    _assistant_rate_limit(actor)
+    return answer_help(payload.message, actor, payload.route, payload.language, assistant_provider)
+
+
+@api_router.post("/assistant/internal-query")
+async def assistant_internal_query(payload: AssistantInternalQueryRequest):
+    """Consultas cerradas y proyectadas; nunca se delegan al proveedor."""
+    actor = current_user_context.get() or {}
+    _assistant_rate_limit(actor)
+    definition = ASSISTANT_INTERNAL_QUERIES.get(payload.intent)
+    if not definition:
+        raise HTTPException(status_code=422, detail="Consulta interna no permitida")
+    enforce_permission(actor, definition["resource"], "read")
+    if definition["target_required"] and not payload.target_id:
+        raise HTTPException(status_code=422, detail="La consulta requiere un identificador")
+    if payload.intent == "player.summary":
+        player = await get_doc("players", str(payload.target_id))
+        return {"channel": "internal", "result": {
+            "id": player.get("id"), "nombre": player.get("nombre"),
+            "apellidos": player.get("apellidos"), "categoria": player.get("categoria"),
+            "equipo_id": player.get("equipo_id"), "estado": player.get("estado"),
+        }}
+    if payload.intent == "team.summary":
+        team = await get_doc("teams", str(payload.target_id))
+        players = await list_docs("players", {"equipo_id": team.get("id")})
+        return {"channel": "internal", "result": {
+            "id": team.get("id"), "nombre": team.get("nombre"),
+            "categoria": team.get("categoria"), "modalidad": team.get("modalidad"),
+            "temporada": team.get("temporada"), "jugadores": len(players),
+        }}
+    trainings, _, _, allowed_players = await attendance_data()
+    rows = attendance_rows(trainings, allowed_players)
+    return {"channel": "internal", "result": {
+        "summary": attendance_summary(trainings, allowed_players),
+        "recent": sorted(rows, key=lambda row: row.get("fecha") or "", reverse=True)[:10],
+    }}
+
+
+@api_router.post("/assistant/proposals")
+async def assistant_create_proposal(payload: AssistantProposalRequest, request: Request):
+    actor = current_user_context.get() or {}
+    _assistant_rate_limit(actor)
+    definition = ACTION_DEFINITIONS.get(payload.intent)
+    if not definition:
+        raise HTTPException(status_code=422, detail="Acción guiada no permitida")
+    enforce_permission(actor, definition["resource"], definition["action"])
+    data = _assistant_clean_data(payload.intent, payload.data)
+    required_values = {**data, "target_id": payload.target_id}
+    missing = [key for key in definition["required"] if required_values.get(key) in (None, "", [])]
+    if missing:
+        raise HTTPException(status_code=422, detail="Faltan campos obligatorios para preparar el cambio")
+    existing = await _assistant_existing(payload.intent, payload.target_id, data)
+    await _validate_assistant_relations(payload.intent, data, existing)
+    duplicates = await _assistant_duplicate_hints(payload.intent, data)
+    preview = {
+        "operation": payload.intent, "target_id": payload.target_id,
+        "changes": data, "possible_duplicates": duplicates,
+        "requires_explicit_confirmation": True,
+    }
+    proposal = assistant_proposals.create(
+        user_id=_assistant_user_id(actor), session_hash=_assistant_session(request),
+        intent=payload.intent, data=data, target_id=payload.target_id,
+        expected_version=(existing or {}).get("updated_at"), preview=preview,
+    )
+    return public_proposal(proposal)
+
+
+async def _execute_assistant_proposal(proposal) -> dict:
+    data = dict(proposal.data)
+    intent = proposal.intent
+    if intent == "player.create":
+        model = Player(**data).model_dump()
+        if model.get("fecha_nacimiento"):
+            model["categoria"] = compute_category(model["fecha_nacimiento"])
+        return await insert_doc("players", model)
+    if intent == "player.update":
+        existing = await get_doc("players", proposal.target_id)
+        return await update_doc("players", proposal.target_id, {**existing, **data})
+    if intent == "family.create":
+        return await insert_doc("families", Family(**data).model_dump())
+    if intent == "family.update":
+        existing = await get_doc("families", proposal.target_id)
+        return await update_doc("families", proposal.target_id, {**existing, **data})
+    if intent in {"player.link_family", "player.assign_team"}:
+        return await update_doc("players", proposal.target_id, data)
+    if intent == "inscription.create":
+        model = Inscription(**data).model_dump()
+        if model.get("fecha_nacimiento"):
+            model["categoria"] = compute_category(model["fecha_nacimiento"])
+        return await insert_doc("inscriptions", model)
+    if intent == "attendance.update":
+        training = await get_doc("trainings", str(data["training_id"]))
+        attendance = list(training.get("asistencia") or [])
+        item = {"player_id": data["player_id"], "estado": data["estado"], "motivo": data.get("motivo")}
+        index = next((index for index, value in enumerate(attendance) if value.get("player_id") == data["player_id"]), None)
+        if index is None:
+            attendance.append(item)
+        else:
+            attendance[index] = item
+        actor = current_user_context.get() or {}
+        changes = attendance_history(training.get("asistencia", []), attendance, actor)
+        return await update_doc("trainings", training["id"], {
+            **training, "asistencia": attendance,
+            "attendance_history": [*(training.get("attendance_history") or []), *changes],
+            "attendance_updated_by": {"id": actor.get("id"), "role": actor.get("role"), "at": now_iso()},
+        })
+    if intent == "callup.prepare":
+        model = Callup(**data).model_dump()
+        return await insert_doc("callups", model)
+    if intent == "equipment.update":
+        return await update_doc("players", proposal.target_id, data)
+    raise HTTPException(status_code=422, detail="Acción guiada no permitida")
+
+
+@api_router.post("/assistant/proposals/{proposal_id}/confirm")
+async def assistant_confirm_proposal(proposal_id: str, payload: AssistantConfirmRequest,
+                                     request: Request):
+    if request.headers.get("X-Assistant-Confirm") != "true":
+        raise HTTPException(status_code=403, detail="Falta la confirmación explícita de la operación")
+    actor = current_user_context.get() or {}
+    try:
+        proposal = assistant_proposals.get(proposal_id, _assistant_user_id(actor), _assistant_session(request))
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="La propuesta no pertenece a esta sesión")
+    except TimeoutError:
+        raise HTTPException(status_code=410, detail="La propuesta ha caducado")
+    definition = ACTION_DEFINITIONS[proposal.intent]
+    enforce_permission(actor, definition["resource"], definition["action"])
+    existing = await _assistant_existing(proposal.intent, proposal.target_id, proposal.data)
+    if existing and existing.get("updated_at") != proposal.expected_version:
+        raise HTTPException(status_code=409, detail="El registro cambió después de la vista previa")
+    await _validate_assistant_relations(proposal.intent, proposal.data, existing)
+    try:
+        assistant_proposals.consume(
+            proposal_id, _assistant_user_id(actor), _assistant_session(request),
+            payload.confirmation_nonce,
+        )
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Confirmación inválida")
+    except ValueError:
+        raise HTTPException(status_code=409, detail="La propuesta ya fue utilizada o cancelada")
+    result = await _execute_assistant_proposal(proposal)
+    proposal.result = {"id": result.get("id"), "ok": True}
+    await db.internal_events.insert_one({
+        "id": new_id(), "type": "assistant.operation_confirmed",
+        "actor_user_id": actor.get("id"), "actor_role": actor.get("role"),
+        "operation": proposal.intent, "target_id": result.get("id") or proposal.target_id,
+        "created_at": now_iso(), "result": "success",
+    })
+    return {"ok": True, "operation": proposal.intent, "result_id": result.get("id")}
+
+
+@api_router.post("/assistant/proposals/{proposal_id}/cancel")
+async def assistant_cancel_proposal(proposal_id: str, request: Request):
+    actor = current_user_context.get() or {}
+    try:
+        proposal = assistant_proposals.cancel(
+            proposal_id, _assistant_user_id(actor), _assistant_session(request),
+        )
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="La propuesta no pertenece a esta sesión")
+    except TimeoutError:
+        raise HTTPException(status_code=410, detail="La propuesta ha caducado")
+    except ValueError:
+        raise HTTPException(status_code=409, detail="La propuesta ya fue utilizada")
+    return {"ok": True, "cancelled": proposal.cancelled}
 
 
 app.include_router(api_router, dependencies=[Depends(authorize_request)])

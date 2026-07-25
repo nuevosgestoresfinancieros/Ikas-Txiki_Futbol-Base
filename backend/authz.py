@@ -13,7 +13,7 @@ RESOURCES = (
     "dashboard", "users", "players", "families", "teams", "trainings",
     "matches", "callups", "attendance", "payments", "authorizations",
     "inscriptions", "communications", "reports", "stats", "search",
-    "equipment", "settings", "modalities", "data", "calendar", "portal", "notifications",
+    "equipment", "settings", "modalities", "data", "calendar", "portal", "notifications", "assistant",
 )
 
 
@@ -42,6 +42,7 @@ ROLE_PERMISSIONS: Dict[str, Dict[str, Set[str]]] = {
         "calendar": _actions("read", "create", "edit", "delete", "export"),
         "notifications": _actions("read", "edit"),
         "modalities": _actions("read"),
+        "assistant": _actions("read", "create", "edit"),
     },
     "coach": {
         "dashboard": _actions("read"),
@@ -59,6 +60,7 @@ ROLE_PERMISSIONS: Dict[str, Dict[str, Set[str]]] = {
         "calendar": _actions("read", "create", "edit", "delete", "export"),
         "notifications": _actions("read", "edit"),
         "modalities": _actions("read"),
+        "assistant": _actions("read", "create", "edit"),
     },
     "family": {
         "dashboard": _actions("read"),
@@ -78,6 +80,7 @@ ROLE_PERMISSIONS: Dict[str, Dict[str, Set[str]]] = {
         "portal": _actions("read"),
         "notifications": _actions("read", "edit"),
         "modalities": _actions("read"),
+        "assistant": _actions("read", "create", "edit"),
     },
     "player": {
         "dashboard": _actions("read"),
@@ -95,6 +98,7 @@ ROLE_PERMISSIONS: Dict[str, Dict[str, Set[str]]] = {
         "portal": _actions("read"),
         "notifications": _actions("read", "edit"),
         "modalities": _actions("read"),
+        "assistant": _actions("read", "create", "edit"),
     },
 }
 
@@ -108,7 +112,7 @@ PATH_RESOURCES = {
     "reports": "reports", "stats": "stats", "search": "search",
     "equipment": "equipment", "settings": "settings", "dashboard": "dashboard",
     "users": "users", "categories": "teams", "compute-category": "players", "calendar": "calendar", "portal": "portal", "notifications": "notifications", "modalities": "modalities",
-    "inscription-imports": "data",
+    "inscription-imports": "data", "assistant": "assistant",
     "export-excel": "data", "import-excel": "data", "clear-all": "data",
     "seed-demo": "data",
 }
@@ -154,6 +158,10 @@ def route_permission(request: Request) -> tuple[str, str]:
         return "reports", "read"
     if first == "reports" and any(part.startswith("export.") for part in parts):
         return "reports", "export"
+    if first == "assistant":
+        if "confirm" in parts or "cancel" in parts:
+            return "assistant", "edit"
+        return "assistant", "create" if method == "POST" else "read"
     if first in {"clear-all", "seed-demo", "import-excel", "inscription-imports"}:
         return resource, "administer"
     if first == "export-excel" or "pdf" in parts or "signed-file" in parts or any(part.endswith((".pdf", ".xlsx", ".ics")) for part in parts):

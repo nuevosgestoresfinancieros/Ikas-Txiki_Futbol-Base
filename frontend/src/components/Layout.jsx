@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import GlobalSearch from "@/components/GlobalSearch";
 import NotificationCenter from "@/components/NotificationCenter";
+import AssistantPanel from "@/components/AssistantPanel";
 import { can, ROUTE_RESOURCES } from "@/auth";
 
 const navGroups = [
@@ -296,6 +297,7 @@ const Layout = ({ children, onLogout, user }) => {
       </div>
 
       <MobileBottomNav user={user} onMenu={() => setOpen(true)} onSearch={() => setSearchOpen(true)} />
+      <AssistantPanel user={user} />
     </div>
   );
 };
