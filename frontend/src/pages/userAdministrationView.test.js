@@ -1,6 +1,7 @@
 import { translations } from "../i18n";
 import {
-  allPasswordChecksPass, filterUsers, normalizedStatus, passwordChecks, userCounters, userDisplayName,
+  allPasswordChecksPass, filterUsers, normalizedStatus, normalizedTeamOptions, passwordChecks,
+  safeUsernameSuggestion, userCounters, userDisplayName, wizardLinkComplete,
 } from "./userAdministrationView";
 
 const users = [
@@ -37,4 +38,26 @@ test("contains complete Spanish and Basque administration translations", () => {
     expect(translations.es[key]).toBeTruthy();
     expect(translations.eu[key]).toBeTruthy();
   });
+});
+
+test("validates wizard links by role without granting an empty global scope", () => {
+  expect(wizardLinkComplete({ role: "admin" })).toBe(true);
+  expect(wizardLinkComplete({ role: "coach", assigned_team_ids: [] })).toBe(false);
+  expect(wizardLinkComplete({ role: "coach", assigned_team_ids: ["team-a"] })).toBe(true);
+  expect(wizardLinkComplete({ role: "family", family_id: "" })).toBe(false);
+  expect(wizardLinkComplete({ role: "player", player_id: "player-a" })).toBe(true);
+});
+
+test("normalizes the advanced team selector and excludes NO APLICA and duplicates", () => {
+  const teams = [
+    { id: "a", nombre: "Cadete A", categoria: "Cadete", temporada: "2026-2027", modalidad: "F11" },
+    { id: "duplicate", nombre: " cadete a ", categoria: "Cadete", temporada: "2026-2027" },
+    { id: "na", nombre: "NO APLICA" },
+  ];
+  expect(normalizedTeamOptions(teams, { search: "f11", season: "2026-2027" }).map((team) => team.id)).toEqual(["a"]);
+});
+
+test("suggests a safe normalized username but never admin", () => {
+  expect(safeUsernameSuggestion("Áne", "Prueba López")).toBe("ane_pruebalopez");
+  expect(safeUsernameSuggestion("admin", "")).toBe("");
 });

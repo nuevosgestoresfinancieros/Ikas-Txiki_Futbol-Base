@@ -33,6 +33,43 @@ def normalized_key(value: Any) -> str:
     return normalized_text(value).casefold()
 
 
+def user_search_text(user: Mapping[str, Any]) -> str:
+    return normalized_key(" ".join(str(user.get(field) or "") for field in (
+        "username", "first_name", "last_name", "email",
+    )))
+
+
+def link_is_complete(user: Mapping[str, Any]) -> bool:
+    role = str(user.get("role") or "player")
+    if role == "admin":
+        return True
+    if role in {"coach", "coordinator"}:
+        return bool(user.get("assigned_team_ids"))
+    if role == "family":
+        return bool(user.get("family_id") and user.get("linked_player_ids"))
+    return bool(user.get("player_id"))
+
+
+def security_state(user: Mapping[str, Any], now: datetime | None = None) -> str:
+    if user.get("locked_until"):
+        try:
+            locked = datetime.fromisoformat(str(user["locked_until"]).replace("Z", "+00:00"))
+            if locked > (now or datetime.now(timezone.utc)):
+                return "locked"
+        except ValueError:
+            pass
+    if user.get("must_change_password"):
+        return "password_change_required"
+    invitation = user.get("invitation") or {}
+    if invitation and not invitation.get("used_at") and not invitation.get("cancelled_at"):
+        try:
+            expires = datetime.fromisoformat(str(invitation.get("expires_at", "")).replace("Z", "+00:00"))
+            return "invitation_expired" if expires <= (now or datetime.now(timezone.utc)) else "invitation_pending"
+        except ValueError:
+            return "invitation_pending"
+    return "verified"
+
+
 def account_status(user: Mapping[str, Any]) -> str:
     explicit = normalized_key(user.get("account_status"))
     if explicit in ACCOUNT_STATUSES:
@@ -61,17 +98,30 @@ def validate_password_strength(password: str) -> str:
     return password
 
 
-def safe_audit_detail(action: str, changed_fields: list[str] | None = None) -> dict:
+def safe_audit_detail(action: str, changed_fields: list[str] | None = None,
+                      previous: Mapping[str, Any] | None = None,
+                      current: Mapping[str, Any] | None = None) -> dict:
     """Return an allow-listed audit payload with no values or credentials."""
     allowed = {
-        "first_name", "last_name", "email", "language", "role", "account_status",
+        "first_name", "last_name", "email", "phone", "language", "role", "account_status",
         "assigned_team_ids", "assigned_category_ids", "player_id", "family_id",
         "linked_player_ids", "active",
     }
-    return {
+    detail = {
         "action": action,
         "changed_fields": sorted(set(changed_fields or []) & allowed),
     }
+    if previous is not None or current is not None:
+        previous, current = previous or {}, current or {}
+        for field in ("role", "account_status"):
+            if field in detail["changed_fields"]:
+                detail[field] = {"previous": previous.get(field), "current": current.get(field)}
+        for field in ("assigned_team_ids", "assigned_category_ids", "linked_player_ids"):
+            if field in detail["changed_fields"]:
+                detail[f"{field}_count"] = {
+                    "previous": len(previous.get(field) or []), "current": len(current.get(field) or []),
+                }
+    return detail
 
 
 def effective_scope(user: Mapping[str, Any]) -> dict:
