@@ -141,6 +141,12 @@ def public_user(user: Mapping[str, Any]) -> dict:
         "family_id": user.get("family_id"),
         "linked_player_ids": list(user.get("linked_player_ids") or []),
         "last_access_at": user.get("last_access_at"),
+        "must_change_password": bool(user.get("must_change_password", False)),
+        "locked_until": user.get("locked_until"),
+        "invitation_status": user.get("invitation_status") or "none",
+        "invitation_expires_at": user.get("invitation_expires_at"),
+        "last_password_change_at": user.get("last_password_change_at"),
+        "sessions_revoked_at": user.get("sessions_revoked_at"),
         "language": user.get("language", "es"),
         "notification_preferences": dict(user.get("notification_preferences") or {}),
         "permissions": {

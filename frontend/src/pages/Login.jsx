@@ -18,6 +18,8 @@ const Login = ({ onLogin }) => {
   const location = useLocation();
   const [form, setForm] = useState({ username: "", password: "" });
   const [showPwd, setShowPwd] = useState(false);
+  const [passwordChangeToken, setPasswordChangeToken] = useState("");
+  const [newPassword, setNewPassword] = useState({ password: "", confirmation: "" });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [capsLock, setCapsLock] = useState(false);
@@ -40,6 +42,17 @@ const Login = ({ onLogin }) => {
 
   const submit = async (event) => {
     event.preventDefault();
+    if (passwordChangeToken) {
+      if (!newPassword.password || newPassword.password !== newPassword.confirmation) { setError(t("passwordMismatch")); return; }
+      setLoading(true); setError("");
+      try {
+        await api.post("/auth/change-temporary-password", { token: passwordChangeToken, password: newPassword.password, password_confirmation: newPassword.confirmation });
+        setPasswordChangeToken(""); setNewPassword({ password: "", confirmation: "" }); setForm((current) => ({ ...current, password: "" }));
+        setError(t("passwordChangedLoginAgain"));
+      } catch (requestError) { setError(requestError.response?.data?.detail || t("loginNetworkError")); }
+      finally { setLoading(false); }
+      return;
+    }
     if (!form.username.trim() || !form.password) {
       setError(t("loginRequired"));
       return;
@@ -52,6 +65,7 @@ const Login = ({ onLogin }) => {
         username: form.username.trim(),
         password: form.password,
       });
+      if (response.data.requires_password_change) { setPasswordChangeToken(response.data.password_change_token); return; }
       onLogin?.(response.data.user || { username: response.data.username, role: "admin", permissions: {} });
       const destination = location.state?.from?.pathname || "/";
       navigate(destination, { replace: true });
@@ -145,7 +159,7 @@ const Login = ({ onLogin }) => {
           </div>
 
           <form onSubmit={submit} className="space-y-5" noValidate>
-            <div className="space-y-2">
+            {!passwordChangeToken && <div className="space-y-2">
               <label htmlFor="login-username" className="text-sm font-semibold text-slate-700">{t("username")}</label>
               <div className="relative">
                 <User className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" aria-hidden="true" />
@@ -162,7 +176,7 @@ const Login = ({ onLogin }) => {
                   className="h-14 w-full rounded-2xl border border-slate-300 bg-white pl-12 pr-4 text-base text-slate-900 shadow-sm outline-none transition-[border-color,box-shadow] placeholder:text-slate-400 focus:border-primary focus:ring-4 focus:ring-primary/10"
                 />
               </div>
-            </div>
+            </div>}
 
             <div className="space-y-2">
               <label htmlFor="login-password" className="text-sm font-semibold text-slate-700">{t("password")}</label>
@@ -171,12 +185,12 @@ const Login = ({ onLogin }) => {
                 <input
                   id="login-password"
                   type={showPwd ? "text" : "password"}
-                  value={form.password}
-                  onChange={update("password")}
+                  value={passwordChangeToken ? newPassword.password : form.password}
+                  onChange={passwordChangeToken ? (event) => { setError(""); setNewPassword((current) => ({ ...current, password: event.target.value })); } : update("password")}
                   onKeyUp={(event) => setCapsLock(event.getModifierState?.("CapsLock") || false)}
                   onKeyDown={(event) => setCapsLock(event.getModifierState?.("CapsLock") || false)}
                   placeholder="••••••••"
-                  autoComplete="current-password"
+                  autoComplete={passwordChangeToken ? "new-password" : "current-password"}
                   aria-invalid={!!error}
                   aria-describedby={error ? "login-error" : capsLock ? "caps-lock-note" : undefined}
                   className="h-14 w-full rounded-2xl border border-slate-300 bg-white pl-12 pr-14 text-base text-slate-900 shadow-sm outline-none transition-[border-color,box-shadow] placeholder:text-slate-400 focus:border-primary focus:ring-4 focus:ring-primary/10"
@@ -197,6 +211,8 @@ const Login = ({ onLogin }) => {
               )}
             </div>
 
+            {passwordChangeToken && <div className="space-y-2"><label htmlFor="login-password-confirmation" className="text-sm font-semibold text-slate-700">{t("confirmPassword")}</label><input id="login-password-confirmation" type={showPwd ? "text" : "password"} value={newPassword.confirmation} onChange={(event) => { setError(""); setNewPassword((current) => ({ ...current, confirmation: event.target.value })); }} autoComplete="new-password" className="h-14 w-full rounded-2xl border border-slate-300 bg-white px-4 text-base shadow-sm outline-none focus:border-primary focus:ring-4 focus:ring-primary/10" /></div>}
+
             <div id="login-error" role="alert" aria-live="polite" className={`min-h-6 rounded-xl text-sm font-medium ${error ? "border border-red-200 bg-red-50 px-3 py-2.5 text-red-700" : ""}`}>
               {error}
             </div>
@@ -205,7 +221,7 @@ const Login = ({ onLogin }) => {
               {loading ? (
                 <><Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />{t("loggingIn")}</>
               ) : (
-                <>{t("loginButton")}<ShieldCheck className="h-5 w-5" aria-hidden="true" /></>
+                <>{t(passwordChangeToken ? "changePassword" : "loginButton")}<ShieldCheck className="h-5 w-5" aria-hidden="true" /></>
               )}
             </Button>
           </form>
