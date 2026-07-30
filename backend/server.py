@@ -29,6 +29,7 @@ from reportlab.lib.units import mm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, KeepTogether
 from datetime import datetime, timezone, date, timedelta
 from openpyxl import Workbook
+from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from authz import (
@@ -86,6 +87,11 @@ from user_admin_service import (
     safe_audit_detail, status_is_active, validate_password_strength,
 )
 from communication_recipient_service import recipient_summary, usable_account
+from user_security_service import (
+    INVITATION_TTL_HOURS, LOCK_DURATION_MINUTES, MAX_ACCOUNT_ATTEMPTS,
+    generate_temporary_password, invitation_status, issue_token, legacy_session_allowed,
+    parse_time, safe_security_audit, security_public, token_digest, token_is_usable, utcnow,
+)
 
 
 ROOT_DIR = Path(__file__).parent
@@ -110,8 +116,9 @@ if not ADMIN_USER or not ADMIN_PASSWORD or ADMIN_PASSWORD.lower() == "admin":
     raise RuntimeError("Configura ADMIN_USER y una ADMIN_PASSWORD segura en el entorno")
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-LOGIN_WINDOW_SECONDS = 10 * 60
-LOGIN_MAX_ATTEMPTS = 6
+LOGIN_WINDOW_SECONDS = max(60, int(os.environ.get("LOGIN_WINDOW_SECONDS", "600")))
+LOGIN_MAX_ATTEMPTS = max(3, min(20, int(os.environ.get("LOGIN_MAX_ATTEMPTS", "6"))))
+ACCOUNT_LOCK_MINUTES = max(1, min(1440, int(os.environ.get("ACCOUNT_LOCK_MINUTES", str(LOCK_DURATION_MINUTES)))))
 login_attempts = defaultdict(deque)
 assistant_attempts = defaultdict(deque)
 assistant_proposals = ProposalStore(int(os.environ.get("ASSISTANT_PROPOSAL_TTL_SECONDS", "600")))
@@ -124,7 +131,7 @@ ASSISTANT_RATE_MAX_REQUESTS = 30
 
 def create_access_token(data: dict) -> str:
     expire = datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRE_HOURS)
-    return jwt.encode({**data, "exp": expire}, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return jwt.encode({**data, "iat": datetime.now(timezone.utc), "exp": expire}, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 async def load_user(username: str) -> Optional[dict]:
     if username == ADMIN_USER:
@@ -149,6 +156,10 @@ async def get_current_user(request: Request):
         user = await load_user(username)
         if not user or not user.get("active", True) or not status_is_active(account_status(user)):
             raise HTTPException(status_code=403, detail="Usuario inactivo o sin acceso")
+        if not user.get("system_account") and not legacy_session_allowed(payload, user):
+            raise HTTPException(status_code=401, detail="Sesión revocada")
+        if payload.get("purpose") == "password_change":
+            raise HTTPException(status_code=403, detail="Debes cambiar la contraseña")
         request.state.current_user = user
         current_user_context.set(user)
         return user
@@ -179,13 +190,32 @@ async def login(request: Request, response: Response, data: Dict[str, Any]):
         db_user = await db["users"].find_one({"username": username})
         if db_user and db_user.get("active", True) and status_is_active(account_status(db_user)) and pwd_context.verify(password, db_user.get("password_hash", "")):
             valid_user = True
+    locked_until = parse_time(db_user.get("locked_until")) if db_user else None
+    if locked_until and locked_until > utcnow():
+        raise HTTPException(status_code=429, detail="Acceso bloqueado temporalmente")
     if not valid_user:
         attempts.append(now)
+        if db_user:
+            updated = await db.users.find_one_and_update(
+                {"id": db_user["id"]}, {"$inc": {"failed_login_count": 1},
+                "$set": {"last_failed_login_at": now_iso()}}, return_document=ReturnDocument.AFTER,
+            )
+            if int((updated or {}).get("failed_login_count", 0)) >= MAX_ACCOUNT_ATTEMPTS:
+                await db.users.update_one({"id": db_user["id"], "locked_until": {"$in": [None, ""]}},
+                                          {"$set": {"locked_until": (utcnow() + timedelta(minutes=ACCOUNT_LOCK_MINUTES)).isoformat()}})
         raise HTTPException(status_code=401, detail="Usuario o contraseña incorrectos")
     login_attempts.pop(attempt_key, None)
     if db_user:
-        await db["users"].update_one({"id": db_user["id"]}, {"$set": {"last_access_at": now_iso()}})
-    token = create_access_token({"sub": username})
+        await db["users"].update_one({"id": db_user["id"]}, {"$set": {
+            "last_access_at": now_iso(), "failed_login_count": 0, "locked_until": None,
+        }})
+    if db_user and db_user.get("must_change_password"):
+        change_token = create_access_token({
+            "sub": username, "purpose": "password_change", "ver": int(db_user.get("session_version", 0)),
+        })
+        return {"ok": False, "requires_password_change": True, "password_change_token": change_token}
+    token = create_access_token({"sub": username, "sid": str(uuid.uuid4()),
+                                 "ver": int((db_user or {}).get("session_version", 0))})
     response.set_cookie(
         key="ikastxiki_session",
         value=token,
@@ -208,6 +238,101 @@ async def logout(response: Response):
 @app.get("/api/auth/me")
 async def me(current_user: dict = Depends(get_current_user)):
     return public_user(current_user)
+
+
+class PasswordChangeRequest(BaseModel):
+    token: str
+    password: str
+    password_confirmation: str
+
+
+class RecoveryRequest(BaseModel):
+    identifier: str
+
+
+class TokenPasswordRequest(BaseModel):
+    token: str
+    password: str
+    password_confirmation: str
+
+
+async def consume_password_token(kind: str, request: TokenPasswordRequest) -> dict:
+    if request.password != request.password_confirmation:
+        raise HTTPException(status_code=422, detail="Las contraseñas no coinciden")
+    validate_password_strength(request.password)
+    digest = token_digest(request.token, JWT_SECRET)
+    field = "invitation" if kind == "invitation" else "recovery"
+    user = await db.users.find_one({f"{field}.digest": digest})
+    record = (user or {}).get(field)
+    if not user or not token_is_usable(record):
+        raise HTTPException(status_code=400, detail="Enlace inválido o caducado")
+    moment = now_iso()
+    result = await db.users.update_one({
+        "id": user["id"], f"{field}.digest": digest, f"{field}.used_at": None,
+        f"{field}.cancelled_at": None, f"{field}.expires_at": {"$gt": moment},
+    }, {"$set": {
+        "password_hash": pwd_context.hash(request.password), "must_change_password": False,
+        "account_status": "active", "active": True, f"{field}.used_at": moment,
+        "last_password_change_at": moment, "sessions_revoked_at": moment,
+    }, "$inc": {"session_version": 1}})
+    if not result.modified_count:
+        raise HTTPException(status_code=400, detail="Enlace inválido, caducado o ya utilizado")
+    await record_user_audit(f"{kind}_completed", user, [])
+    return {"ok": True}
+
+
+@app.post("/api/auth/change-temporary-password")
+async def change_temporary_password(request: PasswordChangeRequest):
+    if request.password != request.password_confirmation:
+        raise HTTPException(status_code=422, detail="Las contraseñas no coinciden")
+    validate_password_strength(request.password)
+    try:
+        payload = jwt.decode(request.token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except JWTError:
+        raise HTTPException(status_code=400, detail="Enlace inválido o caducado")
+    if payload.get("purpose") != "password_change":
+        raise HTTPException(status_code=400, detail="Token no válido")
+    user = await db.users.find_one({"username": payload.get("sub")})
+    if not user or not user.get("must_change_password") or not legacy_session_allowed(payload, user):
+        raise HTTPException(status_code=400, detail="Token ya utilizado o no válido")
+    moment = now_iso()
+    result = await db.users.update_one({
+        "id": user["id"], "must_change_password": True,
+        "session_version": int(user.get("session_version", 0)),
+    }, {"$set": {
+        "password_hash": pwd_context.hash(request.password), "must_change_password": False,
+        "last_password_change_at": moment, "sessions_revoked_at": moment,
+    }, "$inc": {"session_version": 1}})
+    if not result.modified_count:
+        raise HTTPException(status_code=400, detail="Token ya utilizado o no válido")
+    await record_user_audit("temporary_password_changed", user, [])
+    return {"ok": True}
+
+
+@app.post("/api/auth/activate")
+async def activate_invitation(request: TokenPasswordRequest):
+    return await consume_password_token("invitation", request)
+
+
+@app.post("/api/auth/recovery/request")
+async def request_recovery(request: RecoveryRequest):
+    identifier = normalized_key(request.identifier)
+    user = await db.users.find_one({"$or": [
+        {"username_normalized": identifier}, {"email_normalized": identifier},
+        {"username": request.identifier.strip()},
+    ]})
+    if user and user.get("active", True) and status_is_active(account_status(user)):
+        plain, record = issue_token(JWT_SECRET)
+        await db.users.update_one({"id": user["id"]}, {"$set": {"recovery": record}})
+        await record_user_audit("recovery_requested", user, [])
+        if os.environ.get("SECURITY_TEST_MODE") == "1":
+            return {"ok": True, "message": "Si la cuenta existe, recibirá instrucciones", "test_token": plain}
+    return {"ok": True, "message": "Si la cuenta existe, recibirá instrucciones"}
+
+
+@app.post("/api/auth/recovery/reset")
+async def reset_recovery_password(request: TokenPasswordRequest):
+    return await consume_password_token("recovery", request)
 
 
 @app.get("/api/public/branding")
@@ -676,6 +801,10 @@ def system_admin_public() -> dict:
     })
 
 
+def secured_public_user(user: dict) -> dict:
+    return {**public_user(user), **security_public(user)}
+
+
 async def ensure_admin_protection(existing: dict, candidate: dict) -> None:
     actor = current_user_context.get() or {}
     removing_admin = existing.get("role") == "admin" and (
@@ -718,18 +847,20 @@ async def create_user(user: UserCreate):
     data.update({
         "id": new_id(), "password_hash": pwd_context.hash(password),
         "active": status_is_active(data["account_status"]),
+        "must_change_password": False, "session_version": 0,
+        "failed_login_count": 0, "locked_until": None,
         "created_at": now_iso(), "updated_at": now_iso(), "last_access_at": None,
     })
     data["notification_preferences"] = dict(data["notification_preferences"])
     await db.users.insert_one(dict(data))
     await record_user_audit("created", data, list(data.keys()))
-    return public_user(data)
+    return secured_public_user(data)
 
 
 @api_router.get("/users")
 async def get_users():
     users = await db.users.find({}, {"_id": 0, "password_hash": 0}).sort("username", 1).to_list(5000)
-    return [system_admin_public(), *[public_user(user) for user in users]]
+    return [system_admin_public(), *[secured_public_user(user) for user in users]]
 
 
 @api_router.get("/users/{user_id}/effective-permissions")
@@ -755,7 +886,7 @@ async def get_user(user_id: str):
     user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
     if not user:
         raise HTTPException(status_code=404, detail="No encontrado")
-    return public_user(user)
+    return secured_public_user(user)
 
 
 @api_router.put("/users/{user_id}")
@@ -796,7 +927,7 @@ async def edit_user(user_id: str, changes: UserUpdate):
     else:
         audit_action = "updated"
     await record_user_audit(audit_action, candidate, list(data.keys()))
-    return public_user(candidate)
+    return secured_public_user(candidate)
 
 
 @api_router.delete("/users/{user_id}")
@@ -812,6 +943,114 @@ async def deactivate_user(user_id: str):
         "active": False, "account_status": "deactivated", "updated_at": now_iso(),
     }})
     await record_user_audit("deactivated", candidate, ["active", "account_status"])
+    return {"ok": True}
+
+
+security_attempts = defaultdict(deque)
+
+
+def enforce_sensitive_rate(actor: dict, action: str, maximum: int = 10) -> None:
+    key = f"{actor.get('id')}:{action}"
+    current = time.monotonic()
+    bucket = security_attempts[key]
+    while bucket and current - bucket[0] > 60:
+        bucket.popleft()
+    if len(bucket) >= maximum:
+        raise HTTPException(status_code=429, detail="Demasiadas operaciones. Inténtalo más tarde")
+    bucket.append(current)
+
+
+async def mutable_security_user(user_id: str) -> dict:
+    if user_id == "environment-admin":
+        raise HTTPException(status_code=403, detail="La cuenta del sistema es de solo lectura")
+    user = await db.users.find_one({"id": user_id}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="No encontrado")
+    return user
+
+
+@api_router.get("/users/{user_id}/security")
+async def get_user_security(user_id: str):
+    if user_id == "environment-admin":
+        return {**security_public({}), "system_account": True, "read_only": True}
+    return security_public(await mutable_security_user(user_id))
+
+
+@api_router.post("/users/{user_id}/security/temporary-password")
+async def generate_user_temporary_password(user_id: str):
+    actor = current_user_context.get() or {}
+    enforce_sensitive_rate(actor, "temporary-password")
+    user = await mutable_security_user(user_id)
+    temporary = generate_temporary_password()
+    moment = now_iso()
+    await db.users.update_one({"id": user_id}, {"$set": {
+        "password_hash": pwd_context.hash(temporary), "must_change_password": True,
+        "last_password_change_at": moment, "sessions_revoked_at": moment,
+    }, "$inc": {"session_version": 1}})
+    await record_user_audit("temporary_password_generated", user, [])
+    return {"ok": True, "temporary_password": temporary, "show_once": True}
+
+
+@api_router.post("/users/{user_id}/security/invitation")
+async def generate_user_invitation(user_id: str):
+    actor = current_user_context.get() or {}
+    enforce_sensitive_rate(actor, "invitation")
+    user = await mutable_security_user(user_id)
+    plain, record = issue_token(JWT_SECRET, ttl_minutes=0, ttl_hours=INVITATION_TTL_HOURS)
+    previous = user.get("invitation") or {}
+    if previous and not previous.get("used_at"):
+        previous = {**previous, "cancelled_at": now_iso()}
+    await db.users.update_one({"id": user_id}, {"$set": {
+        "invitation": record, "previous_invitation": previous or None,
+        "account_status": "pending_activation", "active": False,
+    }})
+    await record_user_audit("invitation_generated", user, [])
+    return {"ok": True, "invitation_token": plain, "expires_at": record["expires_at"],
+            "show_once": True, "delivery": "not_sent"}
+
+
+@api_router.delete("/users/{user_id}/security/invitation")
+async def cancel_user_invitation(user_id: str):
+    user = await mutable_security_user(user_id)
+    if not user.get("invitation"):
+        raise HTTPException(status_code=409, detail="No existe una invitación activa")
+    await db.users.update_one({"id": user_id}, {"$set": {"invitation.cancelled_at": now_iso()}})
+    await record_user_audit("invitation_cancelled", user, [])
+    return {"ok": True}
+
+
+@api_router.post("/users/{user_id}/security/revoke-sessions")
+async def revoke_user_sessions(user_id: str):
+    actor = current_user_context.get() or {}
+    user = await mutable_security_user(user_id)
+    if actor.get("id") == user_id:
+        raise HTTPException(status_code=409, detail="No puedes revocar accidentalmente tu propia sesión")
+    moment = now_iso()
+    await db.users.update_one({"id": user_id}, {"$set": {"sessions_revoked_at": moment},
+                                                   "$inc": {"session_version": 1}})
+    await record_user_audit("sessions_revoked", user, [])
+    return {"ok": True}
+
+
+@api_router.post("/users/{user_id}/security/lock")
+async def lock_user_access(user_id: str):
+    actor = current_user_context.get() or {}
+    user = await mutable_security_user(user_id)
+    candidate = {**user, "account_status": "suspended", "active": False}
+    await ensure_admin_protection(user, candidate)
+    if actor.get("id") == user_id:
+        raise HTTPException(status_code=409, detail="No puedes bloquear tu propia cuenta")
+    until = (utcnow() + timedelta(minutes=ACCOUNT_LOCK_MINUTES)).isoformat()
+    await db.users.update_one({"id": user_id}, {"$set": {"locked_until": until}})
+    await record_user_audit("locked", user, [])
+    return {"ok": True, "locked_until": until}
+
+
+@api_router.post("/users/{user_id}/security/unlock")
+async def unlock_user_access(user_id: str):
+    user = await mutable_security_user(user_id)
+    await db.users.update_one({"id": user_id}, {"$set": {"locked_until": None, "failed_login_count": 0}})
+    await record_user_audit("unlocked", user, [])
     return {"ok": True}
 
 
