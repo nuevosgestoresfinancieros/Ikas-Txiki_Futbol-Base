@@ -86,7 +86,9 @@ from user_admin_service import (
     ACCOUNT_STATUSES, account_status, effective_scope, link_is_complete, normalized_key, normalized_text,
     safe_audit_detail, security_state, status_is_active, user_search_text, validate_password_strength,
 )
-from communication_recipient_service import recipient_summary, usable_account
+from communication_recipient_service import (
+    communication_record_active, consented_contacts, recipient_summary, usable_account,
+)
 from user_security_service import (
     INVITATION_TTL_HOURS, LOCK_DURATION_MINUTES, MAX_ACCOUNT_ATTEMPTS,
     generate_temporary_password, invitation_status, issue_token, legacy_session_allowed,
@@ -144,6 +146,25 @@ async def load_user(username: str) -> Optional[dict]:
     return await db["users"].find_one({"username": username}, {"_id": 0, "password_hash": 0})
 
 
+async def record_security_event(event_type: str, user: Optional[Mapping[str, Any]], action: str,
+                                reason: str, *, aggregate: Optional[dict] = None) -> None:
+    """Best-effort security audit containing no target or contact data."""
+    try:
+        await db.internal_events.insert_one({
+            "id": str(uuid.uuid4()),
+            "type": event_type,
+            "actor_user_id": (user or {}).get("id"),
+            "actor_role": (user or {}).get("role"),
+            "action": action,
+            "result": "denied" if event_type.endswith(".denied") else "filtered",
+            "reason": reason,
+            "aggregate": {str(key): int(value) for key, value in (aggregate or {}).items()},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception:
+        logging.getLogger(__name__).warning("Security audit event could not be persisted: %s", event_type)
+
+
 async def get_current_user(request: Request):
     token = request.cookies.get("ikastxiki_session")
     if not token:
@@ -154,9 +175,17 @@ async def get_current_user(request: Request):
         if not username:
             raise HTTPException(status_code=401, detail="Token inválido")
         user = await load_user(username)
-        if not user or not user.get("active", True) or not status_is_active(account_status(user)):
+        if not user:
+            raise HTTPException(status_code=403, detail="Usuario sin acceso")
+        if not user.get("active", True) or not status_is_active(account_status(user)):
+            await record_security_event("security.authentication.denied", user, "authenticated_request", "account_inactive")
+            raise HTTPException(status_code=403, detail="Usuario inactivo o sin acceso")
+        locked_until = parse_time(user.get("locked_until"))
+        if locked_until and locked_until > utcnow():
+            await record_security_event("security.authentication.denied", user, "authenticated_request", "account_locked")
             raise HTTPException(status_code=403, detail="Usuario inactivo o sin acceso")
         if not user.get("system_account") and not legacy_session_allowed(payload, user):
+            await record_security_event("security.authentication.denied", user, "authenticated_request", "session_revoked")
             raise HTTPException(status_code=401, detail="Sesión revocada")
         if payload.get("purpose") == "password_change":
             raise HTTPException(status_code=403, detail="Debes cambiar la contraseña")
@@ -3303,6 +3332,13 @@ class Communication(BaseModel):
             raise ValueError("Canal no válido")
         return value
 
+    @field_validator("destinatario_tipo")
+    @classmethod
+    def validate_recipient_type(cls, value: str):
+        if value not in {"equipo", "categoria", "individual"}:
+            raise ValueError("Destinatario no válido")
+        return value
+
     @field_validator("prioridad")
     @classmethod
     def validate_priority(cls, value: str):
@@ -3311,9 +3347,67 @@ class Communication(BaseModel):
         return value
 
 
-async def communication_targets(data: dict) -> tuple[list[dict], list[str]]:
+async def validate_communication_scope(data: Mapping[str, Any], user: Optional[Mapping[str, Any]] = None) -> None:
+    """Validate a target using only the authenticated user's effective scope."""
+    user = user or current_user_context.get() or {}
+    target_type = data.get("destinatario_tipo")
+    target_id = str(data.get("destinatario_id") or "").strip()
+    if target_type not in {"equipo", "categoria", "individual"} or not target_id:
+        raise HTTPException(status_code=422, detail="No se ha podido resolver el destinatario")
+    if user.get("role") == "admin":
+        return
+    if user.get("role") not in {"coordinator", "coach"}:
+        await record_security_event(
+            "security.communication_scope.denied", user, "communication_recipients", "permission_denied",
+        )
+        raise HTTPException(status_code=403, detail="No tienes permiso para consultar estos destinatarios")
+
+    team_ids = set(ids(user.get("assigned_team_ids") or []))
+    allowed = False
+    if target_type == "equipo":
+        allowed = target_id in team_ids
+    elif target_type == "categoria":
+        own_categories = {
+            normalized_key(value) for value in await db.teams.distinct(
+                "categoria", {"id": {"$in": list(team_ids)}},
+            ) if value
+        } if team_ids else set()
+        if normalized_key(target_id) in own_categories:
+            category_team_ids = set(ids(await db.teams.distinct("id", {"categoria": target_id})))
+            allowed = bool(category_team_ids) and category_team_ids.issubset(team_ids)
+    elif target_type == "individual":
+        player_ids = set(await user_player_ids(dict(user)))
+        if target_id in player_ids:
+            allowed = True
+        elif player_ids:
+            family_ids = set(ids(await db.players.distinct(
+                "familia_id", {"id": {"$in": list(player_ids)}},
+            )))
+            allowed = target_id in family_ids
+    if not allowed:
+        await record_security_event(
+            "security.communication_scope.denied", user, "communication_recipients", "outside_scope",
+        )
+        raise HTTPException(status_code=403, detail="No tienes permiso para consultar estos destinatarios")
+
+
+def _contact_candidates(document: Mapping[str, Any], channel: str) -> list[dict]:
+    fields = {
+        "email": ("email", "email_formulario", "progenitor1_email", "progenitor2_email"),
+        "sms": ("phone", "progenitor1_telefono", "progenitor2_telefono"),
+        "whatsapp": ("phone", "progenitor1_telefono", "progenitor2_telefono"),
+    }.get(channel, ())
+    return [{**dict(document), "value": document.get(field)} for field in fields if document.get(field)]
+
+
+async def communication_targets(data: dict, user: Optional[Mapping[str, Any]] = None,
+                                *, validate_scope: bool = True
+                                ) -> tuple[list[dict], list[str], dict[str, int]]:
+    if validate_scope:
+        await validate_communication_scope(data, user)
     target_type = data.get("destinatario_tipo")
     target_id = data.get("destinatario_id")
+    channel = data.get("canal") or "email"
     team_ids: list[str] = []
     player_ids: list[str] = []
     family_ids: list[str] = []
@@ -3330,16 +3424,54 @@ async def communication_targets(data: dict) -> tuple[list[dict], list[str]]:
             family_ids = [target_id]
     if player_ids:
         family_ids = sorted(set(family_ids + ids(await db.players.distinct("familia_id", {"id": {"$in": player_ids}}))))
-    users = [user for user in await notification_users(team_ids, player_ids, family_ids) if usable_account(user)[0]]
-    emails = set()
-    async for player in db.players.find({"id": {"$in": player_ids}}, {"_id": 0, "email_formulario": 1, "progenitor1_email": 1, "progenitor2_email": 1}):
-        emails.update(value for value in (player.get("email_formulario"), player.get("progenitor1_email"), player.get("progenitor2_email")) if value)
-    async for family in db.families.find({"id": {"$in": family_ids}}, {"_id": 0, "progenitor1_email": 1, "progenitor2_email": 1}):
-        emails.update(value for value in (family.get("progenitor1_email"), family.get("progenitor2_email")) if value)
-    return users, sorted(emails)
+    users_all = await notification_users(team_ids, player_ids, family_ids)
+    users = [candidate for candidate in users_all if usable_account(candidate)[0]]
+    contacts: list[dict] = []
+    for user_row in users:
+        user_contacts = _contact_candidates(user_row, channel)
+        if (user_row.get("notification_preferences") or {}).get(channel, True) is False:
+            for candidate in user_contacts:
+                candidate["communication_consents"] = {
+                    **(candidate.get("communication_consents") or {}), channel: "no",
+                }
+        contacts.extend(user_contacts)
+    eligibility_exclusions: dict[str, int] = defaultdict(int)
+    player_projection = {
+        "_id": 0, "active": 1, "estado": 1, "account_status": 1,
+        "email_formulario": 1, "progenitor1_email": 1, "progenitor2_email": 1,
+        "progenitor1_telefono": 1, "progenitor2_telefono": 1,
+        "communication_consents": 1, "consents": 1, "historical.consents": 1,
+    }
+    async for player in db.players.find({"id": {"$in": player_ids}}, player_projection):
+        player_contacts = _contact_candidates(player, channel)
+        if communication_record_active(player):
+            contacts.extend(player_contacts)
+        elif player_contacts:
+            eligibility_exclusions["recipient_inactive"] += 1
+    family_projection = {
+        "_id": 0, "active": 1, "estado": 1, "account_status": 1,
+        "progenitor1_email": 1, "progenitor2_email": 1,
+        "progenitor1_telefono": 1, "progenitor2_telefono": 1,
+        "communication_consents": 1, "consents": 1, "historical.consents": 1,
+    }
+    async for family in db.families.find({"id": {"$in": family_ids}}, family_projection):
+        family_contacts = _contact_candidates(family, channel)
+        if communication_record_active(family):
+            contacts.extend(family_contacts)
+        elif family_contacts:
+            eligibility_exclusions["recipient_inactive"] += 1
+    destinations, consent_exclusions = consented_contacts(contacts, channel)
+    for reason, count in eligibility_exclusions.items():
+        consent_exclusions[reason] = consent_exclusions.get(reason, 0) + count
+    return users, destinations, consent_exclusions
 
 
-async def communication_target_context(data: dict) -> dict:
+async def communication_target_context(data: dict, user: Optional[Mapping[str, Any]] = None,
+                                       *, audit_exclusions: bool = False,
+                                       validate_scope: bool = True) -> dict:
+    user = user or current_user_context.get() or {}
+    if validate_scope:
+        await validate_communication_scope(data, user)
     target_type = data.get("destinatario_tipo")
     target_id = data.get("destinatario_id")
     team_ids: list[str] = []
@@ -3369,12 +3501,19 @@ async def communication_target_context(data: dict) -> dict:
     if player_ids:
         family_ids = sorted(set(family_ids + ids(await db.players.distinct("familia_id", {"id": {"$in": player_ids}}))))
     users_all = await notification_users(team_ids, player_ids, family_ids)
-    _, emails = await communication_targets(data)
+    _, destinations, consent_exclusions = await communication_targets(
+        data, user, validate_scope=validate_scope,
+    )
+    if audit_exclusions and consent_exclusions:
+        await record_security_event(
+            "security.communication_consent.filtered", user, "communication_recipients",
+            "consent_not_granted", aggregate=consent_exclusions,
+        )
     return {
         "resolved_name": resolved_name,
         "summary": recipient_summary(
-            users_all, len(emails), team_count=len(team_ids), player_count=len(player_ids),
-            family_count=len(family_ids),
+            users_all, len(destinations), team_count=len(team_ids), player_count=len(player_ids),
+            family_count=len(family_ids), extra_exclusions=consent_exclusions,
         ),
     }
 
@@ -3382,7 +3521,8 @@ async def communication_target_context(data: dict) -> dict:
 @api_router.post("/communications/recipients/preview")
 async def preview_communication_recipients(comm: Communication):
     data = comm.model_dump()
-    context = await communication_target_context(data)
+    user = current_user_context.get() or {}
+    context = await communication_target_context(data, user, audit_exclusions=True)
     if not context["resolved_name"]:
         raise HTTPException(status_code=422, detail="No se ha podido resolver el destinatario")
     return context
@@ -3392,8 +3532,10 @@ async def preview_communication_recipients(comm: Communication):
 async def create_communication(comm: Communication):
     data = comm.model_dump()
     data.update({"enviado": False, "fecha_envio": None, "estado_envio": "pending", "error_envio": None})
+    user = current_user_context.get() or {}
+    await communication_target_context(data, user)
     created = await insert_doc("communications", data)
-    users, emails = await communication_targets(data)
+    users, destinations, consent_exclusions = await communication_targets(data, user)
     await enqueue_notifications(
         users, "communication.created", "Nueva comunicación / Komunikazio berria",
         str(data.get("asunto") or "Ikas-Txiki"), "/comunicacion", data.get("prioridad") or "normal",
@@ -3401,8 +3543,17 @@ async def create_communication(comm: Communication):
     )
     logs = []
     if data.get("canal") == "email":
-        if emails:
-            logs = [dispatch_email(email, data.get("asunto") or "Ikas-Txiki", data.get("mensaje") or "") for email in emails]
+        # Re-resolve immediately before the provider boundary. A preview is
+        # never treated as authorization for a later delivery.
+        _, destinations, consent_exclusions = await communication_targets(data, user)
+        if consent_exclusions:
+            await record_security_event(
+                "security.communication_consent.filtered", user, "communication_delivery",
+                "consent_not_granted", aggregate=consent_exclusions,
+            )
+        if destinations:
+            logs = [dispatch_email(destination, data.get("asunto") or "Ikas-Txiki", data.get("mensaje") or "")
+                    for destination in destinations]
         else:
             logs = [{"id": new_id(), "channel": "email", "recipient": None, "provider": "smtp",
                      "status": "pending", "error": "recipient_missing", "created_at": now_iso(), "sent_at": None}]
@@ -3432,7 +3583,7 @@ async def create_communication(comm: Communication):
 async def get_communications():
     items = await list_docs("communications")
     for item in items:
-        context = await communication_target_context(item)
+        context = await communication_target_context(item, validate_scope=False)
         item["destinatario_nombre_resuelto"] = context["resolved_name"] or item.get("destinatario_nombre")
     return items
 
