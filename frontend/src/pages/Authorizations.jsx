@@ -51,7 +51,7 @@ const buildAuthHTML = (auth, player, settings, lang) => {
   const clubDireccion = settings.club_direccion || "";
   const clubEmail = settings.club_email || "";
   const clubTelefono = settings.club_telefono || "";
-  const clubLogo = settings.club_logo || "";
+  const clubLogo = settings.club_logo || "/brand/ikas-txiki-logo.png";
   const tipoEs = AUTH_TYPES[auth.tipo]?.es || auth.tipo;
   const tipoEu = AUTH_TYPES[auth.tipo]?.eu || auth.tipo;
   const texto = TEMPLATE_TEXT[auth.tipo] || { es: "", eu: "" };
@@ -61,7 +61,7 @@ const buildAuthHTML = (auth, player, settings, lang) => {
   return `
     <div style="font-family:Georgia,serif;color:#1a1a1a;max-width:680px;margin:0 auto;padding:40px 48px;box-sizing:border-box;">
       <div style="display:flex;align-items:center;gap:20px;border-bottom:3px solid #1a1a1a;padding-bottom:16px;margin-bottom:28px;">
-        ${clubLogo ? `<img src="${clubLogo}" alt="" style="height:72px;width:72px;object-fit:contain;" />` : ""}
+        <img src="${clubLogo}" alt="Ikas-Txiki Manager" style="height:72px;width:72px;object-fit:contain;" />
         <div>
           <div style="font-size:22px;font-weight:700;">${clubNombre}</div>
           ${clubDireccion ? `<div style="font-size:12px;color:#444;">${clubDireccion}</div>` : ""}

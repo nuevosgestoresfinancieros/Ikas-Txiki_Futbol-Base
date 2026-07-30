@@ -1,0 +1,26 @@
+{
+  "name": "Ikas-Txiki Manager",
+  "short_name": "Ikas-Txiki",
+  "description": "Gestión integral de Zornotzako Futbol Eskola",
+  "lang": "es",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#0E3554",
+  "background_color": "#F5F8FC",
+  "icons": [
+    {
+      "src": "/android-chrome-192x192.png?v=20260730",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/android-chrome-512x512.png?v=20260730",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

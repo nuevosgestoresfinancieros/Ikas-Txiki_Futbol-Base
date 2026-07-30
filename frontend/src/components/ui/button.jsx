@@ -5,20 +5,20 @@ import { cva } from "class-variance-authority";
 import { cn } from "@/lib/utils"
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl text-sm font-semibold transition-[color,background-color,border-color,box-shadow,transform] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50 disabled:active:scale-100 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl text-sm font-bold transition-[color,background-color,border-color,box-shadow,transform] duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-50 disabled:active:scale-100 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
   {
     variants: {
       variant: {
         default:
-          "bg-primary text-primary-foreground shadow-sm shadow-primary/20 hover:bg-primary/90 hover:shadow-md",
+          "bg-gradient-to-br from-[#1B5C8F] to-[#0E3554] text-primary-foreground shadow-md shadow-blue-950/15 hover:-translate-y-0.5 hover:from-[#0E3554] hover:to-[#1B5C8F] hover:shadow-lg",
         destructive:
           "bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90",
         outline:
-          "border border-slate-300 bg-white text-slate-700 shadow-sm hover:border-primary/40 hover:bg-primary/5 hover:text-primary",
+          "border border-[#CFE9FA] bg-white text-[#1B5C8F] shadow-sm hover:-translate-y-0.5 hover:border-[#93C8EE] hover:bg-[#F5FAFE] hover:shadow-md",
         secondary:
           "bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80",
-        ghost: "text-slate-600 hover:bg-slate-100 hover:text-slate-900",
-        link: "text-primary underline-offset-4 hover:underline",
+        ghost: "text-slate-600 hover:bg-[#EAF6FD] hover:text-[#1B5C8F]",
+        link: "text-[#1B5C8F] underline-offset-4 hover:text-[#0E3554] hover:underline",
       },
       size: {
         default: "h-11 px-4 py-2",

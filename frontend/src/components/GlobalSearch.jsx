@@ -100,7 +100,7 @@ const GlobalSearch = ({ open, setOpen }) => {
                     key={`${r.type}-${r.id}`}
                     data-testid={`search-result-${r.id}`}
                     onClick={() => go(r)}
-                    className="group flex min-h-14 w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-teal-50 focus-visible:bg-teal-50"
+                    className="group flex min-h-14 w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-colors hover:bg-[#EAF6FD] focus-visible:bg-[#EAF6FD]"
                   >
                     <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${Meta.color}`}>
                       <Icon className="h-4 w-4" />

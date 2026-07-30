@@ -13,10 +13,10 @@ import { StatusBadge } from "@/components/shared";
 import NextActivity from "@/components/dashboard/NextActivity";
 
 const metricStyles = {
-  teal: "bg-teal-50 text-teal-700 border-teal-100",
+  teal: "bg-[#EAF6FD] text-[#1B5C8F] border-[#CFE9FA]",
   amber: "bg-amber-50 text-amber-700 border-amber-100",
   rose: "bg-rose-50 text-rose-700 border-rose-100",
-  blue: "bg-blue-50 text-blue-700 border-blue-100",
+  blue: "bg-[#F1F8FD] text-[#2F7EBE] border-[#CFE9FA]",
 };
 
 const MetricCard = ({ icon: Icon, label, value, detail, tone, testid, onClick }) => (
@@ -39,8 +39,8 @@ const MetricCard = ({ icon: Icon, label, value, detail, tone, testid, onClick })
 );
 
 const CompactMetric = ({ icon: Icon, label, value, onClick }) => (
-  <button type="button" onClick={onClick} className="group flex min-h-20 items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 text-left shadow-sm transition-all hover:border-primary/30 hover:shadow-md">
-    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-600 transition-colors group-hover:bg-primary/10 group-hover:text-primary">
+  <button type="button" onClick={onClick} className="group flex min-h-20 items-center gap-3 rounded-2xl border border-[#CFE9FA] bg-white px-4 text-left shadow-[0_8px_25px_rgba(14,53,84,0.06)] transition-all hover:-translate-y-0.5 hover:border-[#93C8EE] hover:shadow-lg">
+    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#EAF6FD] text-[#2F7EBE] transition-colors group-hover:bg-[#2B75B0] group-hover:text-white">
       <Icon className="h-5 w-5" aria-hidden="true" />
     </div>
     <div className="min-w-0">
@@ -55,9 +55,9 @@ const QuickAction = ({ icon: Icon, label, onClick, testid }) => (
     type="button"
     data-testid={`quick-${testid}`}
     onClick={onClick}
-    className="group flex min-h-16 items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-md active:translate-y-0"
+    className="group flex min-h-16 items-center gap-3 rounded-2xl border border-[#CFE9FA] bg-white px-4 text-left shadow-[0_8px_25px_rgba(14,53,84,0.06)] transition-all hover:-translate-y-1 hover:border-[#93C8EE] hover:shadow-lg active:translate-y-0"
   >
-    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#102a43] text-teal-200 shadow-sm transition-colors group-hover:bg-primary group-hover:text-white">
+    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#1B5C8F] to-[#2B75B0] text-[#CFE9FA] shadow-sm transition-colors group-hover:from-[#2B75B0] group-hover:to-[#1B5C8F] group-hover:text-white">
       <Icon className="h-5 w-5" aria-hidden="true" />
     </div>
     <span className="text-sm font-bold leading-5 text-slate-800">{label}</span>
@@ -122,12 +122,12 @@ const Dashboard = () => {
 
   return (
     <div data-testid="dashboard-page" className="animate-fade-up">
-      <section className="relative mb-7 overflow-hidden rounded-3xl bg-[#102a43] p-6 text-white shadow-xl shadow-slate-900/10 sm:p-8">
-        <div className="absolute -right-20 -top-28 h-72 w-72 rounded-full bg-teal-400/20 blur-3xl" aria-hidden="true" />
-        <div className="absolute -bottom-24 left-1/3 h-56 w-56 rounded-full bg-emerald-400/10 blur-3xl" aria-hidden="true" />
+      <section className="relative mb-7 overflow-hidden rounded-3xl bg-gradient-to-br from-[#0E3554] via-[#1B5C8F] to-[#2B75B0] p-6 text-white shadow-[0_18px_45px_rgba(14,53,84,0.18)] sm:p-8">
+        <div className="absolute -right-20 -top-28 h-72 w-72 rounded-full bg-[#93C8EE]/25 blur-3xl" aria-hidden="true" />
+        <div className="absolute -bottom-24 left-1/3 h-56 w-56 rounded-full bg-[#5EA8DC]/20 blur-3xl" aria-hidden="true" />
         <div className="relative flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
           <div>
-            <p className="mb-2 text-sm font-bold capitalize text-teal-200">{dateLabel}</p>
+            <p className="mb-2 text-sm font-bold capitalize text-[#CFE9FA]">{dateLabel}</p>
             <h1 className="font-heading text-3xl font-bold tracking-tight sm:text-4xl">{t("dashboardWelcome")}</h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300 sm:text-base">{t("dashboardIntro")}</p>
           </div>
@@ -163,7 +163,7 @@ const Dashboard = () => {
 
       <div className="mb-6 grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(18rem,1fr)]">
         <NextActivity activity={data.siguiente_actividad} onOpen={navigate} />
-        <section className="surface-card grid grid-cols-3 divide-x divide-slate-100" aria-label={t("weeklySummary")}>
+        <section className="surface-card grid grid-cols-1 divide-y divide-slate-100 min-[360px]:grid-cols-3 min-[360px]:divide-x min-[360px]:divide-y-0" aria-label={t("weeklySummary")}>
           <div className="p-4 text-center"><p className="font-heading text-2xl font-bold text-emerald-700">{attendance.porcentaje_presencia || 0}%</p><p className="mt-1 text-xs font-semibold text-slate-500">{t("attendance")}</p></div>
           <div className="p-4 text-center"><p className="font-heading text-2xl font-bold text-amber-700">{callupPending}</p><p className="mt-1 text-xs font-semibold text-slate-500">{t("pendingCallups")}</p></div>
           <div className="p-4 text-center"><p className="font-heading text-2xl font-bold text-blue-700">{data.comunicaciones_pendientes || 0}</p><p className="mt-1 text-xs font-semibold text-slate-500">{t("pendingCommunications")}</p></div>
@@ -224,7 +224,7 @@ const Dashboard = () => {
 
       <section className="mb-8" aria-labelledby="quick-actions-title">
         <h2 id="quick-actions-title" className="mb-3 font-heading text-xl font-bold text-slate-900">{t("quickActions")}</h2>
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+        <div className="grid grid-cols-1 gap-3 min-[360px]:grid-cols-2 md:grid-cols-3 xl:grid-cols-6">
           <PermissionGate resource="players" action="create"><QuickAction testid="new-player" icon={UserPlus} label={t("newPlayer")} onClick={() => navigate("/jugadores?new=1")} /></PermissionGate>
           <PermissionGate resource="matches" action="create"><QuickAction testid="new-match" icon={CalendarDays} label={t("newMatch")} onClick={() => navigate("/partidos?new=1")} /></PermissionGate>
           <PermissionGate resource="callups" action="create"><QuickAction testid="new-callup" icon={ClipboardCheck} label={t("newCallup")} onClick={() => navigate("/convocatorias?new=1")} /></PermissionGate>

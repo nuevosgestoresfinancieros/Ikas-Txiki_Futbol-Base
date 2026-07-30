@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -84,6 +84,7 @@ const PlayerDialog = ({ open, onClose, player, teams, onSaved }) => {
             {player?.id ? `${form.nombre} ${form.apellidos || ""}` : t("newPlayer")}
             {form.categoria && <span className="ml-2 text-sm font-normal text-primary">· {form.categoria}</span>}
           </DialogTitle>
+          <DialogDescription className="sr-only">{t("playerDialogDescription")}</DialogDescription>
         </DialogHeader>
 
         <Tabs value={tab} onValueChange={setTab}>

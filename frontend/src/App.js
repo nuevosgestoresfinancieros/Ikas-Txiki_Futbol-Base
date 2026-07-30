@@ -71,7 +71,7 @@ function App() {
 
   return (
     <I18nProvider>
-      <SplashScreen />
+      <SplashScreen ready={user !== undefined} />
       <BrowserRouter>
         <Routes>
           {/* Ruta pública — Login */}

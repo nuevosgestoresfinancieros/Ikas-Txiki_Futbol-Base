@@ -3,7 +3,7 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 
 const Table = React.forwardRef(({ className, ...props }, ref) => (
-  <div className="relative w-full overflow-auto">
+  <div className="relative w-full overflow-auto rounded-2xl border border-[#CFE9FA] bg-white shadow-[0_8px_25px_rgba(14,53,84,0.06)]">
     <table
       ref={ref}
       className={cn("w-full caption-bottom text-sm", className)}
@@ -13,7 +13,7 @@ const Table = React.forwardRef(({ className, ...props }, ref) => (
 Table.displayName = "Table"
 
 const TableHeader = React.forwardRef(({ className, ...props }, ref) => (
-  <thead ref={ref} className={cn("[&_tr]:border-b", className)} {...props} />
+  <thead ref={ref} className={cn("bg-gradient-to-r from-[#1B5C8F] to-[#2B75B0] text-white [&_tr]:border-b [&_tr]:border-white/15", className)} {...props} />
 ))
 TableHeader.displayName = "TableHeader"
 
@@ -37,7 +37,7 @@ const TableRow = React.forwardRef(({ className, ...props }, ref) => (
   <tr
     ref={ref}
     className={cn(
-      "border-b transition-colors hover:bg-muted/50 data-[state=selected]:bg-muted",
+      "border-b border-[#E4EEF6] transition-colors even:bg-[#F8FBFE] hover:bg-[#EAF6FD] data-[state=selected]:bg-[#DCEFFD]",
       className
     )}
     {...props} />
@@ -48,7 +48,7 @@ const TableHead = React.forwardRef(({ className, ...props }, ref) => (
   <th
     ref={ref}
     className={cn(
-      "h-10 px-2 text-left align-middle font-medium text-muted-foreground [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
+      "h-12 px-4 text-left align-middle text-xs font-extrabold uppercase tracking-[0.045em] text-white [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
       className
     )}
     {...props} />
@@ -59,7 +59,7 @@ const TableCell = React.forwardRef(({ className, ...props }, ref) => (
   <td
     ref={ref}
     className={cn(
-      "p-2 align-middle [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
+      "px-4 py-3.5 align-middle [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
       className
     )}
     {...props} />

@@ -2,11 +2,12 @@ import React, { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   CalendarDays, Eye, EyeOff, FileCheck2, Loader2, Lock,
-  ShieldCheck, Trophy, User, Users,
+  ShieldCheck, User, Users,
 } from "lucide-react";
 import api from "@/api";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
+import ClubLogo from "@/components/ClubLogo";
 
 const featureIcons = [Users, CalendarDays, FileCheck2];
 const featureKeys = ["loginFeaturePlayers", "loginFeatureSchedule", "loginFeatureAdmin"];
@@ -63,8 +64,8 @@ const Login = ({ onLogin }) => {
   };
 
   return (
-    <main className="relative min-h-screen min-h-[100dvh] overflow-hidden bg-slate-50 lg:grid lg:grid-cols-[minmax(420px,0.95fr)_minmax(520px,1.05fr)]">
-      <section className="relative hidden overflow-hidden bg-[#102a43] px-12 py-10 text-white lg:flex lg:flex-col lg:justify-between" aria-label={t("appName")}>
+    <main className="relative min-h-screen min-h-[100dvh] overflow-hidden bg-[#F5F8FC] lg:grid lg:grid-cols-[minmax(420px,0.95fr)_minmax(520px,1.05fr)]">
+      <section className="relative hidden overflow-hidden bg-gradient-to-br from-[#0E3554] via-[#1B5C8F] to-[#2B75B0] px-12 py-10 text-white lg:flex lg:flex-col lg:justify-between" aria-label={t("appName")}>
         <div className="absolute inset-0 opacity-25" aria-hidden="true">
           <div className="absolute inset-[7%] rounded-[2.5rem] border-2 border-white/40" />
           <div className="absolute bottom-[7%] left-1/2 top-[7%] w-0 -translate-x-1/2 border-l-2 border-white/40" />
@@ -72,25 +73,19 @@ const Login = ({ onLogin }) => {
           <div className="absolute -left-16 top-1/2 h-52 w-36 -translate-y-1/2 rounded-r-[3rem] border-2 border-l-0 border-white/40" />
           <div className="absolute -right-16 top-1/2 h-52 w-36 -translate-y-1/2 rounded-l-[3rem] border-2 border-r-0 border-white/40" />
         </div>
-        <div className="absolute -right-24 -top-24 h-80 w-80 rounded-full bg-teal-400/20 blur-3xl" aria-hidden="true" />
-        <div className="absolute -bottom-28 -left-20 h-96 w-96 rounded-full bg-emerald-400/15 blur-3xl" aria-hidden="true" />
+        <div className="absolute -right-24 -top-24 h-80 w-80 rounded-full bg-[#93C8EE]/25 blur-3xl" aria-hidden="true" />
+        <div className="absolute -bottom-28 -left-20 h-96 w-96 rounded-full bg-[#5EA8DC]/20 blur-3xl" aria-hidden="true" />
 
         <div className="relative z-10 flex items-center gap-3">
-          <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-2xl border border-white/20 bg-white/10 shadow-lg">
-            {branding.club_logo ? (
-              <img src={branding.club_logo} alt="" className="h-full w-full object-contain p-1.5" />
-            ) : (
-              <Trophy className="h-6 w-6 text-teal-300" aria-hidden="true" />
-            )}
-          </div>
+          <ClubLogo className="h-14 w-14" />
           <div>
-            <p className="font-heading text-xl font-bold leading-none">{branding.club_nombre || "Ikas-Txiki"}</p>
-            <p className="mt-1 text-xs font-semibold uppercase tracking-[0.18em] text-teal-200">Manager</p>
+            <p className="font-heading text-xl font-bold leading-none">Ikas-Txiki Manager</p>
+            <p className="mt-1 text-xs font-semibold tracking-[0.08em] text-[#CFE9FA]">Zornotzako Futbol Eskola</p>
           </div>
         </div>
 
         <div className="relative z-10 max-w-xl py-12">
-          <div className="mb-7 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-4 py-2 text-sm font-semibold text-teal-100 backdrop-blur-sm">
+          <div className="mb-7 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-[#CFE9FA] shadow-sm backdrop-blur-sm">
             <ShieldCheck className="h-4 w-4" aria-hidden="true" />
             {t("secureAccess")}
           </div>
@@ -106,7 +101,7 @@ const Login = ({ onLogin }) => {
               const Icon = featureIcons[index];
               return (
                 <div key={key} className="rounded-2xl border border-white/10 bg-white/[0.07] p-4 backdrop-blur-sm transition-colors hover:bg-white/[0.12]">
-                  <Icon className="mb-3 h-5 w-5 text-teal-300" aria-hidden="true" />
+                  <Icon className="mb-3 h-5 w-5 text-[#93C8EE]" aria-hidden="true" />
                   <p className="text-sm font-semibold leading-5 text-slate-100">{t(key)}</p>
                 </div>
               );
@@ -128,7 +123,7 @@ const Login = ({ onLogin }) => {
               onClick={() => setLang(language)}
               aria-pressed={lang === language}
               className={`min-h-10 min-w-11 rounded-lg px-3 text-xs font-bold uppercase transition-colors ${
-                lang === language ? "bg-[#102a43] text-white" : "text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+                lang === language ? "bg-gradient-to-br from-[#1B5C8F] to-[#0E3554] text-white shadow-sm" : "text-slate-500 hover:bg-[#EAF6FD] hover:text-[#1B5C8F]"
               }`}
             >
               {language}
@@ -136,21 +131,16 @@ const Login = ({ onLogin }) => {
           ))}
         </div>
 
-        <div className="w-full max-w-md animate-fade-up">
-          <div className="mb-8 lg:hidden">
-            <div className="mb-5 flex h-14 w-14 items-center justify-center overflow-hidden rounded-2xl bg-[#102a43] text-white shadow-lg shadow-slate-900/15">
-              {branding.club_logo ? (
-                <img src={branding.club_logo} alt="" className="h-full w-full object-contain p-1.5" />
-              ) : (
-                <Trophy className="h-7 w-7 text-teal-300" aria-hidden="true" />
-              )}
-            </div>
-            <p className="font-heading text-lg font-bold text-[#102a43]">{branding.club_nombre || "Ikas-Txiki"}</p>
+        <div className="w-full max-w-md animate-fade-up rounded-[1.75rem] border border-white/80 bg-white/90 p-6 shadow-[0_24px_70px_rgba(14,53,84,0.13)] backdrop-blur-sm sm:p-9">
+          <div className="mb-8 text-center">
+            <ClubLogo className="mx-auto h-[clamp(7rem,30vw,9rem)] w-[clamp(7rem,30vw,9rem)] drop-shadow-[0_14px_30px_rgba(14,53,84,0.18)]" />
+            <p className="mt-4 font-heading text-2xl font-extrabold text-[#0E3554]">Ikas-Txiki Manager</p>
+            <p className="mt-1 text-sm font-medium text-slate-600">Gestión integral del club</p>
           </div>
 
           <div className="mb-8">
             <p className="eyebrow mb-3">{t("secureAccess")}</p>
-            <h2 className="font-heading text-4xl font-bold tracking-tight text-[#102a43]">{t("loginTitle")}</h2>
+            <h2 className="font-heading text-4xl font-extrabold tracking-tight text-[#0E3554]">{t("loginTitle")}</h2>
             <p className="mt-3 text-base leading-7 text-slate-600">{t("loginSubtitle")}</p>
           </div>
 
@@ -211,7 +201,7 @@ const Login = ({ onLogin }) => {
               {error}
             </div>
 
-            <Button type="submit" disabled={loading} className="h-14 w-full rounded-2xl bg-[#102a43] text-base shadow-lg shadow-slate-900/15 hover:bg-[#183b5c]">
+            <Button type="submit" disabled={loading} className="h-14 w-full rounded-2xl text-base shadow-lg shadow-blue-900/15">
               {loading ? (
                 <><Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />{t("loggingIn")}</>
               ) : (

@@ -53,12 +53,12 @@ export const PageHeader = ({ title, subtitle, icon: Icon, action }) => (
   <div className="mb-7 flex flex-col gap-4 animate-fade-up sm:flex-row sm:items-center sm:justify-between">
     <div className="flex items-center gap-3">
       {Icon && (
-        <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-teal-100 bg-teal-50 text-primary shadow-sm">
+        <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-[#CFE9FA] bg-gradient-to-br from-[#F5FAFE] to-[#EAF6FD] text-[#2F7EBE] shadow-sm">
           <Icon className="h-6 w-6" />
         </div>
       )}
       <div>
-        <h1 className="font-heading text-3xl font-bold tracking-tight text-[#102a43] sm:text-4xl">{title}</h1>
+        <h1 className="font-heading text-3xl font-extrabold tracking-tight text-[#0E3554] sm:text-4xl">{title}</h1>
         {subtitle && <p className="mt-1 text-sm text-slate-500">{subtitle}</p>}
       </div>
     </div>
@@ -67,9 +67,9 @@ export const PageHeader = ({ title, subtitle, icon: Icon, action }) => (
 );
 
 export const EmptyState = ({ icon: Icon, message, action }) => (
-  <div className="flex flex-col items-center justify-center rounded-3xl border-2 border-dashed border-teal-200 bg-white py-16 px-6 text-center animate-fade-up">
+  <div className="flex flex-col items-center justify-center rounded-3xl border-2 border-dashed border-[#93C8EE] bg-white py-16 px-6 text-center shadow-[0_8px_25px_rgba(14,53,84,0.06)] animate-fade-up">
     {Icon && (
-      <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-teal-50 text-primary">
+      <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-[#EAF6FD] text-[#2F7EBE]">
         <Icon className="h-8 w-8" />
       </div>
     )}

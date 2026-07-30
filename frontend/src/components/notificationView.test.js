@@ -15,7 +15,7 @@ test("unread badge is bounded and does not expose negative values", () => {
 test.each([
   ["urgent", "bg-red-500"],
   ["high", "bg-amber-500"],
-  ["normal", "bg-teal-500"],
+  ["normal", "bg-[#2F7EBE]"],
 ])("notification priority %s has the expected accessible visual class", (priority, expected) => {
   expect(priorityDotClass(priority)).toBe(expected);
 });

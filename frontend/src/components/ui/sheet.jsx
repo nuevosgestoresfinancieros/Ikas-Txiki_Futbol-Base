@@ -43,12 +43,14 @@ const sheetVariants = cva(
   }
 )
 
-const SheetContent = React.forwardRef(({ side = "right", className, children, closeLabel = "Close", ...props }, ref) => (
+const SheetContent = React.forwardRef(({ side = "right", className, children, closeLabel = "Close", onClose, ...props }, ref) => (
   <SheetPortal>
     <SheetOverlay />
     <SheetPrimitive.Content ref={ref} className={cn(sheetVariants({ side }), className)} {...props}>
       <SheetPrimitive.Close
-        className="absolute right-3 top-3 inline-flex h-11 w-11 items-center justify-center rounded-xl opacity-80 ring-offset-background transition-[opacity,background-color] hover:bg-slate-100 hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-secondary">
+        type="button"
+        onClick={onClose}
+        className="absolute right-3 top-3 z-20 inline-flex h-11 w-11 items-center justify-center rounded-xl opacity-80 ring-offset-background transition-[opacity,background-color] hover:bg-slate-100 hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-secondary">
         <X className="h-5 w-5" />
         <span className="sr-only">{closeLabel}</span>
       </SheetPrimitive.Close>

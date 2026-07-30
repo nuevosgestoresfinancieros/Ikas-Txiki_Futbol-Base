@@ -17,8 +17,8 @@ const RgpdBanner = () => {
   if (!visible) return null;
 
   return (
-    <aside className="rgpd-banner fixed bottom-0 left-0 right-0 z-50 p-3 sm:p-5" aria-label={t("privacyTitle")}>
-      <div className="mx-auto flex max-w-3xl flex-col items-start gap-4 rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-2xl backdrop-blur-xl sm:flex-row sm:items-center sm:p-5">
+    <aside className="rgpd-banner pointer-events-none fixed bottom-0 left-0 right-0 z-50 p-3 sm:p-5" aria-label={t("privacyTitle")}>
+      <div className="pointer-events-auto mx-auto flex max-w-3xl flex-col items-start gap-4 rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-2xl backdrop-blur-xl sm:flex-row sm:items-center sm:p-5">
         <div className="flex items-start gap-3 flex-1 min-w-0">
           <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-primary/10">
             <Shield className="h-5 w-5 text-primary" />

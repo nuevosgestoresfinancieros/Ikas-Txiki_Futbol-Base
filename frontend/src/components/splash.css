@@ -3,15 +3,36 @@
   inset: 0;
   z-index: 9999;
   display: grid;
-  place-items: center;
   min-height: 100dvh;
   overflow: hidden;
-  padding: 24px;
   color: #fff;
-  background: linear-gradient(145deg, #091c2f 0%, #102a43 58%, #0c3f4d 100%);
+  background: #020b13;
   opacity: 1;
   visibility: visible;
-  transition: opacity 300ms ease, visibility 300ms ease;
+  transition: opacity 320ms ease, visibility 320ms ease;
+}
+
+.brand-splash::before {
+  content: "";
+  position: absolute;
+  inset: -3%;
+  background:
+    linear-gradient(180deg, rgba(3, 16, 28, 0.02) 25%, rgba(3, 16, 28, 0.22) 100%),
+    url("../assets/ikas-txiki-stadium.webp") center bottom / cover no-repeat;
+  will-change: transform, filter;
+  animation: cameraFollow 3400ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+.brand-splash::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 50% 62%, transparent 0 18%, rgba(96, 167, 219, 0.08) 33%, transparent 60%),
+    linear-gradient(90deg, rgba(2, 12, 21, 0.26), transparent 28%, transparent 72%, rgba(2, 12, 21, 0.26)),
+    linear-gradient(180deg, transparent 52%, rgba(3, 18, 22, 0.22));
+  pointer-events: none;
+  animation: stadiumAlive 3400ms ease-out both;
 }
 
 .brand-splash.is-leaving {
@@ -20,100 +41,379 @@
   pointer-events: none;
 }
 
-.brand-splash__pitch {
+.brand-splash__stadium {
   position: absolute;
-  inset: 7%;
-  border: 2px solid rgba(255, 255, 255, 0.16);
-  border-radius: 40px;
+  inset: 6%;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.045);
+  border-radius: clamp(28px, 4vw, 64px);
+  opacity: 0;
+  animation: stadiumFade 700ms 100ms ease-out forwards, stadiumParallax 3400ms ease-out both;
+}
+
+.brand-splash__stand {
+  position: absolute;
+  top: 7%;
+  bottom: 7%;
+  width: 28%;
+  border: 1px solid rgba(96, 167, 219, 0.055);
+  border-radius: 50%;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.025) 0,
+    rgba(255, 255, 255, 0.025) 2px,
+    transparent 2px,
+    transparent 14px
+  );
+}
+
+.brand-splash__stand--left { left: -18%; }
+.brand-splash__stand--right { right: -18%; }
+
+.brand-splash__field {
+  position: absolute;
+  inset: 12% 8%;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: 30px;
 }
 
 .brand-splash__midline {
   position: absolute;
-  top: 0;
-  bottom: 0;
+  top: 12%;
+  bottom: 12%;
   left: 50%;
-  border-left: 2px solid rgba(255, 255, 255, 0.16);
+  border-left: 1px solid rgba(255, 255, 255, 0.035);
 }
 
 .brand-splash__circle {
   position: absolute;
   top: 50%;
   left: 50%;
-  width: min(38vw, 280px);
+  width: min(32vw, 260px);
   aspect-ratio: 1;
-  border: 2px solid rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.035);
   border-radius: 50%;
   transform: translate(-50%, -50%);
 }
 
+.brand-splash__goal {
+  position: absolute;
+  left: 50%;
+  bottom: 12%;
+  width: min(34vw, 330px);
+  height: min(17vw, 155px);
+  border: 1px solid rgba(207, 233, 250, 0.11);
+  border-bottom: 0;
+  background:
+    repeating-linear-gradient(90deg, transparent 0 18px, rgba(207, 233, 250, 0.035) 18px 19px),
+    repeating-linear-gradient(0deg, transparent 0 13px, rgba(207, 233, 250, 0.035) 13px 14px);
+  opacity: 0;
+  transform: translateX(-50%) perspective(360px) rotateX(7deg);
+  animation: goalReveal 900ms 260ms ease-out forwards;
+}
+
+.brand-splash__mist {
+  position: absolute;
+  z-index: 1;
+  right: -10%;
+  bottom: 20%;
+  left: -10%;
+  height: 24%;
+  background:
+    radial-gradient(ellipse at 25% 65%, rgba(207, 233, 250, 0.18), transparent 38%),
+    radial-gradient(ellipse at 72% 45%, rgba(94, 168, 220, 0.14), transparent 42%);
+  filter: blur(28px);
+  opacity: 0;
+  will-change: transform, opacity;
+  animation: mistDrift 3400ms ease-out both;
+}
+
+.brand-splash__foreground {
+  position: absolute;
+  z-index: 2;
+  right: -4%;
+  bottom: -8%;
+  left: -4%;
+  height: 34%;
+  background:
+    linear-gradient(180deg, transparent, rgba(1, 14, 18, 0.22)),
+    repeating-linear-gradient(83deg, transparent 0 13px, rgba(129, 177, 88, 0.055) 13px 15px, transparent 15px 27px);
+  mask-image: linear-gradient(180deg, transparent, #000 62%);
+  opacity: 0;
+  transform-origin: bottom;
+  will-change: transform, opacity;
+  animation: foregroundParallax 3400ms ease-out both;
+}
+
 .brand-splash__glow {
   position: absolute;
-  width: 420px;
-  height: 420px;
+  width: min(40rem, 80vw);
+  aspect-ratio: 1;
   border-radius: 50%;
-  filter: blur(90px);
+  filter: blur(100px);
+  pointer-events: none;
+  opacity: 0;
+  animation: ambientGlow 1200ms 150ms ease-out forwards;
+}
+
+.brand-splash__glow--one {
+  top: -35%;
+  right: -15%;
+  background: rgba(96, 167, 219, 0.26);
+}
+
+.brand-splash__glow--two {
+  bottom: -45%;
+  left: -15%;
+  background: rgba(22, 126, 131, 0.22);
+}
+
+.brand-splash__lights {
+  position: absolute;
+  inset: 0;
   pointer-events: none;
 }
 
-.brand-splash__glow--one { top: -220px; right: -120px; background: rgba(20, 184, 166, 0.28); }
-.brand-splash__glow--two { bottom: -260px; left: -140px; background: rgba(34, 197, 94, 0.18); }
+.brand-splash__lights span {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 18px 5px rgba(96, 167, 219, 0.38);
+  opacity: 0;
+  animation: lightAppear 620ms ease-out forwards, lightBreathe 1800ms 1200ms ease-in-out infinite alternate;
+}
+
+.brand-splash__lights span:nth-child(1) { left: 10%; top: 18%; animation-delay: 80ms, 1080ms; }
+.brand-splash__lights span:nth-child(2) { left: 22%; top: 10%; animation-delay: 120ms, 1120ms; }
+.brand-splash__lights span:nth-child(3) { left: 38%; top: 16%; animation-delay: 190ms, 1190ms; }
+.brand-splash__lights span:nth-child(4) { left: 62%; top: 12%; animation-delay: 250ms, 1250ms; }
+.brand-splash__lights span:nth-child(5) { left: 78%; top: 18%; animation-delay: 330ms, 1330ms; }
+.brand-splash__lights span:nth-child(6) { left: 90%; top: 12%; animation-delay: 410ms, 1410ms; }
+.brand-splash__lights span:nth-child(7) { left: 8%; top: 68%; animation-delay: 160ms, 1160ms; }
+.brand-splash__lights span:nth-child(8) { left: 20%; top: 82%; animation-delay: 230ms, 1230ms; }
+.brand-splash__lights span:nth-child(9) { left: 38%; top: 76%; animation-delay: 300ms, 1300ms; }
+.brand-splash__lights span:nth-child(10) { left: 64%; top: 80%; animation-delay: 370ms, 1370ms; }
+.brand-splash__lights span:nth-child(11) { left: 80%; top: 72%; animation-delay: 440ms, 1440ms; }
+.brand-splash__lights span:nth-child(12) { left: 92%; top: 84%; animation-delay: 500ms, 1500ms; }
+
+.brand-splash__air {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.brand-splash__air i {
+  position: absolute;
+  left: var(--x);
+  bottom: var(--y);
+  width: 2px;
+  height: 2px;
+  border-radius: 50%;
+  background: rgba(207, 233, 250, 0.72);
+  box-shadow: 0 0 7px rgba(94, 168, 220, 0.58);
+  opacity: 0;
+  will-change: transform, opacity;
+  animation: airParticle 1900ms var(--delay) ease-out both;
+}
+
+.brand-splash__air i:nth-child(1) { --x: 7%; --y: 18%; --delay: 573ms; }
+.brand-splash__air i:nth-child(2) { --x: 13%; --y: 31%; --delay: 646ms; }
+.brand-splash__air i:nth-child(3) { --x: 19%; --y: 24%; --delay: 719ms; }
+.brand-splash__air i:nth-child(4) { --x: 26%; --y: 42%; --delay: 792ms; }
+.brand-splash__air i:nth-child(5) { --x: 32%; --y: 15%; --delay: 865ms; }
+.brand-splash__air i:nth-child(6) { --x: 38%; --y: 36%; --delay: 938ms; }
+.brand-splash__air i:nth-child(7) { --x: 43%; --y: 21%; --delay: 1011ms; }
+.brand-splash__air i:nth-child(8) { --x: 48%; --y: 48%; --delay: 1084ms; }
+.brand-splash__air i:nth-child(9) { --x: 53%; --y: 28%; --delay: 1157ms; }
+.brand-splash__air i:nth-child(10) { --x: 58%; --y: 17%; --delay: 1230ms; }
+.brand-splash__air i:nth-child(11) { --x: 63%; --y: 39%; --delay: 1303ms; }
+.brand-splash__air i:nth-child(12) { --x: 69%; --y: 24%; --delay: 1376ms; }
+.brand-splash__air i:nth-child(13) { --x: 74%; --y: 46%; --delay: 1449ms; }
+.brand-splash__air i:nth-child(14) { --x: 79%; --y: 19%; --delay: 1522ms; }
+.brand-splash__air i:nth-child(15) { --x: 84%; --y: 34%; --delay: 1595ms; }
+.brand-splash__air i:nth-child(16) { --x: 89%; --y: 27%; --delay: 1668ms; }
+.brand-splash__air i:nth-child(17) { --x: 93%; --y: 43%; --delay: 1741ms; }
+.brand-splash__air i:nth-child(18) { --x: 97%; --y: 16%; --delay: 1814ms; }
 
 .brand-splash__content {
   position: relative;
-  z-index: 1;
-  width: min(100%, 640px);
+  z-index: 2;
+  align-self: center;
+  justify-self: center;
+  width: min(92vw, 720px);
   text-align: center;
-  animation: brandSplashEnter 560ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-.brand-splash__mark {
-  display: grid;
-  place-items: center;
-  width: 72px;
-  height: 72px;
-  margin: 0 auto 24px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 24px;
-  color: #5eead4;
-  background: rgba(255, 255, 255, 0.09);
-  box-shadow: 0 20px 55px rgba(0, 0, 0, 0.24);
-  backdrop-filter: blur(12px);
+.brand-splash__ball-stage {
+  position: relative;
+  width: clamp(118px, 18vw, 176px);
+  aspect-ratio: 1;
+  margin: 0 auto;
 }
 
-.brand-splash__mark svg { width: 34px; height: 34px; }
-.brand-splash__eyebrow { margin: 0 0 14px; color: #99f6e4; font-size: 0.78rem; font-weight: 800; letter-spacing: 0.18em; text-transform: uppercase; }
-.brand-splash h1 { margin: 0; font-family: 'Outfit', sans-serif; font-size: clamp(3.5rem, 11vw, 7rem); font-weight: 800; letter-spacing: -0.055em; line-height: 0.95; }
-.brand-splash__description { max-width: 540px; margin: 24px auto 0; color: #cbd5e1; font-size: clamp(1rem, 2.4vw, 1.2rem); line-height: 1.65; }
-
-.brand-splash button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  min-height: 48px;
-  margin-top: 32px;
-  padding: 0 22px;
-  border: 0;
-  border-radius: 16px;
-  color: #102a43;
-  background: #fff;
-  font: 700 0.95rem 'Manrope', sans-serif;
-  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.22);
-  cursor: pointer;
-  transition: transform 160ms ease, box-shadow 160ms ease;
+.brand-splash__ball {
+  position: relative;
+  z-index: 3;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border: clamp(3px, 0.5vw, 6px) solid rgba(220, 239, 252, 0.88);
+  border-radius: 50%;
+  background: #237bb6;
+  box-shadow:
+    inset -12px -15px 24px rgba(2, 20, 39, 0.44),
+    inset 8px 9px 18px rgba(255, 255, 255, 0.3),
+    0 0 0 2px rgba(4, 41, 72, 0.52);
+  filter: drop-shadow(0 18px 24px rgba(0, 0, 0, 0.34));
+  will-change: transform, filter;
+  animation: ballPhysics 2300ms 480ms linear both;
 }
 
-.brand-splash button:hover { transform: translateY(-2px); box-shadow: 0 20px 44px rgba(0, 0, 0, 0.28); }
-.brand-splash button:active { transform: translateY(0) scale(0.98); }
-.brand-splash button svg { width: 18px; height: 18px; }
+.brand-splash__ball::after {
+  content: "";
+  position: absolute;
+  inset: 4%;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 32% 22%, rgba(255, 255, 255, 0.48), transparent 18%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.18), transparent 42%, rgba(1, 24, 44, 0.22));
+  mix-blend-mode: screen;
+  pointer-events: none;
+}
+
+.brand-splash__ball-logo {
+  display: block;
+  border-radius: 50%;
+}
+
+.brand-splash__trail {
+  position: absolute;
+  z-index: 1;
+  top: 48%;
+  right: 54%;
+  width: min(44vw, 380px);
+  height: 18px;
+  border-radius: 50%;
+  background: linear-gradient(90deg, transparent, rgba(96, 167, 219, 0.12), rgba(255, 255, 255, 0.48));
+  filter: blur(7px);
+  opacity: 0;
+  transform-origin: right;
+  animation: trailPass 1500ms 530ms ease-out both;
+}
+
+.brand-splash__halo {
+  position: absolute;
+  z-index: 0;
+  left: 50%;
+  bottom: -14%;
+  width: 125%;
+  height: 26%;
+  border-radius: 50%;
+  background: radial-gradient(ellipse, rgba(96, 167, 219, 0.56), rgba(22, 126, 131, 0.18) 48%, transparent 72%);
+  filter: blur(6px);
+  opacity: 0;
+  transform: translateX(-50%) scale(0.45);
+  animation: haloSettle 760ms 2100ms ease-out forwards;
+}
+
+.brand-splash__ball-shadow {
+  position: absolute;
+  z-index: 1;
+  left: 50%;
+  bottom: -1%;
+  width: 92%;
+  height: 20%;
+  border-radius: 50%;
+  background: rgba(0, 8, 15, 0.62);
+  filter: blur(8px);
+  transform: translateX(-50%);
+  will-change: transform, opacity, filter;
+  animation: shadowPhysics 2300ms 480ms linear both;
+}
+
+.brand-splash__turf {
+  position: absolute;
+  z-index: 4;
+  left: 50%;
+  bottom: 5%;
+  width: 30px;
+  height: 18px;
+  pointer-events: none;
+}
+
+.brand-splash__turf--1 { transform: translateX(calc(-50% - 34vw)); }
+.brand-splash__turf--2 { transform: translateX(calc(-50% - 13vw)); }
+.brand-splash__turf--3 { transform: translateX(calc(-50% - 4.5vw)); }
+
+.brand-splash__turf i {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 3px;
+  height: 7px;
+  border-radius: 80% 20% 70% 30%;
+  background: #6c9d4a;
+  box-shadow: 0 0 5px rgba(96, 167, 219, 0.48);
+  opacity: 0;
+}
+
+.brand-splash__turf i:nth-child(1) { --tx: -30px; --ty: -25px; --rot: -55deg; }
+.brand-splash__turf i:nth-child(2) { --tx: -20px; --ty: -34px; --rot: -30deg; }
+.brand-splash__turf i:nth-child(3) { --tx: -10px; --ty: -42px; --rot: -12deg; }
+.brand-splash__turf i:nth-child(4) { --tx: 2px; --ty: -38px; --rot: 8deg; }
+.brand-splash__turf i:nth-child(5) { --tx: 14px; --ty: -31px; --rot: 28deg; }
+.brand-splash__turf i:nth-child(6) { --tx: 25px; --ty: -24px; --rot: 48deg; }
+.brand-splash__turf i:nth-child(7) { --tx: 34px; --ty: -15px; --rot: 68deg; }
+.brand-splash__turf i:nth-child(8) { --tx: -38px; --ty: -12px; --rot: -72deg; }
+
+.brand-splash__turf--1 i { animation: turfBurst 560ms 940ms ease-out both; }
+.brand-splash__turf--2 i { animation: turfBurst 470ms 1510ms ease-out both; }
+.brand-splash__turf--3 i { animation: turfBurst 360ms 1990ms ease-out both; }
+
+.brand-splash__identity {
+  margin-top: clamp(28px, 5vh, 46px);
+  opacity: 0;
+  transform: translateY(10px);
+  animation: identityReveal 520ms 2740ms ease-out forwards;
+}
+
+.brand-splash__identity h1 {
+  margin: 0;
+  color: #fff;
+  font-family: 'Manrope', sans-serif;
+  font-size: clamp(2rem, 6vw, 3.5rem);
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  line-height: 1.05;
+  text-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+}
+
+.brand-splash__identity p {
+  margin: 10px 0 0;
+  color: #d9edf8;
+  font-size: clamp(0.82rem, 2vw, 1.05rem);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+}
 
 .brand-splash__progress {
-  width: min(240px, 60vw);
-  height: 3px;
-  margin: 30px auto 0;
+  position: absolute;
+  z-index: 3;
+  right: max(24px, env(safe-area-inset-right));
+  bottom: max(28px, calc(env(safe-area-inset-bottom) + 18px));
+  left: max(24px, env(safe-area-inset-left));
+  height: 4px;
+  max-width: 360px;
+  margin: 0 auto;
   overflow: hidden;
-  border-radius: 99px;
+  border-radius: 999px;
   background: rgba(255, 255, 255, 0.14);
+  opacity: 0;
+  animation: progressReveal 260ms 120ms ease-out forwards;
 }
 
 .brand-splash__progress span {
@@ -121,28 +421,248 @@
   width: 100%;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, #2dd4bf, #86efac);
+  background: linear-gradient(90deg, #60a7db, #1ea29c, #f1c016);
+  box-shadow: 0 0 16px rgba(96, 167, 219, 0.55);
+  transform: scaleX(0);
   transform-origin: left;
-  animation: brandSplashProgress 1450ms linear both;
+  animation: premiumProgress 3280ms 120ms cubic-bezier(0.32, 0, 0.12, 1) forwards;
 }
 
-@keyframes brandSplashEnter {
-  from { opacity: 0; transform: translateY(18px) scale(0.985); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
+.brand-splash.is-waiting .brand-splash__progress span {
+  animation: waitingProgress 1200ms ease-in-out infinite;
 }
 
-@keyframes brandSplashProgress {
-  from { transform: scaleX(0); }
+@keyframes stadiumFade {
+  from { opacity: 0; transform: scale(1.015); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes cameraFollow {
+  0% { transform: translate3d(1.15%, 0.2%, 0) scale(1.06); filter: brightness(0.22) saturate(0.72); }
+  15% { transform: translate3d(0.7%, 0, 0) scale(1.052); filter: brightness(0.74) saturate(0.9); }
+  42% { transform: translate3d(-0.7%, -0.2%, 0) scale(1.04); }
+  70% { transform: translate3d(0.25%, 0, 0) scale(1.028); filter: brightness(0.9) saturate(1); }
+  100% { transform: translate3d(0, -0.45%, 0) scale(1.075); filter: brightness(1.02) saturate(1.08); }
+}
+
+@keyframes stadiumAlive {
+  0% { opacity: 0.88; background-color: rgba(1, 8, 14, 0.68); }
+  15% { opacity: 0.68; background-color: rgba(1, 8, 14, 0.25); }
+  62% { opacity: 0.58; background-color: transparent; }
+  84%, 100% { opacity: 1; }
+}
+
+@keyframes stadiumParallax {
+  0% { transform: translate3d(-0.4%, 0, 0) scale(1.015); }
+  55% { transform: translate3d(0.25%, -0.1%, 0) scale(1.005); }
+  100% { transform: translate3d(0, -0.25%, 0) scale(1.012); }
+}
+
+@keyframes goalReveal {
+  from { opacity: 0; filter: blur(3px); }
+  to { opacity: 0.72; filter: blur(0); }
+}
+
+@keyframes mistDrift {
+  0% { opacity: 0.12; transform: translate3d(-3%, 4%, 0) scale(1.08); }
+  20% { opacity: 0.5; }
+  100% { opacity: 0.3; transform: translate3d(3%, -2%, 0) scale(1); }
+}
+
+@keyframes foregroundParallax {
+  0% { opacity: 0.18; transform: translate3d(-1.5%, 2%, 0) scale(1.05); }
+  18% { opacity: 0.65; }
+  100% { opacity: 0.8; transform: translate3d(1%, 0, 0) scale(1.015); }
+}
+
+@keyframes airParticle {
+  0% { opacity: 0; transform: translate3d(-8px, 14px, 0) scale(0.4); }
+  18% { opacity: 0.62; }
+  72% { opacity: 0.32; }
+  100% { opacity: 0; transform: translate3d(13px, -34px, 0) scale(1); }
+}
+
+@keyframes ambientGlow {
+  from { opacity: 0; transform: scale(0.84); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes lightAppear {
+  from { opacity: 0; transform: scale(0.4); }
+  to { opacity: 0.55; transform: scale(1); }
+}
+
+@keyframes lightBreathe {
+  from { opacity: 0.22; }
+  to { opacity: 0.68; }
+}
+
+@keyframes ballPhysics {
+  0% {
+    transform: translate3d(calc(-50vw - 130px), 18px, 0) rotate(var(--roll-start-rotation, -1092deg)) scale(0.93, 1.05);
+    filter: blur(2.4px) drop-shadow(0 8px 10px rgba(0, 0, 0, 0.24)) brightness(0.78);
+  }
+  21% {
+    transform: translate3d(-34vw, 18px, 0) rotate(var(--roll-impact-one-rotation, -782deg)) scale(1.085, 0.9);
+    filter: blur(0.75px) drop-shadow(0 6px 8px rgba(0, 0, 0, 0.29)) brightness(0.9);
+  }
+  35% {
+    transform: translate3d(-22vw, -116px, 0) rotate(var(--roll-apex-one-rotation, -556deg)) scale(0.97, 1.03);
+    filter: blur(0) drop-shadow(0 32px 22px rgba(0, 0, 0, 0.2)) brightness(0.94);
+  }
+  49% {
+    transform: translate3d(-13vw, 18px, 0) rotate(var(--roll-impact-two-rotation, -360deg)) scale(1.105, 0.88);
+    filter: drop-shadow(0 5px 7px rgba(0, 0, 0, 0.31)) brightness(0.96);
+  }
+  61% {
+    transform: translate3d(-8vw, -54px, 0) rotate(var(--roll-apex-two-rotation, -238deg)) scale(0.985, 1.015);
+    filter: drop-shadow(0 22px 15px rgba(0, 0, 0, 0.24)) brightness(0.98);
+  }
+  71% {
+    transform: translate3d(-4.5vw, 17px, 0) rotate(var(--roll-impact-three-rotation, -143deg)) scale(1.07, 0.93);
+  }
+  79% {
+    transform: translate3d(-2.5vw, -16px, 0) rotate(var(--roll-apex-three-rotation, -87deg)) scale(0.995, 1.005);
+  }
+  85% {
+    transform: translate3d(-1.15vw, 16px, 0) rotate(var(--roll-last-impact-rotation, -44deg)) scale(1.035, 0.965);
+  }
+  93% {
+    transform: translate3d(-0.25vw, 14px, 0) rotate(var(--roll-settle-rotation, -12deg)) scale(1);
+  }
+  100% {
+    transform: translate3d(0, 14px, 0) rotate(0deg) scale(1);
+    filter: drop-shadow(0 18px 26px rgba(0, 0, 0, 0.32)) drop-shadow(0 0 18px rgba(96, 167, 219, 0.24)) brightness(1);
+  }
+}
+
+@keyframes shadowPhysics {
+  0% { opacity: 0.2; transform: translateX(calc(-50% - 48vw)) scale(0.45); filter: blur(12px); }
+  20% { opacity: 0.76; transform: translateX(calc(-50% - 34vw)) scale(1.04); filter: blur(5px); }
+  34% { opacity: 0.22; transform: translateX(calc(-50% - 22vw)) scale(0.55); filter: blur(13px); }
+  47% { opacity: 0.82; transform: translateX(calc(-50% - 13vw)) scale(1.06); filter: blur(4px); }
+  58% { opacity: 0.34; transform: translateX(calc(-50% - 8vw)) scale(0.7); filter: blur(10px); }
+  68% { opacity: 0.76; transform: translateX(calc(-50% - 4.5vw)) scale(1.02); filter: blur(5px); }
+  76% { opacity: 0.48; transform: translateX(calc(-50% - 2.5vw)) scale(0.84); filter: blur(8px); }
+  83%, 100% { opacity: 0.72; transform: translateX(-50%) scale(0.96); filter: blur(6px); }
+}
+
+@keyframes turfBurst {
+  0% { opacity: 0; transform: translate3d(0, 0, 0) rotate(0); }
+  16% { opacity: 0.9; }
+  100% { opacity: 0; transform: translate3d(var(--tx), var(--ty), 0) rotate(var(--rot)); }
+}
+
+@keyframes trailPass {
+  0% { opacity: 0; transform: scaleX(0.15); }
+  25% { opacity: 0.7; transform: scaleX(0.75); }
+  75% { opacity: 0.34; transform: scaleX(0.42); }
+  100% { opacity: 0; transform: scaleX(0.05); }
+}
+
+@keyframes haloSettle {
+  from { opacity: 0; transform: translateX(-50%) scale(0.45); }
+  to { opacity: 0.8; transform: translateX(-50%) scale(1); }
+}
+
+@keyframes identityReveal {
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes progressReveal {
+  to { opacity: 1; }
+}
+
+@keyframes premiumProgress {
   to { transform: scaleX(1); }
 }
 
-@media (max-width: 640px) {
-  .brand-splash { padding: 18px; }
-  .brand-splash__pitch { inset: 16px; border-radius: 28px; }
-  .brand-splash__mark { width: 64px; height: 64px; border-radius: 20px; }
+@keyframes waitingProgress {
+  0%, 100% { opacity: 0.65; transform: scaleX(0.86); }
+  50% { opacity: 1; transform: scaleX(1); }
+}
+
+@media (max-width: 480px) {
+  .brand-splash__stadium { inset: 4%; }
+  .brand-splash__ball-stage { width: 126px; }
+  .brand-splash__identity { margin-top: 32px; }
+  .brand-splash__identity h1 { font-size: clamp(1.9rem, 9vw, 2.35rem); }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .brand-splash__content,
-  .brand-splash__progress span { animation: none; }
+  .brand-splash::before,
+  .brand-splash::after,
+  .brand-splash__stadium,
+  .brand-splash__goal,
+  .brand-splash__mist,
+  .brand-splash__foreground,
+  .brand-splash__air i,
+  .brand-splash__glow,
+  .brand-splash__lights span,
+  .brand-splash__ball,
+  .brand-splash__trail,
+  .brand-splash__halo,
+  .brand-splash__ball-shadow,
+  .brand-splash__turf i,
+  .brand-splash__identity,
+  .brand-splash__progress,
+  .brand-splash__progress span {
+    animation: none !important;
+  }
+
+  .brand-splash__stadium,
+  .brand-splash__goal,
+  .brand-splash__mist,
+  .brand-splash__foreground,
+  .brand-splash__glow,
+  .brand-splash__identity,
+  .brand-splash__progress {
+    opacity: 1;
+  }
+
+  .brand-splash__air {
+    display: none;
+  }
+
+  .brand-splash::before {
+    transform: scale(1.03);
+    filter: brightness(0.9);
+  }
+
+  .brand-splash__ball {
+    transform: none;
+    filter: drop-shadow(0 18px 26px rgba(0, 0, 0, 0.32));
+  }
+
+  .brand-splash__halo {
+    opacity: 0.7;
+    transform: translateX(-50%) scale(1);
+  }
+
+  .brand-splash__ball-shadow {
+    opacity: 0.7;
+    transform: translateX(-50%);
+  }
+
+  .brand-splash.is-leaving .brand-splash__ball {
+    transform: translateY(14px) scale(0.96);
+  }
+
+  .brand-splash__progress span {
+    transform: scaleX(1);
+  }
+}
+
+.brand-splash.is-leaving .brand-splash__ball {
+  animation: none;
+  transform: translateY(14px) scale(0.94);
+  filter: brightness(0.7) drop-shadow(0 12px 18px rgba(0, 0, 0, 0.26));
+  transition: transform 320ms ease, filter 320ms ease;
+}
+
+.brand-splash.is-leaving::before {
+  animation: none;
+  transform: scale(1.085);
+  filter: brightness(0.72) saturate(0.9);
+  transition: transform 320ms ease, filter 320ms ease;
 }

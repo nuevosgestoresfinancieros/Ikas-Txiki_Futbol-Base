@@ -7,5 +7,5 @@ export const unreadLabel = (count) => (count > 99 ? "99+" : String(Math.max(0, c
 export const priorityDotClass = (priority) => {
   if (priority === "urgent") return "bg-red-500";
   if (priority === "high") return "bg-amber-500";
-  return "bg-teal-500";
+  return "bg-[#2F7EBE]";
 };
