@@ -38,3 +38,38 @@ export const passwordChecks = (password) => ({
 });
 
 export const allPasswordChecksPass = (password) => Object.values(passwordChecks(password)).every(Boolean);
+
+export const ROLE_STEPS = {
+  admin: { scope: "club", requiresLink: false },
+  coordinator: { scope: "teams", requiresLink: true },
+  coach: { scope: "teams", requiresLink: true },
+  family: { scope: "family", requiresLink: true },
+  player: { scope: "player", requiresLink: true },
+};
+
+export const wizardLinkComplete = (form) => {
+  if (form.role === "admin") return true;
+  if (["coach", "coordinator"].includes(form.role)) return (form.assigned_team_ids || []).length > 0;
+  if (form.role === "family") return Boolean(form.family_id);
+  return Boolean(form.player_id);
+};
+
+export const normalizedTeamOptions = (teams, { search = "", season = "" } = {}) => {
+  const needle = search.trim().toLocaleLowerCase();
+  const seen = new Set();
+  return teams.filter((team) => {
+    const name = String(team.nombre || "").trim();
+    const key = `${name.toLocaleLowerCase()}::${team.categoria || ""}`;
+    if (!name || name.toLocaleUpperCase() === "NO APLICA" || seen.has(key)) return false;
+    if (season && team.temporada !== season) return false;
+    if (needle && ![name, team.categoria, team.modalidad].filter(Boolean).join(" ").toLocaleLowerCase().includes(needle)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
+export const safeUsernameSuggestion = (firstName, lastName) => {
+  const source = `${firstName || ""}_${lastName || ""}`.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLocaleLowerCase().replace(/[^a-z0-9_-]/g, "").replace(/_+/g, "_").replace(/^_|_$/g, "");
+  return source === "admin" ? "" : source;
+};

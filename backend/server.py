@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Form, Depends, Cookie, Response, Request
+from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Form, Depends, Cookie, Response, Request, Query
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.responses import StreamingResponse, FileResponse
 from dotenv import load_dotenv
@@ -13,11 +13,12 @@ import html as html_lib
 import json
 import logging
 import math
+import re
 import shutil
 import time
 from collections import defaultdict, deque
 from pathlib import Path
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import List, Optional, Dict, Any, Mapping
 import uuid
 import pandas as pd
@@ -82,8 +83,8 @@ from assistant_service import (
     public_proposal, session_fingerprint,
 )
 from user_admin_service import (
-    ACCOUNT_STATUSES, account_status, effective_scope, normalized_key, normalized_text,
-    safe_audit_detail, status_is_active, validate_password_strength,
+    ACCOUNT_STATUSES, account_status, effective_scope, link_is_complete, normalized_key, normalized_text,
+    safe_audit_detail, security_state, status_is_active, user_search_text, validate_password_strength,
 )
 from communication_recipient_service import recipient_summary, usable_account
 from user_security_service import (
@@ -621,11 +622,12 @@ class NotificationPreferences(BaseModel):
 
 class UserCreate(BaseModel):
     username: str
-    password: str
-    password_confirmation: str
+    password: Optional[str] = None
+    password_confirmation: Optional[str] = None
     first_name: str
     last_name: str
     email: Optional[str] = None
+    phone: Optional[str] = None
     role: str
     account_status: str = "active"
     assigned_team_ids: List[str] = Field(default_factory=list)
@@ -634,6 +636,7 @@ class UserCreate(BaseModel):
     family_id: Optional[str] = None
     language: str = "es"
     notification_preferences: NotificationPreferences = Field(default_factory=NotificationPreferences)
+    access_method: str = "password"
 
     @field_validator("username")
     @classmethod
@@ -645,8 +648,15 @@ class UserCreate(BaseModel):
 
     @field_validator("password")
     @classmethod
-    def validate_password(cls, value: str):
-        return validate_password_strength(value)
+    def validate_password(cls, value: Optional[str]):
+        return validate_password_strength(value) if value else None
+
+    @model_validator(mode="after")
+    def validate_access_credentials(self):
+        if self.access_method == "password":
+            if not self.password or self.password != self.password_confirmation:
+                raise ValueError("Las contraseñas no coinciden")
+        return self
 
     @field_validator("first_name", "last_name")
     @classmethod
@@ -663,6 +673,21 @@ class UserCreate(BaseModel):
         if value and ("@" not in value or value.startswith("@") or value.endswith("@")):
             raise ValueError("Correo no válido")
         return value or None
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value: Optional[str]):
+        value = normalized_text(value)
+        if value and (len(value) < 7 or len(value) > 24 or not re.fullmatch(r"[+() 0-9.-]+", value)):
+            raise ValueError("Teléfono no válido")
+        return value or None
+
+    @field_validator("access_method")
+    @classmethod
+    def validate_access_method(cls, value: str):
+        if value not in {"password", "temporary_password", "invitation", "pending"}:
+            raise ValueError("Método de acceso no válido")
+        return value
 
     @field_validator("role")
     @classmethod
@@ -690,6 +715,7 @@ class UserUpdate(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     email: Optional[str] = None
+    phone: Optional[str] = None
     role: Optional[str] = None
     account_status: Optional[str] = None
     assigned_team_ids: Optional[List[str]] = None
@@ -735,9 +761,18 @@ class UserUpdate(BaseModel):
             raise ValueError("Correo no válido")
         return value or None
 
+    @field_validator("phone")
+    @classmethod
+    def validate_update_phone(cls, value: Optional[str]):
+        value = normalized_text(value)
+        if value and (len(value) < 7 or len(value) > 24 or not re.fullmatch(r"[+() 0-9.-]+", value)):
+            raise ValueError("Teléfono no válido")
+        return value or None
+
 
 async def validate_user_relationships(data: dict) -> dict:
     role = data.get("role")
+    allow_incomplete = data.get("account_status") in {"pending_activation", "incomplete_link", "deactivated"}
     team_ids = sorted(set(ids(data.get("assigned_team_ids") or [])))
     category_ids = sorted(set(ids(data.get("assigned_category_ids") or [])))
     if any(normalized_key(value) == "no aplica" for value in [*team_ids, *category_ids]):
@@ -745,11 +780,11 @@ async def validate_user_relationships(data: dict) -> dict:
     if role == "admin":
         team_ids, category_ids = [], []
         data["player_id"], data["family_id"], data["linked_player_ids"] = None, None, []
-    if role == "player" and not data.get("player_id"):
+    if role == "player" and not data.get("player_id") and not allow_incomplete:
         raise HTTPException(status_code=422, detail="El rol jugador requiere un jugador asociado")
-    if role == "family" and not data.get("family_id"):
+    if role == "family" and not data.get("family_id") and not allow_incomplete:
         raise HTTPException(status_code=422, detail="El rol familia requiere una familia asociada")
-    if role in {"coordinator", "coach"} and not team_ids:
+    if role in {"coordinator", "coach"} and not team_ids and not allow_incomplete:
         raise HTTPException(status_code=422, detail="El rol requiere al menos un equipo asignado")
     if role in {"coordinator", "coach"}:
         found = set(ids(await db.teams.distinct("id", {"id": {"$in": team_ids}})))
@@ -764,30 +799,34 @@ async def validate_user_relationships(data: dict) -> dict:
         })))
         if compatible != set(team_ids):
             raise HTTPException(status_code=422, detail="Hay equipos incompatibles con las categorías asignadas")
-    if role == "family":
+    if role == "family" and data.get("family_id"):
         family = await db.families.find_one({"id": data.get("family_id")}, {"_id": 0, "id": 1})
         if not family:
             raise HTTPException(status_code=422, detail="La familia asociada no existe")
         data["linked_player_ids"] = ids(await db.players.distinct("id", {"familia_id": data["family_id"]}))
         data["player_id"], team_ids, category_ids = None, [], []
-    if role == "player":
+    if role == "player" and data.get("player_id"):
         player = await db.players.find_one({"id": data.get("player_id")}, {"_id": 0, "id": 1})
         if not player:
             raise HTTPException(status_code=422, detail="El jugador asociado no existe")
         data["family_id"], data["linked_player_ids"], team_ids, category_ids = None, [], [], []
     if role not in {"family", "player"}:
         data["linked_player_ids"] = []
+    if role != "admin" and not link_is_complete({**data, "assigned_team_ids": team_ids,
+                                                   "assigned_category_ids": category_ids}):
+        data["account_status"], data["active"] = "incomplete_link", False
     data["assigned_team_ids"] = team_ids
     data["assigned_category_ids"] = category_ids
     return data
 
 
-async def record_user_audit(action: str, target: dict, changed_fields: list[str] | None = None) -> None:
+async def record_user_audit(action: str, target: dict, changed_fields: list[str] | None = None,
+                            previous: dict | None = None) -> None:
     actor = current_user_context.get() or {}
     await db.internal_events.insert_one({
         "id": new_id(), "type": f"user.{action}", "actor_user_id": actor.get("id"),
         "actor_role": actor.get("role"), "target_user_id": target.get("id"),
-        "detail": safe_audit_detail(action, changed_fields), "created_at": now_iso(),
+        "detail": safe_audit_detail(action, changed_fields, previous, target), "created_at": now_iso(),
     })
 
 
@@ -801,7 +840,8 @@ def system_admin_public() -> dict:
 
 
 def secured_public_user(user: dict) -> dict:
-    return {**public_user(user), **security_public(user)}
+    return {**public_user(user), **security_public(user),
+            "security_state": security_state(user), "link_complete": link_is_complete(user)}
 
 
 async def ensure_admin_protection(existing: dict, candidate: dict) -> None:
@@ -832,8 +872,10 @@ async def get_permission_matrix():
 @api_router.post("/users")
 async def create_user(user: UserCreate):
     data = user.model_dump()
-    if data.pop("password_confirmation") != data["password"]:
-        raise HTTPException(status_code=422, detail="Las contraseñas no coinciden")
+    data.pop("password_confirmation")
+    access_method = data.pop("access_method", "password")
+    if access_method in {"invitation", "pending"}:
+        data["account_status"], data["active"] = "pending_activation", False
     data["username"] = normalized_text(data["username"])
     data["username_normalized"] = normalized_key(data["username"])
     data["email_normalized"] = normalized_key(data.get("email")) or None
@@ -842,24 +884,76 @@ async def create_user(user: UserCreate):
         raise HTTPException(status_code=409, detail="El nombre de usuario ya existe")
     if data.get("email_normalized") and await db.users.find_one({"email_normalized": data["email_normalized"]}):
         raise HTTPException(status_code=409, detail="El correo ya está asociado a otra cuenta")
-    password = data.pop("password")
+    password = data.pop("password") or generate_temporary_password()
+    must_change = access_method == "temporary_password"
     data.update({
         "id": new_id(), "password_hash": pwd_context.hash(password),
         "active": status_is_active(data["account_status"]),
-        "must_change_password": False, "session_version": 0,
+        "must_change_password": must_change, "session_version": 0,
         "failed_login_count": 0, "locked_until": None,
         "created_at": now_iso(), "updated_at": now_iso(), "last_access_at": None,
     })
     data["notification_preferences"] = dict(data["notification_preferences"])
     await db.users.insert_one(dict(data))
     await record_user_audit("created", data, list(data.keys()))
-    return secured_public_user(data)
+    response = secured_public_user(data)
+    if access_method == "temporary_password":
+        response.update({"temporary_password": password, "show_once": True})
+    elif access_method == "invitation":
+        plain, record = issue_token(JWT_SECRET, ttl_minutes=0, ttl_hours=INVITATION_TTL_HOURS)
+        await db.users.update_one({"id": data["id"]}, {"$set": {"invitation": record}})
+        response.update({"invitation_token": plain, "expires_at": record["expires_at"], "show_once": True, "delivery": "not_sent"})
+    return response
 
 
 @api_router.get("/users")
-async def get_users():
-    users = await db.users.find({}, {"_id": 0, "password_hash": 0}).sort("username", 1).to_list(5000)
-    return [system_admin_public(), *[secured_public_user(user) for user in users]]
+async def get_users(
+    page: Optional[int] = Query(default=None, ge=1), page_size: int = Query(default=25, ge=1, le=100),
+    search: str = "", role: str = "", status: str = "", team_id: str = "",
+    last_access: str = "", sort_by: str = "username", sort_dir: str = "asc",
+):
+    users = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(5000)
+    public = [system_admin_public(), *[secured_public_user(user) for user in users]]
+    if page is None:
+        return sorted(public, key=lambda item: normalized_key(item.get("username") or item.get("first_name")))
+    counters = {
+        "total": len(public),
+        "active": sum(account_status(user) == "active" for user in public),
+        "pending": sum(account_status(user) == "pending_activation" for user in public),
+        "blocked": sum(security_state(user) == "locked" for user in public),
+        "deactivated": sum(account_status(user) == "deactivated" for user in public),
+        "incomplete": sum(not link_is_complete(user) for user in public),
+    }
+    if role:
+        public = [user for user in public if user.get("role") == role]
+    if status:
+        public = [user for user in public if account_status(user) == status or security_state(user) == status]
+    if team_id:
+        public = [user for user in public if team_id in (user.get("assigned_team_ids") or [])]
+    if search:
+        needle = normalized_key(search)
+        public = [user for user in public if needle in user_search_text(user)]
+    if last_access == "never":
+        public = [user for user in public if not user.get("last_access_at")]
+    elif last_access in {"7d", "30d", "90d"}:
+        cutoff = utcnow() - timedelta(days=int(last_access[:-1]))
+        public = [user for user in public if parse_time(user.get("last_access_at")) and parse_time(user.get("last_access_at")) >= cutoff]
+    allowed_sort = {"username", "first_name", "role", "account_status", "last_access_at"}
+    sort_key = sort_by if sort_by in allowed_sort else "username"
+    public.sort(key=lambda item: normalized_key(item.get(sort_key)), reverse=sort_dir == "desc")
+    start = (page - 1) * page_size
+    return {"items": public[start:start + page_size], "total": len(public), "page": page,
+            "page_size": page_size, "pages": max(1, math.ceil(len(public) / page_size)), "counters": counters}
+
+
+@api_router.get("/users/options")
+async def get_user_administration_options():
+    teams = await db.teams.find({}, {"_id": 0, "id": 1, "nombre": 1, "categoria": 1, "modalidad": 1, "temporada": 1, "estado": 1}).to_list(1000)
+    usable_teams = [team for team in teams if normalized_key(team.get("nombre")) not in {"", "no aplica"}
+                    and normalized_key(team.get("estado") or "activo") not in {"inactivo", "archivado", "cerrado"}]
+    players = await db.players.find({}, {"_id": 0, "id": 1, "nombre": 1, "apellidos": 1, "familia_id": 1, "equipo_id": 1}).to_list(5000)
+    families = await db.families.find({}, {"_id": 0, "id": 1, "progenitor1_nombre": 1, "contacto_principal": 1}).to_list(5000)
+    return {"teams": usable_teams, "players": players, "families": families}
 
 
 @api_router.get("/users/{user_id}/effective-permissions")
@@ -876,6 +970,33 @@ async def get_effective_permissions(user_id: str):
         "permissions": {resource: sorted(actions) for resource, actions in ROLE_PERMISSIONS.get(role, {}).items()},
         "scope": effective_scope(user),
     }
+
+
+@api_router.get("/users/{user_id}/administration-profile")
+async def get_user_administration_profile(user_id: str):
+    if user_id == "environment-admin":
+        system = system_admin_public()
+        return {"user": {**system, "security_state": "verified", "link_complete": True},
+                "permissions": {resource: sorted(actions) for resource, actions in ROLE_PERMISSIONS["admin"].items()},
+                "scope": effective_scope(system), "activity": [], "sessions": {"individual_tracking": False},
+                "communications": {"count": 0}, "read_only": True}
+    user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0, "invitation": 0,
+                                                         "recovery": 0, "previous_invitation": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="No encontrado")
+    events = await db.internal_events.find(
+        {"target_user_id": user_id}, {"_id": 0, "id": 1, "type": 1, "actor_user_id": 1,
+                                      "actor_role": 1, "detail": 1, "created_at": 1},
+    ).sort("created_at", -1).to_list(100)
+    communication_count = await db.communications.count_documents({"$or": [
+        {"recipient_user_id": user_id}, {"recipient_username": user.get("username")},
+    ]})
+    role = user.get("role", "player")
+    return {"user": secured_public_user(user),
+            "permissions": {resource: sorted(actions) for resource, actions in ROLE_PERMISSIONS.get(role, {}).items()},
+            "scope": effective_scope(user), "activity": events,
+            "sessions": {"individual_tracking": False, "sessions_revoked_at": user.get("sessions_revoked_at")},
+            "communications": {"count": communication_count}, "read_only": False}
 
 
 @api_router.get("/users/{user_id}")
@@ -925,7 +1046,7 @@ async def edit_user(user_id: str, changes: UserUpdate):
         }.get(candidate.get("account_status"), "status_changed")
     else:
         audit_action = "updated"
-    await record_user_audit(audit_action, candidate, list(data.keys()))
+    await record_user_audit(audit_action, candidate, list(data.keys()), existing)
     return secured_public_user(candidate)
 
 
@@ -941,7 +1062,7 @@ async def deactivate_user(user_id: str):
     await db.users.update_one({"id": user_id}, {"$set": {
         "active": False, "account_status": "deactivated", "updated_at": now_iso(),
     }})
-    await record_user_audit("deactivated", candidate, ["active", "account_status"])
+    await record_user_audit("deactivated", candidate, ["active", "account_status"], existing)
     return {"ok": True}
 
 
