@@ -81,6 +81,11 @@ from assistant_service import (
     ACTION_DEFINITIONS, ExternalAssistantProvider, ProposalStore, answer_help,
     public_proposal, session_fingerprint,
 )
+from user_admin_service import (
+    ACCOUNT_STATUSES, account_status, effective_scope, normalized_key, normalized_text,
+    safe_audit_detail, status_is_active, validate_password_strength,
+)
+from communication_recipient_service import recipient_summary, usable_account
 
 
 ROOT_DIR = Path(__file__).parent
@@ -126,7 +131,8 @@ async def load_user(username: str) -> Optional[dict]:
         return {
             "id": "environment-admin", "username": username, "role": "admin",
             "active": True, "assigned_team_ids": [], "language": "es",
-            "notification_preferences": {},
+            "notification_preferences": {}, "account_status": "active",
+            "system_account": True, "read_only": True,
         }
     return await db["users"].find_one({"username": username}, {"_id": 0, "password_hash": 0})
 
@@ -141,7 +147,7 @@ async def get_current_user(request: Request):
         if not username:
             raise HTTPException(status_code=401, detail="Token inválido")
         user = await load_user(username)
-        if not user or not user.get("active", True):
+        if not user or not user.get("active", True) or not status_is_active(account_status(user)):
             raise HTTPException(status_code=403, detail="Usuario inactivo o sin acceso")
         request.state.current_user = user
         current_user_context.set(user)
@@ -171,7 +177,7 @@ async def login(request: Request, response: Response, data: Dict[str, Any]):
     # También buscar en colección users de MongoDB
     if not valid_user:
         db_user = await db["users"].find_one({"username": username})
-        if db_user and db_user.get("active", True) and pwd_context.verify(password, db_user.get("password_hash", "")):
+        if db_user and db_user.get("active", True) and status_is_active(account_status(db_user)) and pwd_context.verify(password, db_user.get("password_hash", "")):
             valid_user = True
     if not valid_user:
         attempts.append(now)
@@ -492,9 +498,14 @@ class NotificationPreferences(BaseModel):
 class UserCreate(BaseModel):
     username: str
     password: str
+    password_confirmation: str
+    first_name: str
+    last_name: str
+    email: Optional[str] = None
     role: str
-    active: bool = True
+    account_status: str = "active"
     assigned_team_ids: List[str] = Field(default_factory=list)
+    assigned_category_ids: List[str] = Field(default_factory=list)
     player_id: Optional[str] = None
     family_id: Optional[str] = None
     language: str = "es"
@@ -511,9 +522,23 @@ class UserCreate(BaseModel):
     @field_validator("password")
     @classmethod
     def validate_password(cls, value: str):
-        if len(value) < 12:
-            raise ValueError("La contraseña debe tener al menos 12 caracteres")
+        return validate_password_strength(value)
+
+    @field_validator("first_name", "last_name")
+    @classmethod
+    def validate_identity(cls, value: str):
+        value = normalized_text(value)
+        if len(value) < 2:
+            raise ValueError("Nombre y apellidos son obligatorios")
         return value
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: Optional[str]):
+        value = normalized_key(value)
+        if value and ("@" not in value or value.startswith("@") or value.endswith("@")):
+            raise ValueError("Correo no válido")
+        return value or None
 
     @field_validator("role")
     @classmethod
@@ -529,10 +554,22 @@ class UserCreate(BaseModel):
             raise ValueError("Idioma no válido")
         return value
 
+    @field_validator("account_status")
+    @classmethod
+    def validate_status(cls, value: str):
+        if value not in ACCOUNT_STATUSES:
+            raise ValueError("Estado de cuenta no válido")
+        return value
+
 
 class UserUpdate(BaseModel):
-    active: Optional[bool] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[str] = None
+    role: Optional[str] = None
+    account_status: Optional[str] = None
     assigned_team_ids: Optional[List[str]] = None
+    assigned_category_ids: Optional[List[str]] = None
     player_id: Optional[str] = None
     family_id: Optional[str] = None
     language: Optional[str] = None
@@ -545,15 +582,115 @@ class UserUpdate(BaseModel):
             raise ValueError("Idioma no válido")
         return value
 
+    @field_validator("role")
+    @classmethod
+    def validate_update_role(cls, value: Optional[str]):
+        if value is not None and value not in ROLES:
+            raise ValueError("Rol no válido")
+        return value
 
-def validate_user_relationships(data: dict) -> None:
+    @field_validator("account_status")
+    @classmethod
+    def validate_update_status(cls, value: Optional[str]):
+        if value is not None and value not in ACCOUNT_STATUSES:
+            raise ValueError("Estado de cuenta no válido")
+        return value
+
+    @field_validator("first_name", "last_name")
+    @classmethod
+    def validate_update_identity(cls, value: Optional[str]):
+        if value is not None and len(normalized_text(value)) < 2:
+            raise ValueError("Nombre y apellidos no válidos")
+        return normalized_text(value) if value is not None else None
+
+    @field_validator("email")
+    @classmethod
+    def validate_update_email(cls, value: Optional[str]):
+        value = normalized_key(value)
+        if value and ("@" not in value or value.startswith("@") or value.endswith("@")):
+            raise ValueError("Correo no válido")
+        return value or None
+
+
+async def validate_user_relationships(data: dict) -> dict:
     role = data.get("role")
+    team_ids = sorted(set(ids(data.get("assigned_team_ids") or [])))
+    category_ids = sorted(set(ids(data.get("assigned_category_ids") or [])))
+    if any(normalized_key(value) == "no aplica" for value in [*team_ids, *category_ids]):
+        raise HTTPException(status_code=422, detail="NO APLICA no es una vinculación válida")
+    if role == "admin":
+        team_ids, category_ids = [], []
+        data["player_id"], data["family_id"], data["linked_player_ids"] = None, None, []
     if role == "player" and not data.get("player_id"):
         raise HTTPException(status_code=422, detail="El rol jugador requiere un jugador asociado")
     if role == "family" and not data.get("family_id"):
         raise HTTPException(status_code=422, detail="El rol familia requiere una familia asociada")
-    if role in {"coordinator", "coach"} and not data.get("assigned_team_ids"):
+    if role in {"coordinator", "coach"} and not team_ids:
         raise HTTPException(status_code=422, detail="El rol requiere al menos un equipo asignado")
+    if role in {"coordinator", "coach"}:
+        found = set(ids(await db.teams.distinct("id", {"id": {"$in": team_ids}})))
+        if found != set(team_ids):
+            raise HTTPException(status_code=422, detail="Uno o varios equipos no existen")
+    if role == "coordinator" and category_ids:
+        known_categories = set(ids(await db.teams.distinct("categoria")))
+        if not set(category_ids).issubset(known_categories):
+            raise HTTPException(status_code=422, detail="Una o varias categorías no existen")
+        compatible = set(ids(await db.teams.distinct("id", {
+            "id": {"$in": team_ids}, "categoria": {"$in": category_ids},
+        })))
+        if compatible != set(team_ids):
+            raise HTTPException(status_code=422, detail="Hay equipos incompatibles con las categorías asignadas")
+    if role == "family":
+        family = await db.families.find_one({"id": data.get("family_id")}, {"_id": 0, "id": 1})
+        if not family:
+            raise HTTPException(status_code=422, detail="La familia asociada no existe")
+        data["linked_player_ids"] = ids(await db.players.distinct("id", {"familia_id": data["family_id"]}))
+        data["player_id"], team_ids, category_ids = None, [], []
+    if role == "player":
+        player = await db.players.find_one({"id": data.get("player_id")}, {"_id": 0, "id": 1})
+        if not player:
+            raise HTTPException(status_code=422, detail="El jugador asociado no existe")
+        data["family_id"], data["linked_player_ids"], team_ids, category_ids = None, [], [], []
+    if role not in {"family", "player"}:
+        data["linked_player_ids"] = []
+    data["assigned_team_ids"] = team_ids
+    data["assigned_category_ids"] = category_ids
+    return data
+
+
+async def record_user_audit(action: str, target: dict, changed_fields: list[str] | None = None) -> None:
+    actor = current_user_context.get() or {}
+    await db.internal_events.insert_one({
+        "id": new_id(), "type": f"user.{action}", "actor_user_id": actor.get("id"),
+        "actor_role": actor.get("role"), "target_user_id": target.get("id"),
+        "detail": safe_audit_detail(action, changed_fields), "created_at": now_iso(),
+    })
+
+
+def system_admin_public() -> dict:
+    return public_user({
+        "id": "environment-admin", "username": None, "first_name": "Administrador del sistema",
+        "last_name": "", "role": "admin", "active": True, "account_status": "active",
+        "system_account": True, "read_only": True,
+        "system_label": "Configurado en el servidor", "language": "es",
+    })
+
+
+async def ensure_admin_protection(existing: dict, candidate: dict) -> None:
+    actor = current_user_context.get() or {}
+    removing_admin = existing.get("role") == "admin" and (
+        candidate.get("role") != "admin" or not status_is_active(account_status(candidate))
+    )
+    same_actor = actor.get("id") == existing.get("id") or actor.get("username") == existing.get("username")
+    if removing_admin and same_actor:
+        raise HTTPException(status_code=409, detail="No puedes retirar tu propio acceso administrativo")
+    if removing_admin:
+        others = await db.users.count_documents({
+            "id": {"$ne": existing.get("id")}, "role": "admin", "active": {"$ne": False},
+            "account_status": {"$nin": ["suspended", "deactivated"]},
+        })
+        if others == 0:
+            raise HTTPException(status_code=409, detail="No se puede retirar al último administrador persistente")
 
 
 @api_router.get("/users/permissions")
@@ -567,27 +704,54 @@ async def get_permission_matrix():
 @api_router.post("/users")
 async def create_user(user: UserCreate):
     data = user.model_dump()
-    validate_user_relationships(data)
-    if data["username"] == ADMIN_USER or await db.users.find_one({"username": data["username"]}):
+    if data.pop("password_confirmation") != data["password"]:
+        raise HTTPException(status_code=422, detail="Las contraseñas no coinciden")
+    data["username"] = normalized_text(data["username"])
+    data["username_normalized"] = normalized_key(data["username"])
+    data["email_normalized"] = normalized_key(data.get("email")) or None
+    data = await validate_user_relationships(data)
+    if data["username"] == ADMIN_USER or await db.users.find_one({"username_normalized": data["username_normalized"]}):
         raise HTTPException(status_code=409, detail="El nombre de usuario ya existe")
+    if data.get("email_normalized") and await db.users.find_one({"email_normalized": data["email_normalized"]}):
+        raise HTTPException(status_code=409, detail="El correo ya está asociado a otra cuenta")
     password = data.pop("password")
     data.update({
         "id": new_id(), "password_hash": pwd_context.hash(password),
+        "active": status_is_active(data["account_status"]),
         "created_at": now_iso(), "updated_at": now_iso(), "last_access_at": None,
     })
     data["notification_preferences"] = dict(data["notification_preferences"])
     await db.users.insert_one(dict(data))
+    await record_user_audit("created", data, list(data.keys()))
     return public_user(data)
 
 
 @api_router.get("/users")
 async def get_users():
     users = await db.users.find({}, {"_id": 0, "password_hash": 0}).sort("username", 1).to_list(5000)
-    return [public_user(user) for user in users]
+    return [system_admin_public(), *[public_user(user) for user in users]]
+
+
+@api_router.get("/users/{user_id}/effective-permissions")
+async def get_effective_permissions(user_id: str):
+    if user_id == "environment-admin":
+        user = {"id": user_id, "role": "admin", "active": True, "system_account": True}
+    else:
+        user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="No encontrado")
+    role = user.get("role", "player")
+    return {
+        "role": role,
+        "permissions": {resource: sorted(actions) for resource, actions in ROLE_PERMISSIONS.get(role, {}).items()},
+        "scope": effective_scope(user),
+    }
 
 
 @api_router.get("/users/{user_id}")
 async def get_user(user_id: str):
+    if user_id == "environment-admin":
+        return system_admin_public()
     user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
     if not user:
         raise HTTPException(status_code=404, detail="No encontrado")
@@ -596,26 +760,58 @@ async def get_user(user_id: str):
 
 @api_router.put("/users/{user_id}")
 async def edit_user(user_id: str, changes: UserUpdate):
+    if user_id == "environment-admin":
+        raise HTTPException(status_code=403, detail="La cuenta del sistema es de solo lectura")
     existing = await db.users.find_one({"id": user_id}, {"_id": 0})
     if not existing:
         raise HTTPException(status_code=404, detail="No encontrado")
     data = changes.model_dump(exclude_unset=True)
     if data.get("notification_preferences") is not None:
         data["notification_preferences"] = dict(data["notification_preferences"])
-    candidate = {**existing, **data}
-    validate_user_relationships(candidate)
+    if "email" in data:
+        data["email_normalized"] = normalized_key(data.get("email")) or None
+        if data["email_normalized"] and await db.users.find_one({
+            "id": {"$ne": user_id}, "email_normalized": data["email_normalized"],
+        }):
+            raise HTTPException(status_code=409, detail="El correo ya está asociado a otra cuenta")
+    candidate = await validate_user_relationships({**existing, **data})
+    if "account_status" in data:
+        candidate["active"] = status_is_active(candidate["account_status"])
+    await ensure_admin_protection(existing, candidate)
+    data = {key: value for key, value in candidate.items() if existing.get(key) != value and key not in {"_id", "password_hash"}}
+    if "account_status" in data:
+        data["active"] = status_is_active(data["account_status"])
     data["updated_at"] = now_iso()
     await db.users.update_one({"id": user_id}, {"$set": data})
+    changed = set(data)
+    if "role" in changed:
+        audit_action = "role_changed"
+    elif changed & {"assigned_team_ids", "assigned_category_ids", "player_id", "family_id", "linked_player_ids"}:
+        audit_action = "scope_changed"
+    elif "account_status" in changed:
+        audit_action = {
+            "active": "activated", "suspended": "suspended", "deactivated": "deactivated",
+            "pending_activation": "activation_pending", "incomplete_link": "link_incomplete",
+        }.get(candidate.get("account_status"), "status_changed")
+    else:
+        audit_action = "updated"
+    await record_user_audit(audit_action, candidate, list(data.keys()))
     return public_user(candidate)
 
 
 @api_router.delete("/users/{user_id}")
 async def deactivate_user(user_id: str):
-    result = await db.users.update_one(
-        {"id": user_id}, {"$set": {"active": False, "updated_at": now_iso()}}
-    )
-    if not result.matched_count:
+    if user_id == "environment-admin":
+        raise HTTPException(status_code=403, detail="La cuenta del sistema es de solo lectura")
+    existing = await db.users.find_one({"id": user_id}, {"_id": 0})
+    if not existing:
         raise HTTPException(status_code=404, detail="No encontrado")
+    candidate = {**existing, "active": False, "account_status": "deactivated"}
+    await ensure_admin_protection(existing, candidate)
+    await db.users.update_one({"id": user_id}, {"$set": {
+        "active": False, "account_status": "deactivated", "updated_at": now_iso(),
+    }})
+    await record_user_audit("deactivated", candidate, ["active", "account_status"])
     return {"ok": True}
 
 
@@ -3006,13 +3202,62 @@ async def communication_targets(data: dict) -> tuple[list[dict], list[str]]:
             family_ids = [target_id]
     if player_ids:
         family_ids = sorted(set(family_ids + ids(await db.players.distinct("familia_id", {"id": {"$in": player_ids}}))))
-    users = await notification_users(team_ids, player_ids, family_ids)
+    users = [user for user in await notification_users(team_ids, player_ids, family_ids) if usable_account(user)[0]]
     emails = set()
     async for player in db.players.find({"id": {"$in": player_ids}}, {"_id": 0, "email_formulario": 1, "progenitor1_email": 1, "progenitor2_email": 1}):
         emails.update(value for value in (player.get("email_formulario"), player.get("progenitor1_email"), player.get("progenitor2_email")) if value)
     async for family in db.families.find({"id": {"$in": family_ids}}, {"_id": 0, "progenitor1_email": 1, "progenitor2_email": 1}):
         emails.update(value for value in (family.get("progenitor1_email"), family.get("progenitor2_email")) if value)
     return users, sorted(emails)
+
+
+async def communication_target_context(data: dict) -> dict:
+    target_type = data.get("destinatario_tipo")
+    target_id = data.get("destinatario_id")
+    team_ids: list[str] = []
+    player_ids: list[str] = []
+    family_ids: list[str] = []
+    resolved_name = data.get("destinatario_nombre") or ""
+    if target_type == "equipo" and target_id:
+        team = await db.teams.find_one({"id": target_id}, {"_id": 0, "id": 1, "nombre": 1})
+        if team:
+            team_ids, resolved_name = [target_id], team.get("nombre") or resolved_name
+            player_ids = ids(await db.players.distinct("id", {"equipo_id": target_id}))
+    elif target_type == "categoria" and target_id:
+        team_ids = ids(await db.teams.distinct("id", {"categoria": target_id}))
+        player_ids = ids(await db.players.distinct("id", {"equipo_id": {"$in": team_ids}}))
+        resolved_name = resolved_name or str(target_id)
+    elif target_type == "individual" and target_id:
+        player = await db.players.find_one({"id": target_id}, {"_id": 0, "id": 1, "nombre": 1, "apellidos": 1})
+        family = None if player else await db.families.find_one(
+            {"id": target_id}, {"_id": 0, "id": 1, "contacto_principal": 1, "progenitor1_nombre": 1},
+        )
+        if player:
+            player_ids = [target_id]
+            resolved_name = " ".join(value for value in (player.get("nombre"), player.get("apellidos")) if value)
+        elif family:
+            family_ids = [target_id]
+            resolved_name = family.get("progenitor1_nombre") or family.get("contacto_principal") or resolved_name
+    if player_ids:
+        family_ids = sorted(set(family_ids + ids(await db.players.distinct("familia_id", {"id": {"$in": player_ids}}))))
+    users_all = await notification_users(team_ids, player_ids, family_ids)
+    _, emails = await communication_targets(data)
+    return {
+        "resolved_name": resolved_name,
+        "summary": recipient_summary(
+            users_all, len(emails), team_count=len(team_ids), player_count=len(player_ids),
+            family_count=len(family_ids),
+        ),
+    }
+
+
+@api_router.post("/communications/recipients/preview")
+async def preview_communication_recipients(comm: Communication):
+    data = comm.model_dump()
+    context = await communication_target_context(data)
+    if not context["resolved_name"]:
+        raise HTTPException(status_code=422, detail="No se ha podido resolver el destinatario")
+    return context
 
 
 @api_router.post("/communications")
@@ -3057,7 +3302,11 @@ async def create_communication(comm: Communication):
 
 @api_router.get("/communications")
 async def get_communications():
-    return await list_docs("communications")
+    items = await list_docs("communications")
+    for item in items:
+        context = await communication_target_context(item)
+        item["destinatario_nombre_resuelto"] = context["resolved_name"] or item.get("destinatario_nombre")
+    return items
 
 
 @api_router.put("/communications/{comm_id}")

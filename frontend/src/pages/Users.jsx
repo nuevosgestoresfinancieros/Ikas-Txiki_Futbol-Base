@@ -1,16 +1,31 @@
-import { useEffect, useState } from "react";
-import { ShieldCheck, UserPlus } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Eye, EyeOff, KeyRound, Plus, RefreshCw, Search, ShieldCheck, UserCog } from "lucide-react";
 import api from "@/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { useI18n } from "@/i18n";
+import {
+  USER_STATUSES, allPasswordChecksPass, filterUsers, normalizedStatus, passwordChecks,
+  userCounters, userDisplayName,
+} from "./userAdministrationView";
 
 const emptyForm = {
-  username: "", password: "", role: "coach", active: true,
-  assigned_team_ids: [], player_id: "", family_id: "", language: "es",
+  first_name: "", last_name: "", username: "", email: "", password: "",
+  password_confirmation: "", role: "coach", account_status: "active",
+  assigned_team_ids: [], assigned_category_ids: [], player_id: "", family_id: "", language: "es",
   notification_preferences: { in_app: true, email: true, callups: true, schedule_changes: true, payments: true, documents: true },
 };
+
+const Select = ({ label, value, onChange, children, testid }) => (
+  <label className="block text-sm font-semibold text-slate-700">
+    {label}
+    <select data-testid={testid} className="mt-1.5 min-h-11 w-full rounded-xl border border-input bg-white px-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" value={value} onChange={(event) => onChange(event.target.value)}>
+      {children}
+    </select>
+  </label>
+);
 
 export default function Users() {
   const { t } = useI18n();
@@ -21,88 +36,120 @@ export default function Users() {
   const [families, setFamilies] = useState([]);
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState(null);
+  const [dialog, setDialog] = useState(false);
+  const [permissions, setPermissions] = useState(null);
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const [filters, setFilters] = useState({ search: "", role: "", status: "", teamId: "" });
+  const [page, setPage] = useState(1);
 
   const load = async () => {
-    setLoading(true);
+    setLoading(true); setError(false);
     try {
-      const [u, tm, pl, fm] = await Promise.all([
-        api.get("/users"), api.get("/teams"), api.get("/players"), api.get("/families"),
-      ]);
+      const [u, tm, pl, fm] = await Promise.all([api.get("/users"), api.get("/teams"), api.get("/players"), api.get("/families")]);
       setUsers(u.data); setTeams(tm.data); setPlayers(pl.data); setFamilies(fm.data);
-    } catch (error) {
-      toast({ title: t("loadError"), variant: "destructive" });
+    } catch (requestError) {
+      setError(true);
     } finally { setLoading(false); }
   };
+  useEffect(() => { load(); }, []);
 
-  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
+  const visibleUsers = useMemo(() => filterUsers(users, filters), [users, filters]);
+  const pageSize = 20;
+  const pageCount = Math.max(1, Math.ceil(visibleUsers.length / pageSize));
+  const paginatedUsers = visibleUsers.slice((page - 1) * pageSize, page * pageSize);
+  useEffect(() => { setPage(1); }, [filters]);
+  const counters = useMemo(() => userCounters(users), [users]);
+  const categories = useMemo(() => [...new Set(teams.map((team) => team.categoria).filter(Boolean))].sort(), [teams]);
+  const checks = passwordChecks(form.password);
   const update = (key, value) => setForm((current) => ({ ...current, [key]: value }));
-  const selectUser = (user) => {
+  const close = () => { setDialog(false); setEditingId(null); setForm(emptyForm); setShowPassword(false); };
+  const openCreate = () => { setEditingId(null); setForm(emptyForm); setDialog(true); };
+  const openEdit = (user) => {
+    if (user.read_only) return;
     setEditingId(user.id);
-    setForm({ ...emptyForm, ...user, password: "", player_id: user.player_id || "", family_id: user.family_id || "" });
+    setForm({ ...emptyForm, ...user, password: "", password_confirmation: "", player_id: user.player_id || "", family_id: user.family_id || "" });
+    setDialog(true);
   };
-  const reset = () => { setEditingId(null); setForm(emptyForm); };
+  const toggleTeam = (teamId) => update("assigned_team_ids", form.assigned_team_ids.includes(teamId)
+    ? form.assigned_team_ids.filter((id) => id !== teamId) : [...form.assigned_team_ids, teamId]);
+  const toggleCategory = (category) => update("assigned_category_ids", form.assigned_category_ids.includes(category)
+    ? form.assigned_category_ids.filter((value) => value !== category) : [...form.assigned_category_ids, category]);
 
   const save = async (event) => {
     event.preventDefault();
+    if (!editingId && (!allPasswordChecksPass(form.password) || form.password !== form.password_confirmation)) return;
     try {
+      const payload = { ...form, player_id: form.player_id || null, family_id: form.family_id || null };
       if (editingId) {
-        const { active, assigned_team_ids, player_id, family_id, language, notification_preferences } = form;
-        await api.put(`/users/${editingId}`, {
-          active, assigned_team_ids, player_id: player_id || null, family_id: family_id || null,
-          language, notification_preferences,
-        });
-      } else {
-        await api.post("/users", { ...form, player_id: form.player_id || null, family_id: form.family_id || null });
-      }
-      toast({ title: t("userSaved") }); reset(); await load();
-    } catch (error) {
-      toast({ title: error.response?.data?.detail || t("saveError"), variant: "destructive" });
+        delete payload.username; delete payload.password; delete payload.password_confirmation;
+        await api.put(`/users/${editingId}`, payload);
+      } else await api.post("/users", payload);
+      toast({ title: t("userSaved") }); close(); await load();
+    } catch (requestError) {
+      toast({ title: requestError.response?.data?.detail || t("saveError"), variant: "destructive" });
     }
   };
 
-  const toggleTeam = (teamId) => update(
-    "assigned_team_ids",
-    form.assigned_team_ids.includes(teamId)
-      ? form.assigned_team_ids.filter((id) => id !== teamId)
-      : [...form.assigned_team_ids, teamId],
-  );
+  const showEffectivePermissions = async (user) => {
+    try { setPermissions({ user, ...(await api.get(`/users/${user.id}/effective-permissions`)).data }); }
+    catch { toast({ title: t("loadError"), variant: "destructive" }); }
+  };
 
   return (
-    <div className="space-y-6">
-      <header className="flex items-center gap-3">
-        <div className="rounded-2xl bg-primary/10 p-3 text-primary"><ShieldCheck className="h-6 w-6" /></div>
-        <div><h1 className="page-title">{t("usersAndPermissions")}</h1><p className="page-subtitle">{t("usersIntro")}</p></div>
+    <div className="space-y-6" data-testid="users-page">
+      <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-3"><div className="rounded-2xl bg-primary/10 p-3 text-primary"><ShieldCheck className="h-6 w-6" /></div><div><h1 className="page-title">{t("usersAndPermissions")}</h1><p className="page-subtitle">{t("usersIntro")}</p></div></div>
+        <Button onClick={openCreate} className="min-h-11" data-testid="create-user"><Plus className="h-4 w-4" />{t("createUser")}</Button>
       </header>
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(22rem,0.7fr)]">
-        <section className="surface-card overflow-hidden">
-          <div className="border-b border-slate-100 px-5 py-4 font-bold">{t("users")}</div>
-          {loading ? <div className="p-6 text-slate-500">{t("loading")}</div> : users.length === 0 ? <div className="p-6 text-slate-500">{t("noUsers")}</div> : (
-            <div className="divide-y divide-slate-100">
-              {users.map((user) => (
-                <button key={user.id} type="button" onClick={() => selectUser(user)} className="flex w-full items-center justify-between gap-4 p-5 text-left hover:bg-slate-50">
-                  <div className="min-w-0"><p className="truncate font-bold text-slate-900">{user.username}</p><p className="text-sm text-slate-500">{t(`role_${user.role}`)} · {user.language.toUpperCase()}</p></div>
-                  <span className={`rounded-full px-3 py-1 text-xs font-bold ${user.active ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>{user.active ? t("active") : t("inactive")}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </section>
+      <section className="grid grid-cols-2 gap-3 lg:grid-cols-6" aria-label={t("accountCounters")}>
+        {[["total", counters.total], ["active", counters.active], ["pendingActivation", counters.pending], ["suspended", counters.suspended], ["deactivated", counters.deactivated], ["incompleteLink", counters.incomplete]].map(([key, value]) => (
+          <div key={key} className="surface-card p-4"><p className="text-2xl font-bold text-slate-900">{value}</p><p className="mt-1 text-xs font-semibold text-slate-500">{t(key)}</p></div>
+        ))}
+      </section>
 
-        <form onSubmit={save} className="surface-card space-y-5 p-5">
-          <div className="flex items-center gap-2 font-bold"><UserPlus className="h-5 w-5 text-primary" />{editingId ? t("editUser") : t("newUser")}</div>
-          <label className="block text-sm font-semibold">{t("username")}<Input className="mt-1.5" disabled={Boolean(editingId)} value={form.username} onChange={(e) => update("username", e.target.value)} required /></label>
-          {!editingId && <label className="block text-sm font-semibold">{t("password")}<Input className="mt-1.5" type="password" minLength={12} value={form.password} onChange={(e) => update("password", e.target.value)} required /></label>}
-          <label className="block text-sm font-semibold">{t("role")}<select className="mt-1.5 min-h-11 w-full rounded-xl border border-input bg-white px-3" disabled={Boolean(editingId)} value={form.role} onChange={(e) => update("role", e.target.value)}>{["admin", "coordinator", "coach", "family", "player"].map((role) => <option key={role} value={role}>{t(`role_${role}`)}</option>)}</select></label>
-          {(form.role === "coordinator" || form.role === "coach") && <fieldset><legend className="text-sm font-semibold">{t("assignedTeams")}</legend><div className="mt-2 grid gap-2 sm:grid-cols-2">{teams.map((team) => <label key={team.id} className="flex items-center gap-2 rounded-xl border p-3 text-sm"><input type="checkbox" checked={form.assigned_team_ids.includes(team.id)} onChange={() => toggleTeam(team.id)} />{team.nombre}</label>)}</div></fieldset>}
-          {form.role === "player" && <label className="block text-sm font-semibold">{t("linkedPlayer")}<select className="mt-1.5 min-h-11 w-full rounded-xl border px-3" value={form.player_id} onChange={(e) => update("player_id", e.target.value)}><option value="">—</option>{players.map((player) => <option key={player.id} value={player.id}>{player.nombre} {player.apellidos}</option>)}</select></label>}
-          {form.role === "family" && <label className="block text-sm font-semibold">{t("linkedFamily")}<select className="mt-1.5 min-h-11 w-full rounded-xl border px-3" value={form.family_id} onChange={(e) => update("family_id", e.target.value)}><option value="">—</option>{families.map((family) => <option key={family.id} value={family.id}>{family.progenitor1_nombre || family.contacto_principal || family.id}</option>)}</select></label>}
-          <div className="grid grid-cols-2 gap-3"><label className="text-sm font-semibold">{t("language")}<select className="mt-1.5 min-h-11 w-full rounded-xl border px-3" value={form.language} onChange={(e) => update("language", e.target.value)}><option value="es">Castellano</option><option value="eu">Euskara</option></select></label><label className="flex items-end gap-2 pb-3 text-sm font-semibold"><input type="checkbox" checked={form.active} onChange={(e) => update("active", e.target.checked)} />{t("active")}</label></div>
-          <div className="flex gap-3"><Button type="submit" className="flex-1">{t("save")}</Button>{editingId && <Button type="button" variant="outline" onClick={reset}>{t("cancel")}</Button>}</div>
-        </form>
-      </div>
+      <section className="surface-card space-y-4 p-4">
+        <div className="grid gap-3 md:grid-cols-4">
+          <label className="relative md:col-span-1"><span className="sr-only">{t("searchUsers")}</span><Search className="pointer-events-none absolute left-3 top-3.5 h-4 w-4 text-slate-400" /><Input className="pl-9" placeholder={t("searchUsers")} value={filters.search} onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))} /></label>
+          <Select label={t("role")} value={filters.role} onChange={(role) => setFilters((f) => ({ ...f, role }))}><option value="">{t("all")}</option>{["admin", "coordinator", "coach", "family", "player"].map((role) => <option key={role} value={role}>{t(`role_${role}`)}</option>)}</Select>
+          <Select label={t("status")} value={filters.status} onChange={(status) => setFilters((f) => ({ ...f, status }))}><option value="">{t("all")}</option>{USER_STATUSES.map((status) => <option key={status} value={status}>{t(`accountStatus_${status}`)}</option>)}</Select>
+          <Select label={t("team")} value={filters.teamId} onChange={(teamId) => setFilters((f) => ({ ...f, teamId }))}><option value="">{t("all")}</option>{teams.map((team) => <option key={team.id} value={team.id}>{team.nombre}</option>)}</Select>
+        </div>
+
+        {loading ? <div className="py-12 text-center text-slate-500" role="status">{t("loading")}</div>
+          : error ? <div className="flex flex-col items-center gap-3 py-12 text-center"><p className="text-slate-600">{t("loadError")}</p><Button variant="outline" onClick={load}><RefreshCw className="h-4 w-4" />{t("retry")}</Button></div>
+          : visibleUsers.length === 0 ? <div className="py-12 text-center text-slate-500">{t("noUsersFiltered")}</div>
+          : <><div className="grid gap-3" data-testid="users-list">{paginatedUsers.map((user) => (
+            <article key={user.id} className="rounded-2xl border border-slate-200 bg-white p-4 transition-shadow hover:shadow-md">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="font-bold text-slate-900">{userDisplayName(user)}</h2><span className="rounded-full bg-sky-50 px-2.5 py-1 text-xs font-bold text-sky-800">{t(`role_${user.role}`)}</span><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">{t(`accountStatus_${normalizedStatus(user)}`)}</span></div><p className="mt-1 break-all text-sm text-slate-500">{user.system_account ? `${t("systemAdministrator")} · ${t("configuredOnServer")}` : [user.username, user.email].filter(Boolean).join(" · ")}</p><p className="mt-1 text-xs text-slate-500">{t("lastAccess")}: {user.last_access_at ? new Date(user.last_access_at).toLocaleString() : t("never")}</p></div>
+                <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => showEffectivePermissions(user)}><ShieldCheck className="h-4 w-4" />{t("effectivePermissions")}</Button>{!user.read_only && <Button variant="outline" onClick={() => openEdit(user)}><UserCog className="h-4 w-4" />{t("edit")}</Button>}</div>
+              </div>
+            </article>
+          ))}</div>{pageCount > 1 && <nav className="mt-4 flex items-center justify-between" aria-label={t("pagination")}><Button variant="outline" disabled={page === 1} onClick={() => setPage((value) => value - 1)}>{t("previous")}</Button><span className="text-sm text-slate-500">{page} / {pageCount}</span><Button variant="outline" disabled={page === pageCount} onClick={() => setPage((value) => value + 1)}>{t("next")}</Button></nav>}</>}
+      </section>
+
+      <Dialog open={dialog} onOpenChange={(open) => { if (!open) close(); }}>
+        <DialogContent className="max-h-[92vh] max-w-3xl overflow-y-auto">
+          <DialogHeader><DialogTitle>{editingId ? t("editUser") : t("createUser")}</DialogTitle><DialogDescription>{t("userDialogDescription")}</DialogDescription></DialogHeader>
+          <form className="space-y-5" onSubmit={save}>
+            <div className="grid gap-4 sm:grid-cols-2"><label className="text-sm font-semibold">{t("firstName")}<Input className="mt-1.5" value={form.first_name} onChange={(e) => update("first_name", e.target.value)} required /></label><label className="text-sm font-semibold">{t("lastName")}<Input className="mt-1.5" value={form.last_name} onChange={(e) => update("last_name", e.target.value)} required /></label><label className="text-sm font-semibold">{t("username")}<Input className="mt-1.5" disabled={Boolean(editingId)} value={form.username} onChange={(e) => update("username", e.target.value)} required /></label><label className="text-sm font-semibold">{t("email")}<Input className="mt-1.5" type="email" value={form.email || ""} onChange={(e) => update("email", e.target.value)} /></label></div>
+            <div className="grid gap-4 sm:grid-cols-3"><Select label={t("role")} value={form.role} onChange={(role) => update("role", role)}>{["admin", "coordinator", "coach", "family", "player"].map((role) => <option key={role} value={role}>{t(`role_${role}`)}</option>)}</Select><Select label={t("status")} value={form.account_status} onChange={(status) => update("account_status", status)}>{USER_STATUSES.filter((status) => status !== "incomplete_link").map((status) => <option key={status} value={status}>{t(`accountStatus_${status}`)}</option>)}</Select><Select label={t("language")} value={form.language} onChange={(language) => update("language", language)}><option value="es">Castellano</option><option value="eu">Euskara</option></Select></div>
+            {(form.role === "coordinator" || form.role === "coach") && <fieldset><legend className="text-sm font-semibold">{t("assignedTeams")}</legend><div className="mt-2 grid gap-2 sm:grid-cols-2">{teams.filter((team) => String(team.nombre).toLocaleUpperCase() !== "NO APLICA").map((team) => <label key={team.id} className="flex min-h-11 items-center gap-2 rounded-xl border p-3 text-sm"><input type="checkbox" checked={form.assigned_team_ids.includes(team.id)} onChange={() => toggleTeam(team.id)} />{team.nombre}</label>)}</div></fieldset>}
+            {form.role === "coordinator" && <fieldset><legend className="text-sm font-semibold">{t("assignedCategories")}</legend><div className="mt-2 grid gap-2 sm:grid-cols-2">{categories.filter((category) => String(category).toLocaleUpperCase() !== "NO APLICA").map((category) => <label key={category} className="flex min-h-11 items-center gap-2 rounded-xl border p-3 text-sm"><input type="checkbox" checked={form.assigned_category_ids.includes(category)} onChange={() => toggleCategory(category)} />{category}</label>)}</div></fieldset>}
+            {form.role === "player" && <Select label={t("linkedPlayer")} value={form.player_id} onChange={(playerId) => update("player_id", playerId)}><option value="">—</option>{players.map((player) => <option key={player.id} value={player.id}>{player.nombre} {player.apellidos}</option>)}</Select>}
+            {form.role === "family" && <Select label={t("linkedFamily")} value={form.family_id} onChange={(familyId) => update("family_id", familyId)}><option value="">—</option>{families.map((family) => <option key={family.id} value={family.id}>{family.progenitor1_nombre || family.contacto_principal || t("family")}</option>)}</Select>}
+            {!editingId && <section className="rounded-2xl bg-slate-50 p-4"><div className="grid gap-4 sm:grid-cols-2">{["password", "password_confirmation"].map((field) => <label key={field} className="text-sm font-semibold">{t(field === "password" ? "password" : "confirmPassword")}<span className="relative mt-1.5 block"><Input type={showPassword ? "text" : "password"} value={form[field]} onChange={(e) => update(field, e.target.value)} required /><button type="button" className="absolute right-2 top-2 rounded-lg p-1 text-slate-600" onClick={() => setShowPassword((value) => !value)} aria-label={t(showPassword ? "hidePassword" : "showPassword")}>{showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}</button></span></label>)}</div><div className="mt-3 grid gap-1 text-xs sm:grid-cols-2">{Object.entries(checks).map(([key, valid]) => <span key={key} className={valid ? "text-emerald-700" : "text-slate-500"}>• {t(`password_${key}`)}</span>)}</div>{form.password_confirmation && form.password !== form.password_confirmation && <p className="mt-2 text-sm font-semibold text-red-700">{t("passwordMismatch")}</p>}</section>}
+            <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end"><Button type="button" variant="outline" onClick={close}>{t("cancel")}</Button><Button type="submit" disabled={!editingId && (!allPasswordChecksPass(form.password) || form.password !== form.password_confirmation)}><KeyRound className="h-4 w-4" />{t("save")}</Button></div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(permissions)} onOpenChange={(open) => { if (!open) setPermissions(null); }}>
+        <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto"><DialogHeader><DialogTitle>{t("effectivePermissions")}</DialogTitle><DialogDescription>{t("effectivePermissionsDescription")}</DialogDescription></DialogHeader>{permissions && <div className="space-y-5"><div className="rounded-xl bg-sky-50 p-4"><p className="font-bold text-sky-950">{userDisplayName(permissions.user)}</p><p className="text-sm text-sky-800">{t("roleDefinesFunctionsScopeDefinesData")}</p></div><div><h3 className="mb-2 font-bold">{t("allowedFunctions")}</h3><div className="grid gap-2 sm:grid-cols-2">{Object.entries(permissions.permissions).map(([resource, actions]) => <div key={resource} className="rounded-xl border p-3"><p className="font-semibold">{t(`permissionResource_${resource}`)}</p><p className="text-xs text-slate-500">{actions.map((action) => t(`permissionAction_${action}`)).join(" · ")}</p></div>)}</div></div><div><h3 className="font-bold">{t("appliedScope")}</h3><pre className="mt-2 overflow-x-auto rounded-xl bg-slate-950 p-3 text-xs text-white">{JSON.stringify(permissions.scope, null, 2)}</pre></div></div>}</DialogContent>
+      </Dialog>
     </div>
   );
 }
