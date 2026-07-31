@@ -89,6 +89,11 @@ from user_admin_service import (
 from communication_recipient_service import (
     communication_record_active, consented_contacts, recipient_summary, usable_account,
 )
+from exercise_service import (
+    EXERCISE_CATEGORIES, EXERCISE_STATES, INTENSITIES, RATINGS, VISIBILITIES,
+    ExerciseValidationError, exercise_statistics, normalize_exercise,
+    normalize_planned_exercises, normalize_template,
+)
 from user_security_service import (
     INVITATION_TTL_HOURS, LOCK_DURATION_MINUTES, MAX_ACCOUNT_ATTEMPTS,
     generate_temporary_password, invitation_status, issue_token, legacy_session_allowed,
@@ -3007,6 +3012,342 @@ async def confirm_import_staging(draft_id: str, request: StagingConfirmRequest):
     return {"ok": True, "job_id": job_id, "status": "applied", "operations": len(operations)}
 
 
+# ================= EXERCISE LIBRARY =================
+EXERCISE_PUBLIC_FIELDS = {
+    "_id": 0, "id": 1, "name": 1, "category": 1, "objective": 1, "description": 1,
+    "instructions": 1, "recommended_duration": 1, "min_players": 1, "max_players": 1,
+    "materials": 1, "intensity": 1, "recommended_space": 1, "safety_notes": 1,
+    "image_url": 1, "author_id": 1, "author_name": 1, "team_ids": 1, "visibility": 1,
+    "status": 1, "created_at": 1, "updated_at": 1, "usage_count": 1,
+}
+TEMPLATE_PUBLIC_FIELDS = {
+    "_id": 0, "id": 1, "name": 1, "description": 1, "team_ids": 1, "visibility": 1,
+    "status": 1, "planned_exercises": 1, "author_id": 1, "author_name": 1,
+    "created_at": 1, "updated_at": 1,
+}
+
+
+class ExercisePayload(BaseModel):
+    name: Optional[str] = None
+    category: Optional[str] = None
+    objective: Optional[str] = None
+    description: Optional[str] = None
+    instructions: List[str] = []
+    recommended_duration: Optional[int] = None
+    min_players: Optional[int] = None
+    max_players: Optional[int] = None
+    materials: List[str] = []
+    intensity: Optional[str] = "medium"
+    recommended_space: Optional[str] = None
+    safety_notes: Optional[str] = None
+    image_url: Optional[str] = None
+    team_ids: List[str] = []
+    visibility: str = "private"
+    status: Optional[str] = None
+
+
+class PlannedExercisePayload(BaseModel):
+    exercise_id: str
+    planned_duration: Optional[int] = None
+    completed: Optional[bool] = None
+    actual_duration: Optional[int] = None
+    rating: Optional[str] = None
+    observation: Optional[str] = None
+    not_completed_reason: Optional[str] = None
+
+
+class TrainingTemplatePayload(BaseModel):
+    name: str
+    description: Optional[str] = None
+    team_ids: List[str] = []
+    visibility: str = "private"
+    status: str = "active"
+    planned_exercises: List[PlannedExercisePayload] = []
+
+
+def exercise_scope_query(actor: dict) -> dict:
+    if actor.get("role") == "admin":
+        return {}
+    team_ids = ids(actor.get("assigned_team_ids") or [])
+    return {"$or": [
+        {"visibility": "club"},
+        {"author_id": actor.get("id")},
+        {"visibility": "teams", "team_ids": {"$in": team_ids}},
+    ]}
+
+
+async def validate_exercise_teams(team_ids: list[str], actor: dict) -> None:
+    if not team_ids:
+        return
+    found = await db.teams.count_documents({"id": {"$in": team_ids}})
+    if found != len(set(team_ids)):
+        raise HTTPException(status_code=422, detail="Uno de los equipos no existe")
+    if actor.get("role") != "admin":
+        allowed = set(ids(actor.get("assigned_team_ids") or []))
+        if not set(team_ids).issubset(allowed):
+            raise HTTPException(status_code=403, detail="Uno de los equipos queda fuera de tu ámbito")
+
+
+def can_manage_exercise(actor: dict, exercise: dict) -> bool:
+    if actor.get("role") == "admin":
+        return True
+    if exercise.get("author_id") == actor.get("id"):
+        return True
+    return bool(set(ids(exercise.get("team_ids") or [])) & set(ids(actor.get("assigned_team_ids") or [])))
+
+
+async def exercise_doc(identifier: str, *, manage: bool = False) -> dict:
+    actor = current_user_context.get() or {}
+    document = await db.exercises.find_one({"id": identifier}, EXERCISE_PUBLIC_FIELDS)
+    if not document:
+        raise HTTPException(status_code=404, detail="Ejercicio no encontrado")
+    visible = actor.get("role") == "admin" or bool(await db.exercises.find_one(
+        merge_query({"id": identifier}, exercise_scope_query(actor)), {"_id": 0, "id": 1},
+    ))
+    if not visible or (manage and not can_manage_exercise(actor, document)):
+        raise HTTPException(status_code=403, detail="El ejercicio no pertenece a tu ámbito")
+    return clean(document)
+
+
+async def record_exercise_audit(action: str, identifier: str, detail: Optional[dict] = None) -> None:
+    actor = current_user_context.get() or {}
+    await db.internal_events.insert_one({
+        "id": new_id(), "type": f"exercise.{action}", "exercise_id": identifier,
+        "actor_id": actor.get("id"), "actor_role": actor.get("role"),
+        "detail": detail or {}, "created_at": now_iso(),
+    })
+
+
+@api_router.get("/exercises/meta")
+async def exercise_meta():
+    return {
+        "categories": EXERCISE_CATEGORIES, "intensities": INTENSITIES,
+        "visibilities": VISIBILITIES, "states": EXERCISE_STATES, "ratings": RATINGS,
+    }
+
+
+@api_router.get("/exercises")
+async def list_exercises(
+    search: str = "", category: Optional[str] = None, objective: Optional[str] = None,
+    team_id: Optional[str] = None, author_id: Optional[str] = None,
+    status: str = "active", visibility: Optional[str] = None,
+    sort: str = "name", page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=100),
+):
+    actor = current_user_context.get() or {}
+    clauses = [exercise_scope_query(actor)]
+    if search.strip():
+        clauses.append({"$or": [
+            {"name": {"$regex": re.escape(search.strip()), "$options": "i"}},
+            {"objective": {"$regex": re.escape(search.strip()), "$options": "i"}},
+            {"description": {"$regex": re.escape(search.strip()), "$options": "i"}},
+        ]})
+    for field, value in (("category", category), ("objective", objective), ("author_id", author_id),
+                         ("status", status), ("visibility", visibility)):
+        if value and value != "all":
+            clauses.append({field: value})
+    if team_id:
+        if actor.get("role") != "admin" and team_id not in ids(actor.get("assigned_team_ids") or []):
+            raise HTTPException(status_code=403, detail="El equipo no pertenece a tu ámbito")
+        clauses.append({"team_ids": team_id})
+    query = {"$and": clauses}
+    order = {
+        "name": ("name", 1), "category": ("category", 1),
+        "created_at": ("created_at", -1), "usage": ("usage_count", -1),
+    }.get(sort, ("name", 1))
+    total = await db.exercises.count_documents(query)
+    rows = await db.exercises.find(query, EXERCISE_PUBLIC_FIELDS).sort(*order).skip(
+        (page - 1) * page_size
+    ).limit(page_size).to_list(page_size)
+    return {"items": [clean(row) for row in rows], "page": page, "page_size": page_size, "total": total}
+
+
+@api_router.post("/exercises")
+async def create_exercise(payload: ExercisePayload):
+    actor = current_user_context.get() or {}
+    try:
+        values = normalize_exercise(payload.model_dump())
+    except ExerciseValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if values["visibility"] == "club" and actor.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Solo administración puede publicar para todo el club")
+    await validate_exercise_teams(values["team_ids"], actor)
+    identifier = new_id()
+    now = now_iso()
+    document = {
+        "id": identifier, **values, "status": "active", "author_id": actor.get("id"),
+        "author_name": actor.get("username"), "usage_count": 0,
+        "created_at": now, "updated_at": now,
+    }
+    await db.exercises.insert_one(document)
+    await record_exercise_audit("created", identifier)
+    return clean(document)
+
+
+@api_router.get("/exercises/statistics")
+async def get_exercise_statistics():
+    actor = current_user_context.get() or {}
+    exercises = await db.exercises.find(exercise_scope_query(actor), EXERCISE_PUBLIC_FIELDS).to_list(5000)
+    trainings = await list_docs("trainings")
+    return exercise_statistics(exercises, trainings)
+
+
+@api_router.get("/exercises/{exercise_id}")
+async def get_exercise(exercise_id: str):
+    return await exercise_doc(exercise_id)
+
+
+@api_router.put("/exercises/{exercise_id}")
+async def update_exercise(exercise_id: str, payload: ExercisePayload):
+    actor = current_user_context.get() or {}
+    existing = await exercise_doc(exercise_id, manage=True)
+    try:
+        values = normalize_exercise(payload.model_dump(exclude_unset=True), partial=True)
+    except ExerciseValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    visibility = values.get("visibility", existing.get("visibility"))
+    if visibility == "club" and actor.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Solo administración puede publicar para todo el club")
+    team_ids = values.get("team_ids", existing.get("team_ids") or [])
+    await validate_exercise_teams(team_ids, actor)
+    values["updated_at"] = now_iso()
+    updated = await db.exercises.find_one_and_update(
+        {"id": exercise_id}, {"$set": values}, return_document=ReturnDocument.AFTER,
+        projection=EXERCISE_PUBLIC_FIELDS,
+    )
+    await record_exercise_audit("updated", exercise_id, {"fields": sorted(values)})
+    return clean(updated)
+
+
+@api_router.post("/exercises/{exercise_id}/duplicate")
+async def duplicate_exercise(exercise_id: str):
+    source = await exercise_doc(exercise_id)
+    actor = current_user_context.get() or {}
+    values = {key: source.get(key) for key in (
+        "name", "category", "objective", "description", "instructions", "recommended_duration",
+        "min_players", "max_players", "materials", "intensity", "recommended_space",
+        "safety_notes", "image_url", "team_ids", "visibility",
+    )}
+    if values["visibility"] == "club" and actor.get("role") != "admin":
+        values["visibility"] = "private"; values["team_ids"] = []
+    values["name"] = f"{values['name']} (copia)"
+    return await create_exercise(ExercisePayload(**values))
+
+
+@api_router.post("/exercises/{exercise_id}/archive")
+async def archive_exercise(exercise_id: str):
+    await exercise_doc(exercise_id, manage=True)
+    updated = await db.exercises.find_one_and_update(
+        {"id": exercise_id}, {"$set": {"status": "archived", "updated_at": now_iso()}},
+        return_document=ReturnDocument.AFTER, projection=EXERCISE_PUBLIC_FIELDS,
+    )
+    await record_exercise_audit("archived", exercise_id)
+    return clean(updated)
+
+
+@api_router.post("/exercises/{exercise_id}/restore")
+async def restore_exercise(exercise_id: str):
+    await exercise_doc(exercise_id, manage=True)
+    updated = await db.exercises.find_one_and_update(
+        {"id": exercise_id}, {"$set": {"status": "active", "updated_at": now_iso()}},
+        return_document=ReturnDocument.AFTER, projection=EXERCISE_PUBLIC_FIELDS,
+    )
+    await record_exercise_audit("restored", exercise_id)
+    return clean(updated)
+
+
+async def template_doc(identifier: str, *, manage: bool = False) -> dict:
+    actor = current_user_context.get() or {}
+    query = exercise_scope_query(actor)
+    document = await db.training_templates.find_one(
+        merge_query({"id": identifier}, query), TEMPLATE_PUBLIC_FIELDS,
+    )
+    if not document:
+        raise HTTPException(status_code=404, detail="Plantilla no encontrada")
+    document = clean(document)
+    if manage and not can_manage_exercise(actor, document):
+        raise HTTPException(status_code=403, detail="La plantilla no pertenece a tu ámbito")
+    return document
+
+
+@api_router.get("/training-templates")
+async def list_training_templates(status: str = "active"):
+    actor = current_user_context.get() or {}
+    query = merge_query({"status": status}, exercise_scope_query(actor))
+    rows = await db.training_templates.find(query, TEMPLATE_PUBLIC_FIELDS).sort("name", 1).to_list(1000)
+    return [clean(row) for row in rows]
+
+
+async def accessible_exercise_map(identifiers: list[str]) -> dict[str, dict]:
+    actor = current_user_context.get() or {}
+    rows = await db.exercises.find(
+        merge_query({"id": {"$in": identifiers}}, exercise_scope_query(actor)),
+        EXERCISE_PUBLIC_FIELDS,
+    ).to_list(100)
+    return {row["id"]: clean(row) for row in rows}
+
+
+@api_router.post("/training-templates")
+async def create_training_template(payload: TrainingTemplatePayload):
+    actor = current_user_context.get() or {}
+    raw = payload.model_dump()
+    exercises = await accessible_exercise_map([row["exercise_id"] for row in raw["planned_exercises"]])
+    try:
+        values = normalize_template(raw, exercises)
+    except ExerciseValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if values["visibility"] == "club" and actor.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Solo administración puede publicar para todo el club")
+    await validate_exercise_teams(values["team_ids"], actor)
+    now = now_iso()
+    document = {
+        "id": new_id(), **values, "author_id": actor.get("id"),
+        "author_name": actor.get("username"), "created_at": now, "updated_at": now,
+    }
+    await db.training_templates.insert_one(document)
+    return clean(document)
+
+
+@api_router.put("/training-templates/{template_id}")
+async def update_training_template(template_id: str, payload: TrainingTemplatePayload):
+    existing = await template_doc(template_id, manage=True)
+    actor = current_user_context.get() or {}
+    raw = payload.model_dump()
+    exercises = await accessible_exercise_map([row["exercise_id"] for row in raw["planned_exercises"]])
+    try:
+        values = normalize_template(raw, exercises)
+    except ExerciseValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if values["visibility"] == "club" and actor.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Solo administración puede publicar para todo el club")
+    await validate_exercise_teams(values["team_ids"], actor)
+    values["updated_at"] = now_iso()
+    updated = await db.training_templates.find_one_and_update(
+        {"id": existing["id"]}, {"$set": values}, return_document=ReturnDocument.AFTER,
+        projection=TEMPLATE_PUBLIC_FIELDS,
+    )
+    return clean(updated)
+
+
+@api_router.post("/training-templates/{template_id}/archive")
+async def archive_training_template(template_id: str):
+    await template_doc(template_id, manage=True)
+    updated = await db.training_templates.find_one_and_update(
+        {"id": template_id}, {"$set": {"status": "archived", "updated_at": now_iso()}},
+        return_document=ReturnDocument.AFTER, projection=TEMPLATE_PUBLIC_FIELDS,
+    )
+    return clean(updated)
+
+
+@api_router.post("/training-templates/{template_id}/restore")
+async def restore_training_template(template_id: str):
+    await template_doc(template_id, manage=True)
+    updated = await db.training_templates.find_one_and_update(
+        {"id": template_id}, {"$set": {"status": "active", "updated_at": now_iso()}},
+        return_document=ReturnDocument.AFTER, projection=TEMPLATE_PUBLIC_FIELDS,
+    )
+    return clean(updated)
+
+
 # ================= TRAININGS =================
 class AsistenciaItem(BaseModel):
     player_id: str
@@ -3028,6 +3369,8 @@ class Training(BaseModel):
     campo: Optional[str] = None
     asistencia: List[AsistenciaItem] = []
     ejercicios: Optional[str] = None
+    planned_exercises: List[PlannedExercisePayload] = []
+    session_template_id: Optional[str] = None
     observaciones: Optional[str] = None
     callup_id: Optional[str] = None
 
@@ -3127,9 +3470,20 @@ async def export_attendance_excel(desde: Optional[str] = None, hasta: Optional[s
 @api_router.post("/trainings")
 async def create_training(tr: Training):
     payload = tr.model_dump()
+    exercise_ids = [row["exercise_id"] for row in payload.get("planned_exercises") or []]
+    exercises = await accessible_exercise_map(exercise_ids)
+    try:
+        payload["planned_exercises"] = normalize_planned_exercises(payload.get("planned_exercises"), exercises)
+    except ExerciseValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     payload["attendance_history"] = []
     payload["attendance_updated_by"] = None
-    return await insert_doc("trainings", payload)
+    created = await insert_doc("trainings", payload)
+    if exercise_ids:
+        await db.exercises.update_many({"id": {"$in": exercise_ids}}, {"$inc": {"usage_count": 1}})
+        for identifier in exercise_ids:
+            await record_exercise_audit("assigned", identifier, {"training_id": created["id"]})
+    return created
 
 
 @api_router.get("/trainings")
@@ -3159,12 +3513,28 @@ async def get_training(tr_id: str):
 async def edit_training(tr_id: str, tr: Training):
     existing = await get_doc("trainings", tr_id)
     payload = tr.model_dump()
+    exercise_ids = [row["exercise_id"] for row in payload.get("planned_exercises") or []]
+    exercises = await accessible_exercise_map(exercise_ids)
+    existing_ids = {row.get("exercise_id") for row in existing.get("planned_exercises") or []}
+    if any(exercises.get(identifier, {}).get("status") != "active" for identifier in set(exercise_ids) - existing_ids):
+        raise HTTPException(status_code=422, detail="No se puede añadir un ejercicio archivado")
+    try:
+        payload["planned_exercises"] = normalize_planned_exercises(
+            payload.get("planned_exercises"), exercises, allow_archived_existing=True,
+        )
+    except ExerciseValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     actor = current_user_context.get() or {}
     changes = attendance_history(existing.get("asistencia", []), payload.get("asistencia", []), actor)
     payload["attendance_history"] = [*(existing.get("attendance_history") or []), *changes]
     if changes:
         payload["attendance_updated_by"] = {"id": actor.get("id"), "role": actor.get("role"), "at": now_iso()}
     updated = await update_doc("trainings", tr_id, payload)
+    added_ids = set(exercise_ids) - existing_ids
+    if added_ids:
+        await db.exercises.update_many({"id": {"$in": list(added_ids)}}, {"$inc": {"usage_count": 1}})
+        for identifier in added_ids:
+            await record_exercise_audit("assigned", identifier, {"training_id": tr_id})
     schedule_changed = any(existing.get(field) != updated.get(field) for field in ("fecha", "hora", "campo"))
     if schedule_changed:
         users = await users_for_team_players(updated.get("equipo_id"))
@@ -3177,6 +3547,40 @@ async def edit_training(tr_id: str, tr: Training):
 @api_router.delete("/trainings/{tr_id}")
 async def remove_training(tr_id: str):
     return await delete_doc("trainings", tr_id)
+
+
+@api_router.post("/trainings/{tr_id}/duplicate")
+async def duplicate_training(tr_id: str, data: Dict[str, Any]):
+    source = await get_doc("trainings", tr_id)
+    payload = {
+        "fecha": data.get("fecha"), "hora": data.get("hora", source.get("hora")),
+        "equipo_id": data.get("equipo_id", source.get("equipo_id")),
+        "campo": data.get("campo", source.get("campo")), "asistencia": [],
+        "ejercicios": source.get("ejercicios"),
+        "planned_exercises": [
+            {**row, "completed": None, "actual_duration": None, "rating": None,
+             "observation": None, "not_completed_reason": None}
+            for row in source.get("planned_exercises") or []
+        ],
+        "session_template_id": source.get("session_template_id"),
+        "observaciones": data.get("observaciones"), "callup_id": None,
+    }
+    model = Training(**payload)
+    duplicate_payload = model.model_dump()
+    exercise_ids = [row["exercise_id"] for row in duplicate_payload.get("planned_exercises") or []]
+    exercises = await accessible_exercise_map(exercise_ids)
+    try:
+        duplicate_payload["planned_exercises"] = normalize_planned_exercises(
+            duplicate_payload["planned_exercises"], exercises, allow_archived_existing=True,
+        )
+    except ExerciseValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    duplicate_payload["attendance_history"] = []
+    duplicate_payload["attendance_updated_by"] = None
+    created = await insert_doc("trainings", duplicate_payload)
+    if exercise_ids:
+        await db.exercises.update_many({"id": {"$in": exercise_ids}}, {"$inc": {"usage_count": 1}})
+    return created
 
 
 # ================= STATS =================
