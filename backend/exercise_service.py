@@ -98,6 +98,16 @@ def normalize_exercise(payload: Mapping[str, Any], *, partial: bool = False) -> 
     return result
 
 
+def validate_exercise_update(existing: Mapping[str, Any], changes: Mapping[str, Any]) -> None:
+    """Valida invariantes que necesitan combinar el documento actual y el parche."""
+    merged = {**existing, **changes}
+    minimum, maximum = merged.get("min_players"), merged.get("max_players")
+    if minimum is not None and maximum is not None and minimum > maximum:
+        raise ExerciseValidationError("El mínimo de jugadores no puede superar el máximo")
+    if merged.get("visibility") == "teams" and not merged.get("team_ids"):
+        raise ExerciseValidationError("Selecciona al menos un equipo para esta visibilidad")
+
+
 def exercise_snapshot(exercise: Mapping[str, Any]) -> dict:
     return {
         "name": clean_text(exercise.get("name"), 160),

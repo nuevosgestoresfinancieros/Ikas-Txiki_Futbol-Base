@@ -92,7 +92,7 @@ from communication_recipient_service import (
 from exercise_service import (
     EXERCISE_CATEGORIES, EXERCISE_STATES, INTENSITIES, RATINGS, VISIBILITIES,
     ExerciseValidationError, exercise_statistics, normalize_exercise,
-    normalize_planned_exercises, normalize_template,
+    normalize_planned_exercises, normalize_template, validate_exercise_update,
 )
 from user_security_service import (
     INVITATION_TTL_HOURS, LOCK_DURATION_MINUTES, MAX_ACCOUNT_ATTEMPTS,
@@ -3204,6 +3204,10 @@ async def update_exercise(exercise_id: str, payload: ExercisePayload):
         values = normalize_exercise(payload.model_dump(exclude_unset=True), partial=True)
     except ExerciseValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        validate_exercise_update(existing, values)
+    except ExerciseValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     visibility = values.get("visibility", existing.get("visibility"))
     if visibility == "club" and actor.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Solo administración puede publicar para todo el club")
@@ -3284,6 +3288,20 @@ async def accessible_exercise_map(identifiers: list[str]) -> dict[str, dict]:
         EXERCISE_PUBLIC_FIELDS,
     ).to_list(100)
     return {row["id"]: clean(row) for row in rows}
+
+
+def validate_exercises_for_training(exercises: dict[str, dict], identifiers: list[str], team_id: Optional[str]) -> None:
+    for identifier in identifiers:
+        exercise = exercises.get(identifier)
+        if not exercise:
+            raise HTTPException(status_code=422, detail="Uno de los ejercicios no está disponible")
+        if exercise.get("visibility") == "teams" and team_id not in ids(exercise.get("team_ids") or []):
+            raise HTTPException(status_code=403, detail="Uno de los ejercicios no pertenece al equipo del entrenamiento")
+
+
+async def validate_training_template_reference(template_id: Optional[str]) -> None:
+    if template_id:
+        await template_doc(template_id)
 
 
 @api_router.post("/training-templates")
@@ -3472,6 +3490,8 @@ async def create_training(tr: Training):
     payload = tr.model_dump()
     exercise_ids = [row["exercise_id"] for row in payload.get("planned_exercises") or []]
     exercises = await accessible_exercise_map(exercise_ids)
+    validate_exercises_for_training(exercises, exercise_ids, payload.get("equipo_id"))
+    await validate_training_template_reference(payload.get("session_template_id"))
     try:
         payload["planned_exercises"] = normalize_planned_exercises(payload.get("planned_exercises"), exercises)
     except ExerciseValidationError as exc:
@@ -3515,6 +3535,9 @@ async def edit_training(tr_id: str, tr: Training):
     payload = tr.model_dump()
     exercise_ids = [row["exercise_id"] for row in payload.get("planned_exercises") or []]
     exercises = await accessible_exercise_map(exercise_ids)
+    validate_exercises_for_training(exercises, exercise_ids, payload.get("equipo_id"))
+    if payload.get("session_template_id") != existing.get("session_template_id"):
+        await validate_training_template_reference(payload.get("session_template_id"))
     existing_ids = {row.get("exercise_id") for row in existing.get("planned_exercises") or []}
     if any(exercises.get(identifier, {}).get("status") != "active" for identifier in set(exercise_ids) - existing_ids):
         raise HTTPException(status_code=422, detail="No se puede añadir un ejercicio archivado")
@@ -3569,6 +3592,8 @@ async def duplicate_training(tr_id: str, data: Dict[str, Any]):
     duplicate_payload = model.model_dump()
     exercise_ids = [row["exercise_id"] for row in duplicate_payload.get("planned_exercises") or []]
     exercises = await accessible_exercise_map(exercise_ids)
+    validate_exercises_for_training(exercises, exercise_ids, duplicate_payload.get("equipo_id"))
+    await validate_training_template_reference(duplicate_payload.get("session_template_id"))
     try:
         duplicate_payload["planned_exercises"] = normalize_planned_exercises(
             duplicate_payload["planned_exercises"], exercises, allow_archived_existing=True,

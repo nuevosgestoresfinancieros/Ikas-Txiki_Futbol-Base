@@ -45,6 +45,11 @@ def exercise_api():
          "role": "coach", "active": True, "account_status": "active", "assigned_team_ids": ["team-own"], "session_version": 0},
         {"id": "family", "username": "exercise_family", "password_hash": password_context.hash("family-fictitious-password"),
          "role": "family", "active": True, "account_status": "active", "family_id": "family", "session_version": 0},
+        {"id": "coordinator", "username": "exercise_coordinator", "password_hash": password_context.hash("coordinator-fictitious-password"),
+         "role": "coordinator", "active": True, "account_status": "active",
+         "assigned_team_ids": ["team-own", "team-other"], "session_version": 0},
+        {"id": "player-user", "username": "exercise_player", "password_hash": password_context.hash("player-fictitious-password"),
+         "role": "player", "active": True, "account_status": "active", "player_id": "player", "session_version": 0},
     ])
     port = 18150
     environment = {
@@ -71,12 +76,14 @@ def exercise_api():
             "base": base, "db": db,
             "admin": authenticated(base, "exercise_admin", "exercise-admin-fictitious-password"),
             "coach": authenticated(base, "exercise_coach", "coach-fictitious-password"),
+            "coordinator": authenticated(base, "exercise_coordinator", "coordinator-fictitious-password"),
             "family": authenticated(base, "exercise_family", "family-fictitious-password"),
+            "player": authenticated(base, "exercise_player", "player-fictitious-password"),
         }
     try:
         yield sessions
     finally:
-        for name in ("admin", "coach", "family"):
+        for name in ("admin", "coach", "family", "coordinator", "player"):
             sessions[name].close()
         process.terminate()
         process.wait(timeout=8)
@@ -117,6 +124,30 @@ def test_coach_scope_and_family_player_style_denial(exercise_api):
     ))
     assert outside.status_code == 403
     assert exercise_api["family"].get(f"{exercise_api['base']}/api/exercises").status_code == 403
+    assert exercise_api["player"].get(f"{exercise_api['base']}/api/exercises").status_code == 403
+
+
+def test_team_restricted_exercise_and_template_reference_are_validated_server_side(exercise_api):
+    admin = exercise_api["admin"]
+    coordinator = exercise_api["coordinator"]
+    restricted = coordinator.post(f"{exercise_api['base']}/api/exercises", json=exercise_payload(
+        name="Ejercicio restringido", visibility="teams", team_ids=["team-own"],
+    )).json()
+    wrong_team = coordinator.post(f"{exercise_api['base']}/api/trainings", json={
+        "fecha": "2026-08-05", "equipo_id": "team-other", "asistencia": [],
+        "planned_exercises": [{"exercise_id": restricted["id"], "planned_duration": 12}],
+    })
+    assert wrong_team.status_code == 403
+    private_template = admin.post(f"{exercise_api['base']}/api/training-templates", json={
+        "name": "Plantilla privada ajena", "visibility": "private", "team_ids": [],
+        "planned_exercises": [],
+    }).json()
+    manipulated = coordinator.post(f"{exercise_api['base']}/api/trainings", json={
+        "fecha": "2026-08-05", "equipo_id": "team-own", "asistencia": [],
+        "session_template_id": private_template["id"],
+        "planned_exercises": [{"exercise_id": restricted["id"], "planned_duration": 12}],
+    })
+    assert manipulated.status_code == 404
 
 
 def test_planning_evaluation_template_duplicate_and_statistics(exercise_api):
