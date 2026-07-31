@@ -12,7 +12,7 @@ import server
 from authz import has_permission, route_permission
 from exercise_service import (
     ExerciseValidationError, exercise_snapshot, exercise_statistics, normalize_exercise,
-    normalize_planned_exercises, normalize_template,
+    normalize_planned_exercises, normalize_template, validate_exercise_update,
 )
 
 
@@ -61,6 +61,14 @@ def test_rejects_incoherent_player_limits_and_team_visibility_without_teams():
         normalize_exercise(valid_exercise(min_players=20, max_players=10))
     with pytest.raises(ExerciseValidationError):
         normalize_exercise(valid_exercise(visibility="teams", team_ids=[]))
+
+
+def test_partial_updates_preserve_cross_field_invariants():
+    existing = valid_exercise(visibility="teams", team_ids=["team-own"], min_players=8, max_players=12)
+    with pytest.raises(ExerciseValidationError):
+        validate_exercise_update(existing, {"team_ids": []})
+    with pytest.raises(ExerciseValidationError):
+        validate_exercise_update(existing, {"max_players": 4})
 
 
 def test_planning_creates_minimal_snapshot_and_accessible_order():
