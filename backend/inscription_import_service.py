@@ -236,7 +236,9 @@ def _contact_values(record: Mapping[str, Any]) -> set[str]:
 
 
 def analyze_rows(rows: list[dict], season: str, existing: Mapping[str, list[dict]],
-                 file_sha256: str, duplicate_file: bool = False) -> dict:
+                 file_sha256: str, duplicate_file: bool = False,
+                 *, allow_pending_team: bool = False,
+                 allow_pending_contact: bool = False) -> dict:
     if season != SEASON:
         raise ImportValidationError(f"La temporada permitida es {SEASON}")
     players = list(existing.get("players") or [])
@@ -271,7 +273,10 @@ def analyze_rows(rows: list[dict], season: str, existing: Mapping[str, list[dict
             issue = {"row": row, "status": "error", "severity": "serious", "code": "formula_not_allowed",
                      "message": "La fila contiene fórmulas; solo se admiten valores."}
             issues.append(issue); row_results.append({**issue, "record": record}); continue
-        missing = [field for field in REQUIRED_FIELDS - {"fecha_nacimiento"} if not record.get(field)]
+        required_fields = REQUIRED_FIELDS - {"fecha_nacimiento"}
+        if allow_pending_team:
+            required_fields = required_fields - {"equipo"}
+        missing = [field for field in required_fields if not record.get(field)]
         if missing:
             issue = {"row": row, "status": "error", "severity": "serious", "code": "missing_required",
                      "message": "Faltan campos obligatorios: " + ", ".join(sorted(missing))}
@@ -290,10 +295,16 @@ def analyze_rows(rows: list[dict], season: str, existing: Mapping[str, list[dict
             issues.append(issue); row_results.append({**issue, "record": record}); continue
         invalid_emails = [record.get(field) for field in ("email_formulario", "progenitor1_email", "progenitor2_email")
                           if record.get(field) and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", record.get(field))]
-        if invalid_emails:
+        if invalid_emails and not allow_pending_contact:
             issue = {"row": row, "status": "error", "severity": "serious", "code": "invalid_email",
                      "message": "Hay una dirección de correo con formato no válido."}
             issues.append(issue); row_results.append({**issue, "record": record}); continue
+        if invalid_emails and allow_pending_contact:
+            for field in ("email_formulario", "progenitor1_email", "progenitor2_email"):
+                if record.get(field) and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", record.get(field)):
+                    record[field] = ""
+            issues.append({"row": row, "status": "warning", "severity": "warning", "code": "invalid_email_pending",
+                           "message": "Un correo queda pendiente de revisión y no se usará para comunicaciones."})
         if record.get("iban") and not valid_iban(record["iban"]):
             issue = {"row": row, "status": "error", "severity": "serious", "code": "invalid_iban",
                      "message": "El IBAN no supera la validación."}
@@ -306,7 +317,7 @@ def analyze_rows(rows: list[dict], season: str, existing: Mapping[str, list[dict
             issues.append(result); row_results.append(result); continue
         seen.add(key)
         matches = players_by_key.get(key, [])
-        team_matches = teams_by_name.get(normalize_key(record.get("equipo")), [])
+        team_matches = teams_by_name.get(normalize_key(record.get("equipo")), []) if record.get("equipo") else []
         conflict_message = None
         if len(matches) > 1:
             conflict_message = "Hay más de un jugador existente con la misma identidad."
@@ -340,7 +351,8 @@ def analyze_rows(rows: list[dict], season: str, existing: Mapping[str, list[dict
                   "record": record}
         row_results.append(result)
         team_key = normalize_key(record.get("equipo"))
-        planned_team_counts[team_key] = planned_team_counts.get(team_key, 0) + (0 if existing_player else 1)
+        if team_key:
+            planned_team_counts[team_key] = planned_team_counts.get(team_key, 0) + (0 if existing_player else 1)
         if normalize_key(record.get("pendiente_octubre")) in {"si", "yes", "true", "pendiente", "x"}:
             issues.append({"row": row, "status": "warning", "severity": "warning", "code": "october_manual",
                            "message": "Pendiente de octubre: no se ha seleccionado ni deducido automáticamente."})

@@ -1,7 +1,7 @@
 from copy import deepcopy
 
 from import_staging_service import (
-    draft_summary, effective_records, modality_suggestion, prepare_records, public_draft,
+    draft_summary, effective_records, historical_readiness, modality_suggestion, prepare_records, public_draft,
     team_capacities,
 )
 
@@ -43,6 +43,34 @@ def test_modality_is_only_a_suggestion_until_confirmed():
     assert modality_suggestion("Alevín") == "F7"
     assert record["modality_suggestion"] == "F7"
     assert record["modalidad"] == "" and record["suggestion_confirmed"] is False
+
+
+def test_historical_readiness_turns_deterministic_values_into_warnings_not_blockers():
+    rows = [
+        fictitious(1, modalidad="", categoria="Alevín", equipo="", progenitor1_email="incorrecto"),
+        fictitious(2, modalidad="", categoria="Cadete Femenino", equipo="Equipo histórico"),
+    ]
+    records, duplicates, incidents = prepare_records(rows, SECRET)
+    draft = {
+        "source_format": "historical_bbdd_v1", "records": records, "duplicates": duplicates,
+        "incidents": incidents,
+        "fuzzy_matches": [{"id": "fuzzy-1", "record_ids": [records[0]["id"], records[1]["id"]], "decision": None}],
+        "family_candidates": [{"id": "family-1", "record_ids": [records[0]["id"], records[1]["id"]], "decision": None}],
+    }
+    prepared, trace = historical_readiness(draft)
+    summary = draft_summary(prepared)
+    assert [item["modalidad"] for item in prepared["records"]] == ["F7", "F11"]
+    assert prepared["records"][0]["team_assignment_status"] == "pending"
+    assert prepared["records"][0]["contact_data_status"] == "pending_review"
+    assert trace == {"version": 1, "modality_rule": "category_modality_v1", "modality_assigned": 2, "team_pending": 1, "email_cells_pending": 1}
+    assert summary["blocking_count"] == 1
+    assert summary["family_candidates_pending"] == 1
+    assert summary["importable_with_team_pending"] == 1
+    assert summary["email_cells_pending"] == 1
+    prepared["fuzzy_matches"][0]["decision"] = "different_people"
+    assert draft_summary(prepared)["can_import"] is True
+    prepared["fuzzy_matches"][0]["decision"] = "same_person"
+    assert len(effective_records(prepared)) == 1
 
 
 def test_duplicate_decisions_and_double_equipment_are_explicit():
