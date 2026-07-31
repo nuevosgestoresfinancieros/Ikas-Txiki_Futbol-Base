@@ -9,8 +9,10 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { PageHeader, StatusBadge, EmptyState } from "@/components/shared";
 import { Field, SelectField } from "@/components/form";
+import GoogleMapsLinks from "@/components/GoogleMapsLinks";
+import { TRAINING_DAYS, scheduleText, teamFormFromRecord, teamPayload } from "./teamScheduleView";
 
-const empty = { nombre: "", estado: "activo", limite_jugadores: 20 };
+const empty = { nombre: "", estado: "activo", limite_jugadores: 20, dias_entrenamiento_lista: [], hora_inicio: "", hora_fin: "", direccion_campo: "" };
 
 const Teams = () => {
   const canCreate = usePermission("teams", "create");
@@ -31,11 +33,12 @@ const Teams = () => {
 
   const set = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
   const openNew = () => { setForm(empty); setDialog(true); };
-  const openEdit = (t) => { setForm(t); setDialog(true); };
+  const openEdit = (t) => { setForm(teamFormFromRecord(t)); setDialog(true); };
   const save = async () => {
     if (!form.nombre?.trim()) { toast.error("Nombre obligatorio"); return; }
-    if (form.id) await api.put(`/teams/${form.id}`, form);
-    else await api.post("/teams", form);
+    const payload = teamPayload(form, t);
+    if (form.id) await api.put(`/teams/${form.id}`, payload);
+    else await api.post("/teams", payload);
     toast.success(t("saved")); setDialog(false); load();
   };
   const remove = async (tm) => { if (!window.confirm(t("confirmDelete"))) return; await api.delete(`/teams/${tm.id}`); toast.success(t("deleted")); load(); };
@@ -63,7 +66,7 @@ const Teams = () => {
               </div>
               <div className="mt-4 space-y-1 text-sm text-slate-600">
                 <p><span className="font-medium">{t("coach")}:</span> {tm.entrenador || "—"}</p>
-                <p><span className="font-medium">{t("schedule")}:</span> {tm.horario || "—"}</p>
+                <p><span className="font-medium">{t("schedule")}:</span> {scheduleText(tm.hora_inicio, tm.hora_fin, tm.horario) || "—"}</p>
                 <p><span className="font-medium">{t("field")}:</span> {tm.campo || "—"}</p>
               </div>
               <div className="mt-4 flex items-center justify-between">
@@ -89,9 +92,20 @@ const Teams = () => {
             <Field label={t("coach")} value={form.entrenador} onChange={set("entrenador")} testid="team-entrenador" />
             <Field label={t("secondCoach")} value={form.segundo_entrenador} onChange={set("segundo_entrenador")} testid="team-segundo" />
             <Field label={t("delegate")} value={form.delegado} onChange={set("delegado")} testid="team-delegado" />
-            <Field label={t("trainingDays")} value={form.dias_entrenamiento} onChange={set("dias_entrenamiento")} testid="team-dias" />
-            <Field label={t("schedule")} value={form.horario} onChange={set("horario")} testid="team-horario" />
-            <Field label={t("field")} value={form.campo} onChange={set("campo")} testid="team-campo" />
+            <fieldset className="sm:col-span-2 space-y-2" data-testid="team-training-days">
+              <legend className="text-sm font-semibold text-slate-700">{t("trainingDays")}</legend>
+              <div className="flex flex-wrap gap-2" role="group" aria-label={t("trainingDays")}>
+                {TRAINING_DAYS.map(({ code, labelKey }) => {
+                  const selected = (form.dias_entrenamiento_lista || []).includes(code);
+                  return <Button key={code} type="button" variant={selected ? "default" : "outline"} aria-pressed={selected} data-testid={`team-day-${code}`} className="min-h-11" onClick={() => setForm((current) => ({ ...current, dias_entrenamiento_lista: selected ? current.dias_entrenamiento_lista.filter((day) => day !== code) : [...(current.dias_entrenamiento_lista || []), code] }))}>{t(labelKey)}</Button>;
+                })}
+              </div>
+            </fieldset>
+            <Field label={t("startTime")} type="time" value={form.hora_inicio} onChange={set("hora_inicio")} testid="team-start-time" />
+            <Field label={t("endTime")} type="time" value={form.hora_fin} onChange={set("hora_fin")} testid="team-end-time" />
+            <Field label={t("fieldOrFacility")} value={form.campo} onChange={set("campo")} testid="team-campo" />
+            <Field label={t("fieldFullAddress")} value={form.direccion_campo} onChange={set("direccion_campo")} testid="team-field-address" />
+            <div className="sm:col-span-2"><GoogleMapsLinks preview sources={form} /></div>
             <Field label={t("maxPlayers")} type="number" value={form.limite_jugadores} onChange={set("limite_jugadores")} testid="team-limite" />
           </div>
           <DialogFooter>

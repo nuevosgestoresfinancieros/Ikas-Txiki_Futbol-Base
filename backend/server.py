@@ -1370,8 +1370,15 @@ class Team(BaseModel):
     segundo_entrenador: Optional[str] = None
     delegado: Optional[str] = None
     dias_entrenamiento: Optional[str] = None
+    # Los campos de texto históricos siguen siendo la fuente compatible para
+    # clientes anteriores. Los campos estructurados se añaden de forma
+    # opcional, sin migrar ni modificar los equipos ya existentes.
+    dias_entrenamiento_lista: Optional[list[str]] = None
     horario: Optional[str] = None
+    hora_inicio: Optional[str] = None
+    hora_fin: Optional[str] = None
     campo: Optional[str] = None
+    direccion_campo: Optional[str] = None
     limite_jugadores: Optional[int] = 20
     estado: str = "activo"  # activo, cerrado, pendiente
 
