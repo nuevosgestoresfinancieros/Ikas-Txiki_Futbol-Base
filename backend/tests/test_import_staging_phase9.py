@@ -67,6 +67,13 @@ def test_historical_readiness_turns_deterministic_values_into_warnings_not_block
     assert summary["family_candidates_pending"] == 1
     assert summary["importable_with_team_pending"] == 1
     assert summary["email_cells_pending"] == 1
+    # Legacy historical drafts persisted this literal before the explicit
+    # review choices existed.  It must remain a blocking identity decision.
+    prepared["fuzzy_matches"][0]["decision"] = "pending"
+    legacy_pending = draft_summary(prepared)
+    assert legacy_pending["blocking_count"] == 1
+    assert legacy_pending["blocked_fuzzy_groups"] == 1
+    assert legacy_pending["importable_now"] == 0
     prepared["fuzzy_matches"][0]["decision"] = "different_people"
     assert draft_summary(prepared)["can_import"] is True
     prepared["fuzzy_matches"][0]["decision"] = "same_person"
