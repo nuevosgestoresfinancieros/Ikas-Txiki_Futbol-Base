@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable, Mapping
 
@@ -53,6 +54,71 @@ def modality_suggestion(category: Any) -> str | None:
         return MODALITY_SUGGESTIONS[key]
     # Las categorías femeninas y variantes nominales solo producen sugerencias.
     return next((mode for base, mode in MODALITY_SUGGESTIONS.items() if base in key.split("_")), None)
+
+
+def historical_readiness(draft: Mapping[str, Any]) -> tuple[dict, dict]:
+    """Apply only deterministic, non-sensitive rules to a historical draft.
+
+    The historical workbook has no explicit modality column.  Category is the
+    club-approved source for F7/F11, including normalized feminine labels.  A
+    missing team, an invalid email, and a possible family relationship remain
+    visible warnings: none of them is a reason to prevent creating the initial
+    player/family/registration base.  Fuzzy identity matches are deliberately
+    left unresolved and continue to block final confirmation.
+
+    The function is pure so it can be tested before its result is persisted by
+    the authenticated endpoint.
+    """
+    if draft.get("source_format") != "historical_bbdd_v1":
+        raise ValueError("El borrador no utiliza el formato histórico")
+    updated = deepcopy(dict(draft))
+    modality_assigned = team_pending = email_pending = 0
+    for record in updated.get("records", []):
+        suggested = modality_suggestion(record.get("categoria"))
+        if record.get("modalidad") not in {"F7", "F11"} and suggested:
+            record["modality_suggestion"] = suggested
+            record["modalidad"] = suggested
+            record["suggestion_confirmed"] = True
+            record["automatic_modality_rule"] = {
+                "rule": "category_modality_v1", "source": "categoria", "value": suggested,
+            }
+            modality_assigned += 1
+        if not str(record.get("equipo") or "").strip() and not record.get("equipo_id"):
+            record["team_assignment_status"] = "pending"
+            team_pending += 1
+        elif not record.get("equipo_id"):
+            # Historical text stays as a suggestion only; it never becomes an
+            # official team identifier without a separate administrator choice.
+            record["team_assignment_status"] = "historical_suggestion"
+        invalid_email_fields = [
+            field for field in ("email_formulario", "progenitor1_email", "progenitor2_email")
+            if record.get(field) and not EMAIL_RE.fullmatch(str(record[field]))
+        ]
+        if invalid_email_fields:
+            record["contact_data_status"] = "pending_review"
+            record["invalid_email_fields"] = invalid_email_fields
+            email_pending += len(invalid_email_fields)
+
+    for incident in updated.get("incidents", []):
+        if incident.get("field") == "modalidad" and incident.get("code") in {"missing", "invalid"}:
+            incident["blocking"] = False
+            incident["resolution"] = "corrected"
+            incident["automatic_rule"] = "category_modality_v1"
+        elif incident.get("field") == "equipo" and incident.get("code") == "missing":
+            incident["blocking"] = False
+            incident["classification"] = "team_pending"
+        elif incident.get("field") in {"email_formulario", "progenitor1_email", "progenitor2_email"}:
+            incident["blocking"] = False
+            incident["classification"] = "contact_pending"
+
+    updated["historical_readiness"] = {
+        "version": 1,
+        "modality_rule": "category_modality_v1",
+        "modality_assigned": modality_assigned,
+        "team_pending": team_pending,
+        "email_cells_pending": email_pending,
+    }
+    return updated, dict(updated["historical_readiness"])
 
 
 def _bank_payload(value: Any, secret: str) -> dict:
@@ -159,6 +225,27 @@ def effective_records(draft: Mapping[str, Any]) -> list[dict]:
         elif decision == "different_people":
             for index, rid in enumerate(ids):
                 records[rid]["identity_override"] = f"{identity_key(records[rid])}:reviewed:{index + 1}"
+    # Fuzzy identity groups are never merged automatically.  When an
+    # administrator explicitly chooses "same person", retain the first record
+    # and conservatively fill only missing allowed values from the other one.
+    for group in draft.get("fuzzy_matches", []):
+        ids = [rid for rid in (group.get("record_ids") or []) if rid in records]
+        if group.get("decision") == "same_person" and ids:
+            target = records[ids[0]]
+            equipment = list(target.get("equipamiento_items") or [])
+            for rid in ids[1:]:
+                source = records[rid]
+                for field in ALLOWED_RECORD_FIELDS:
+                    if target.get(field) in (None, "", []) and source.get(field) not in (None, "", []):
+                        target[field] = source[field]
+                for item in source.get("equipamiento_items") or []:
+                    if item.casefold() not in {value.casefold() for value in equipment}:
+                        equipment.append(item)
+                source["excluded"] = True
+            target["equipamiento_items"] = equipment
+        elif group.get("decision") == "different_people":
+            for index, rid in enumerate(ids):
+                records[rid]["identity_override"] = f"{identity_key(records[rid])}:fuzzy-reviewed:{index + 1}"
     return [row for row in records.values() if not row.get("excluded")]
 
 
@@ -182,10 +269,36 @@ def draft_summary(draft: Mapping[str, Any]) -> dict:
     capacities = team_capacities(active)
     capacity_over = sum(1 for item in capacities if item["over_capacity"])
     historical = draft.get("source_format") == "historical_bbdd_v1"
-    pending_fuzzy = sum(1 for item in draft.get("fuzzy_matches", []) if not item.get("decision"))
+    pending_fuzzy = sum(
+        1 for item in draft.get("fuzzy_matches", [])
+        if item.get("decision") in {None, "", "leave_pending"}
+    )
     pending_families = sum(1 for item in draft.get("family_candidates", []) if not item.get("decision"))
     october_blocker = 0 if historical else (1 if october != 54 else 0)
-    blockers = unresolved_duplicates + pending_fuzzy + pending_families + len(blocking_incidents) + october_blocker
+    # A historical import deliberately starts with incomplete sports/contact
+    # data.  Only a potential identity merge can put two people at risk; team,
+    # contact and family suggestions are follow-up work, not import blockers.
+    if historical:
+        blocking_incidents = [item for item in blocking_incidents if item.get("field") not in {
+            "equipo", "modalidad", "email_formulario", "progenitor1_email", "progenitor2_email",
+        }]
+        blockers = unresolved_duplicates + pending_fuzzy + len(blocking_incidents)
+    else:
+        blockers = unresolved_duplicates + pending_fuzzy + pending_families + len(blocking_incidents) + october_blocker
+    team_pending = sum(1 for row in active if row.get("team_assignment_status") == "pending")
+    email_pending_cells = sum(
+        1 for item in pending_incidents
+        if item.get("field") in {"email_formulario", "progenitor1_email", "progenitor2_email"}
+    )
+    email_pending_records = len({
+        item.get("record_id") for item in pending_incidents
+        if item.get("field") in {"email_formulario", "progenitor1_email", "progenitor2_email"}
+    })
+    fuzzy_record_ids = {
+        record_id for item in draft.get("fuzzy_matches", [])
+        if item.get("decision") in {None, "", "leave_pending"}
+        for record_id in (item.get("record_ids") or [])
+    }
     complete_steps = sum((
         unresolved_duplicates == 0, len(blocking_incidents) == 0, missing_team == 0,
         missing_modality == 0, (True if historical else october == 54), capacity_over == 0,
@@ -198,8 +311,15 @@ def draft_summary(draft: Mapping[str, Any]) -> dict:
         "missing_modality": missing_modality, "incidents_pending": len(pending_incidents),
         "october_selected": october, "october_required": 0 if historical else 54, "teams_over_capacity": capacity_over,
         "preparation_percent": round(complete_steps / 6 * 100), "blocking_count": blockers,
-        "can_import": blockers == 0 and not historical, "simulation_only": historical,
+        "can_import": blockers == 0, "simulation_only": False,
         "fuzzy_matches_pending": pending_fuzzy, "family_candidates_pending": pending_families,
+        "importable_now": max(0, len(active) - len(fuzzy_record_ids)),
+        "importable_with_team_pending": team_pending,
+        "importable_with_email_pending": email_pending_records,
+        "email_cells_pending": email_pending_cells,
+        "families_suggested_for_review": pending_families,
+        "blocked_fuzzy_groups": pending_fuzzy,
+        "blocked_fuzzy_records": len(fuzzy_record_ids),
         "auxiliary_rows_excluded": len(draft.get("auxiliary_rows", [])), "capacities": capacities,
     }
 
@@ -226,6 +346,7 @@ def public_draft(draft: Mapping[str, Any], include_records: bool = True) -> dict
     if draft.get("source_format") == "historical_bbdd_v1":
         result["quality"] = draft.get("quality", {})
         result["simulation"] = draft.get("simulation", {})
+        result["historical_readiness"] = draft.get("historical_readiness", {})
     if include_records:
         active_ids = {row["id"] for row in effective_records(draft)}
         pending_incident_ids = {

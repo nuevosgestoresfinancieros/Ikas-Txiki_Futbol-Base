@@ -156,13 +156,13 @@ test.each([
   });
 });
 
-test("historical drafts remain simulation-only and expose aggregate review counts", () => {
+test("historical drafts expose aggregate review counts and can finalize once only warnings remain", () => {
   const draft = {
-    source_format: "historical_bbdd_v1", summary: { can_import: false },
+    source_format: "historical_bbdd_v1", summary: { can_import: true },
     fuzzy_matches: [{ id: "f1", decision: null }, { id: "f2", decision: "different_people" }],
     family_candidates: [{ id: "g1", decision: null }], simulation: { official_writes: 0 },
   };
   expect(isHistoricalDraft(draft)).toBe(true);
   expect(historicalReviewCounts(draft)).toEqual({ fuzzy: 1, families: 1, officialWrites: 0 });
-  expect(canFinalizeDraft(draft, true)).toBe(false);
+  expect(canFinalizeDraft(draft, true)).toBe(true);
 });

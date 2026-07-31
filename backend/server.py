@@ -61,7 +61,7 @@ from inscription_import_service import (
 )
 from import_staging_service import (
     ALLOWED_RECORD_FIELDS, audit_event, draft_summary, effective_records, expiry, field_is_valid,
-    prepare_records, public_draft, valid_iban as staging_valid_iban,
+    historical_readiness, prepare_records, public_draft, valid_iban as staging_valid_iban,
 )
 from historical_import_adapter import (
     HISTORICAL_FORMAT, historical_quality_summary, historical_simulation,
@@ -2358,7 +2358,8 @@ def _clean_doc(document: Optional[dict]) -> Optional[dict]:
 
 
 def _build_import_operations(analysis: dict, existing: dict, job_id: str,
-                             decisions: Dict[str, str]) -> list[dict]:
+                             decisions: Dict[str, str], *, allow_pending_team: bool = False,
+                             keep_family_candidates_separate: bool = False) -> list[dict]:
     now = now_iso()
     maps = {name: {str(doc.get("id")): _clean_doc(doc) for doc in existing[name]} for name in IMPORT_COLLECTIONS}
     team_by_name = {normalize_key(doc.get("nombre")): doc for doc in maps["teams"].values()}
@@ -2398,8 +2399,10 @@ def _build_import_operations(analysis: dict, existing: dict, job_id: str,
             continue
         row = result["record"]
         team_key = normalize_key(row.get("equipo"))
-        team = team_by_name.get(team_key)
-        if not team:
+        team = maps["teams"].get(str(row.get("equipo_id"))) if row.get("equipo_id") else None
+        if not team and team_key and not allow_pending_team:
+            team = team_by_name.get(team_key)
+        if not team and not allow_pending_team:
             team = {
                 "id": new_id(), "nombre": row["equipo"], "categoria": row["categoria"],
                 "modalidad": row["modalidad"], "temporada": analysis["season"],
@@ -2409,6 +2412,10 @@ def _build_import_operations(analysis: dict, existing: dict, job_id: str,
             schedule("teams", None, team); team_by_name[team_key] = team
 
         fkey = family_key(row)
+        if keep_family_candidates_separate and row.get("_family_candidate_pending"):
+            # Possible sibling links are a review suggestion, never a reason to
+            # silently merge two households during the initial historical load.
+            fkey = f"{fkey}:staging:{row.get('_staging_id') or row.get('_row')}"
         family = family_by_key.get(fkey)
         family_before = family
         if family:
@@ -2430,7 +2437,7 @@ def _build_import_operations(analysis: dict, existing: dict, job_id: str,
             if item.casefold() not in {value.casefold() for value in current_equipment}:
                 current_equipment.append(item)
         player.update({
-            "equipo_id": team["id"], "familia_id": family["id"], "equipamiento_items": current_equipment,
+            "equipo_id": team["id"] if team else None, "familia_id": family["id"], "equipamiento_items": current_equipment,
             "import_identity_key": pkey, "import_job_id": job_id, "updated_at": now,
         })
         player.setdefault("estado", "pendiente_documentacion")
@@ -2444,7 +2451,7 @@ def _build_import_operations(analysis: dict, existing: dict, job_id: str,
         inscription_before = inscription
         inscription = merge_nonempty(inscription or {"id": new_id(), "created_at": now}, row, inscription_fields)
         inscription.update({
-            "temporada": analysis["season"], "equipo_id": team["id"], "familia_id": family["id"],
+            "temporada": analysis["season"], "equipo_id": team["id"] if team else None, "familia_id": family["id"],
             "player_id": player["id"], "modalidad": row["modalidad"], "import_identity_key": pkey,
             "import_job_id": job_id, "estado": inscription.get("estado", "recibida"), "updated_at": now,
         })
@@ -2688,6 +2695,27 @@ async def get_import_staging_simulation(draft_id: str):
             "summary": draft_summary(draft)}
 
 
+@api_router.post("/inscription-imports/staging/{draft_id}/historical-readiness")
+async def apply_historical_readiness(draft_id: str):
+    """Persist deterministic readiness rules for an authenticated admin draft."""
+    draft = await _staging_doc(draft_id)
+    if draft.get("source_format") != HISTORICAL_FORMAT:
+        raise HTTPException(status_code=409, detail="El borrador no utiliza el adaptador histórico")
+    if draft.get("status") != "draft":
+        raise HTTPException(status_code=409, detail="Solo se puede preparar un borrador activo")
+    try:
+        prepared, result = historical_readiness(draft)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    now = datetime.now(timezone.utc)
+    await db.import_staging.update_one({"id": draft_id}, {"$set": {
+        "records": prepared["records"], "incidents": prepared["incidents"],
+        "historical_readiness": prepared["historical_readiness"], "updated_at": now,
+        "expires_at": expiry(_staging_ttl_hours()),
+    }, "$push": {"audit": audit_event(_staging_actor(), "historical_readiness_applied", result)}})
+    return public_draft(await _staging_doc(draft_id))
+
+
 def _existing_category(value: Any) -> Optional[str]:
     requested = str(value or "").strip()
     return next((item["name"] for item in CATEGORIES if item["name"] == requested), None)
@@ -2903,7 +2931,7 @@ async def resolve_staging_duplicate(draft_id: str, group_id: str, request: Stagi
 @api_router.post("/inscription-imports/staging/{draft_id}/reviews/{kind}/{group_id}")
 async def resolve_historical_review(draft_id: str, kind: str, group_id: str, request: StagingHistoricalReview):
     config = {
-        "fuzzy": ("fuzzy_matches", {"same_person", "different_people"}),
+        "fuzzy": ("fuzzy_matches", {"same_person", "different_people", "leave_pending"}),
         "family": ("family_candidates", {"confirm_shared", "keep_separate"}),
     }
     if kind not in config or request.decision not in config.get(kind, (None, set()))[1]:
@@ -2976,15 +3004,22 @@ async def confirm_import_staging(draft_id: str, request: StagingConfirmRequest):
     if request.confirmed is not True:
         raise HTTPException(status_code=422, detail="La importación requiere confirmación expresa")
     draft = await _staging_doc(draft_id)
-    if draft.get("source_format") == HISTORICAL_FORMAT:
-        raise HTTPException(status_code=409, detail="La base histórica está habilitada únicamente para simulación")
     summary = draft_summary(draft)
     if not summary["can_import"]:
         raise HTTPException(status_code=409, detail="El borrador mantiene bloqueos pendientes")
+    historical = draft.get("source_format") == HISTORICAL_FORMAT
+    family_candidate_ids = {
+        record_id for group in draft.get("family_candidates", []) if not group.get("decision")
+        for record_id in (group.get("record_ids") or [])
+    }
     rows = []
     for record in effective_records(draft):
         row = {key: value for key, value in record.items() if key in ALLOWED_RECORD_FIELDS}
         row["_row"] = record.get("source_row")
+        if historical:
+            row["_staging_id"] = record.get("id")
+            row["equipo_id"] = record.get("equipo_id")
+            row["_family_candidate_pending"] = record.get("id") in family_candidate_ids
         if record.get("identity_override"):
             row["external_id"] = record["identity_override"]
         bank = record.get("bank") or {}
@@ -2992,12 +3027,18 @@ async def confirm_import_staging(draft_id: str, request: StagingConfirmRequest):
             row["_bank"] = {"iban_encrypted": bank.get("iban_encrypted"), "iban_last4": bank.get("iban_last4")}
         rows.append(row)
     existing = await _import_existing()
-    analysis = analyze_rows(rows, draft["season"], existing, draft["source_sha256"], False)
+    analysis = analyze_rows(
+        rows, draft["season"], existing, draft["source_sha256"], False,
+        allow_pending_team=historical, allow_pending_contact=historical,
+    )
     if analysis["blocking_errors"] or analysis["unresolved_conflicts"]:
         raise HTTPException(status_code=409, detail="La validación final ha detectado bloqueos")
     lock_id = f"{draft['season']}:{draft['source_sha256']}"
     job_id = new_id()
-    operations = _build_import_operations(analysis, existing, job_id, {})
+    operations = _build_import_operations(
+        analysis, existing, job_id, {}, allow_pending_team=historical,
+        keep_family_candidates_separate=historical,
+    )
     try:
         await db.import_locks.insert_one({"_id": lock_id, "job_id": job_id, "created_at": now_iso()})
     except DuplicateKeyError as exc:
