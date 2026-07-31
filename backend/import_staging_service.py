@@ -271,7 +271,10 @@ def draft_summary(draft: Mapping[str, Any]) -> dict:
     historical = draft.get("source_format") == "historical_bbdd_v1"
     pending_fuzzy = sum(
         1 for item in draft.get("fuzzy_matches", [])
-        if item.get("decision") in {None, "", "leave_pending"}
+        # Historic drafts can contain the legacy literal "pending".  Treat
+        # every decision other than an explicit safe resolution as unresolved;
+        # otherwise a potential identity merge could be imported accidentally.
+        if item.get("decision") not in {"same_person", "different_people"}
     )
     pending_families = sum(1 for item in draft.get("family_candidates", []) if not item.get("decision"))
     october_blocker = 0 if historical else (1 if october != 54 else 0)
@@ -296,7 +299,7 @@ def draft_summary(draft: Mapping[str, Any]) -> dict:
     })
     fuzzy_record_ids = {
         record_id for item in draft.get("fuzzy_matches", [])
-        if item.get("decision") in {None, "", "leave_pending"}
+        if item.get("decision") not in {"same_person", "different_people"}
         for record_id in (item.get("record_ids") or [])
     }
     complete_steps = sum((
