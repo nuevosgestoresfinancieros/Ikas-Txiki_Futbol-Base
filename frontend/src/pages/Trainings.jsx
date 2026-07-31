@@ -159,6 +159,7 @@ const Trainings = () => {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <SelectField label={t("team")} value={form.equipo_id} onChange={onTeamChange} options={teamOptions} testid="training-equipo" />
               <Field label={t("field")} value={form.campo} onChange={set("campo")} testid="training-campo" />
+              <div className="sm:col-span-2"><GoogleMapsLinks preview sources={form} /></div>
               <Field label={t("date")} type="date" value={form.fecha} onChange={set("fecha")} testid="training-fecha" />
               <Field label={t("time")} type="time" value={form.hora} onChange={set("hora")} testid="training-hora" />
             </div>

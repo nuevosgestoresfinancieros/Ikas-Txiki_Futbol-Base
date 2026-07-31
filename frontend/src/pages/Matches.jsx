@@ -218,6 +218,7 @@ const Matches = () => {
             <SelectField label={t("matchType")} value={form.tipo} onChange={set("tipo")} options={["liga","copa","amistoso","torneo"].map(s=>({value:s,label:s}))} testid="match-tipo" />
             <Field label={t("field")} value={form.campo} onChange={set("campo")} testid="match-campo" />
             <Field label={t("fieldAddress")} value={form.direccion_campo} onChange={set("direccion_campo")} testid="match-direccion" />
+            <div className="sm:col-span-2"><GoogleMapsLinks preview sources={form} /></div>
             <SelectField label={t("status")} value={form.estado} onChange={set("estado")} options={["programado","jugado","aplazado","suspendido","cancelado"].map(s=>({value:s,label:s}))} testid="match-estado" />
             <div />
             <Field label={t("ownResult")} type="number" value={form.resultado_propio} onChange={set("resultado_propio")} testid="match-res-propio" />

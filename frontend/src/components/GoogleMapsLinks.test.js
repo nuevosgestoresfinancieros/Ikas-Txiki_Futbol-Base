@@ -3,7 +3,7 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 jest.mock("@/i18n", () => ({
-  useI18n: () => ({ t: (key) => ({ viewGoogleMaps: "Ver en Google Maps", getDirections: "Cómo llegar" })[key] }),
+  useI18n: () => ({ t: (key) => ({ viewGoogleMaps: "Ver en Google Maps", getDirections: "Cómo llegar", mapsPreviewHint: "Vista previa de la ubicación; no se guarda hasta guardar el formulario." })[key] }),
 }), { virtual: true });
 
 test("uses a valid address in search and directions links", () => {
@@ -44,4 +44,11 @@ test("renders accessible links in a new browsing context without an opener", () 
   expect(markup).toContain('rel="noopener noreferrer"');
   expect(markup).toContain('aria-label="Ver en Google Maps: Campo A"');
   expect(markup).toContain("Cómo llegar");
+});
+
+test("shows the unsaved-location explanation only for a valid preview", () => {
+  const valid = renderToStaticMarkup(<GoogleMapsLinks preview sources={{ lugar: "Campo A" }} />);
+  const blank = renderToStaticMarkup(<GoogleMapsLinks preview sources={{ lugar: "  " }} />);
+  expect(valid).toContain("Vista previa de la ubicación; no se guarda hasta guardar el formulario.");
+  expect(blank).toBe("");
 });

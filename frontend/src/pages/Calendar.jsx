@@ -148,6 +148,7 @@ export default function Calendar() {
           <Field label={t("endDate")} type="date" value={form.fecha_fin} onChange={(value) => setForm((current) => ({ ...current, fecha_fin: value }))} />
           <Field label={t("endTime")} type="time" value={form.hora_fin} onChange={(value) => setForm((current) => ({ ...current, hora_fin: value }))} />
           <div className="sm:col-span-2"><Field label={t("location")} value={form.lugar} onChange={(value) => setForm((current) => ({ ...current, lugar: value }))} /></div>
+          <div className="sm:col-span-2"><GoogleMapsLinks preview sources={form} /></div>
           <div className="sm:col-span-2"><Area label={t("description")} value={form.descripcion} onChange={(value) => setForm((current) => ({ ...current, descripcion: value }))} /></div>
         </div><DialogFooter><Button variant="outline" onClick={() => setEditorOpen(false)}>{t("cancel")}</Button><Button onClick={save}>{t("save")}</Button></DialogFooter></DialogContent></Dialog>
     </div>

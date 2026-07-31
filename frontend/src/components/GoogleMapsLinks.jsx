@@ -60,7 +60,7 @@ export const googleMapsUrl = (mode, ...sources) => {
   return `https://www.google.com/maps/${path}/?api=1&${parameter}=${encodeURIComponent(location)}`;
 };
 
-export default function GoogleMapsLinks({ sources, className = "" }) {
+export default function GoogleMapsLinks({ sources, className = "", preview = false }) {
   const { t } = useI18n();
   const records = Array.isArray(sources) ? sources : [sources];
   const location = resolveMapsLocation(records);
@@ -72,20 +72,23 @@ export default function GoogleMapsLinks({ sources, className = "" }) {
   ];
 
   return (
-    <div className={`flex flex-wrap gap-2 ${className}`.trim()} data-testid="google-maps-links">
-      {links.map(({ mode, label, Icon }) => (
-        <a
-          key={mode}
-          href={googleMapsUrl(mode, records)}
-          target="_blank"
-          rel="noopener noreferrer"
-          aria-label={`${label}: ${location}`}
-          className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-primary/25 px-3 py-2 text-xs font-semibold text-primary transition-colors hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-        >
-          <Icon className="h-4 w-4" aria-hidden="true" />
-          <span>{label}</span>
-        </a>
-      ))}
+    <div className={className} data-testid="google-maps-links">
+      <div className="flex flex-wrap gap-2">
+        {links.map(({ mode, label, Icon }) => (
+          <a
+            key={mode}
+            href={googleMapsUrl(mode, records)}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`${label}: ${location}`}
+            className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-primary/25 px-3 py-2 text-xs font-semibold text-primary transition-colors hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          >
+            <Icon className="h-4 w-4" aria-hidden="true" />
+            <span>{label}</span>
+          </a>
+        ))}
+      </div>
+      {preview && <p className="mt-2 text-xs text-slate-500" role="status">{t("mapsPreviewHint")}</p>}
     </div>
   );
 }
