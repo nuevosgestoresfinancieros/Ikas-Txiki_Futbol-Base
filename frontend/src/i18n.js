@@ -33,6 +33,8 @@ export const translations = {
     mainNavigation: "Navegación principal",
     skipToContent: "Saltar al contenido",
     logout: "Cerrar sesión",
+    viewGoogleMaps: "Ver en Google Maps",
+    getDirections: "Cómo llegar",
     role_admin: "Administrador",
     role_coordinator: "Coordinador",
     role_coach: "Entrenador",
@@ -857,6 +859,8 @@ export const translations = {
   },
   eu: {
     appName: "Ikas-Txiki Manager",
+    viewGoogleMaps: "Ikusi Google Maps-en",
+    getDirections: "Nola iritsi",
     appTagline: "Oinarrizko futbola argi eta erraz kudeatzeko",
     loginTitle: "Ongi etorri berriro",
     loginSubtitle: "Sartu zure klubaren kudeaketa gunera",

@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Area, Field, SelectField } from "@/components/form";
 import { PageHeader } from "@/components/shared";
 import { googleCalendarUrl, groupEventsByDate, isoDay, monthDays, viewRange, weekDays } from "./calendarView";
+import GoogleMapsLinks from "@/components/GoogleMapsLinks";
 
 const TYPE_STYLES = {
   match: "border-blue-200 bg-blue-50 text-blue-800",
@@ -133,7 +134,7 @@ export default function Calendar() {
       <Dialog open={!!selected} onOpenChange={(open) => !open && setSelected(null)}>
         <DialogContent><DialogHeader><DialogTitle>{selected?.titulo}</DialogTitle><DialogDescription>{t("calendarDetailDescription")}</DialogDescription></DialogHeader>{selected && <div className="space-y-3 text-sm text-slate-600">
           <p className="font-semibold text-slate-900">{new Intl.DateTimeFormat(locale, { dateStyle: "full" }).format(new Date(`${selected.fecha}T12:00:00`))}{selected.hora ? ` · ${selected.hora}` : ""}</p>
-          {selected.equipo_nombre && <p>{selected.equipo_nombre}</p>}{selected.lugar && <p className="flex items-center gap-2"><MapPin className="h-4 w-4" />{selected.lugar}</p>}{selected.descripcion && <p>{selected.descripcion}</p>}
+          {selected.equipo_nombre && <p>{selected.equipo_nombre}</p>}{selected.lugar && <p className="flex items-center gap-2"><MapPin className="h-4 w-4" aria-hidden="true" />{selected.lugar}</p>}<GoogleMapsLinks sources={selected} />{selected.descripcion && <p>{selected.descripcion}</p>}
           <a href={googleCalendarUrl(selected)} target="_blank" rel="noreferrer" className="inline-flex min-h-11 items-center gap-2 font-semibold text-primary"><ExternalLink className="h-4 w-4" />{t("addGoogleCalendar")}</a>
         </div>}<DialogFooter>{selected?.source === "club_event" && canDelete && <Button variant="outline" className="text-red-600" onClick={remove}><Trash2 className="h-4 w-4" />{t("delete")}</Button>}{selected?.source === "club_event" && canEdit && <Button onClick={openEdit}><Pencil className="h-4 w-4" />{t("edit")}</Button>}</DialogFooter></DialogContent>
       </Dialog>

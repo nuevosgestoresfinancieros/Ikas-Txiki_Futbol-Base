@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { PageHeader, StatusBadge, EmptyState } from "@/components/shared";
 import { Field, Area, SelectField } from "@/components/form";
+import GoogleMapsLinks from "@/components/GoogleMapsLinks";
 
 const empty = { condicion: "local", tipo: "liga", estado: "programado" };
 
@@ -117,11 +118,12 @@ const Matches = () => {
                         {m.tipo} · {t(m.condicion === "local" ? "home" : "away")}
                         {m.jornada ? ` · J${m.jornada}` : ""}
                       </p>
-                      {m.campo && (
-                        <p className="text-xs text-slate-400 flex items-center gap-1">
-                          <MapPin className="h-3 w-3" />{m.campo}
+                      {(m.direccion_campo || m.campo) && <div className="mt-1">
+                        <p className="flex items-center gap-1 text-xs text-slate-500">
+                          <MapPin className="h-3 w-3" aria-hidden="true" />{m.direccion_campo || m.campo}
                         </p>
-                      )}
+                      </div>}
+                      <GoogleMapsLinks sources={m} className="mt-2" />
                     </div>
                   </div>
 

@@ -14,6 +14,7 @@ import { PageHeader, EmptyState, initials } from "@/components/shared";
 import { Field, Area, SelectField } from "@/components/form";
 import ExerciseLibrary from "@/components/ExerciseLibrary";
 import TrainingExercisePlanner from "@/components/TrainingExercisePlanner";
+import GoogleMapsLinks from "@/components/GoogleMapsLinks";
 import { historicalExerciseLabel, validateEvaluation } from "./trainingExerciseView";
 
 const ATT_STATES = ["presente", "justificada", "injustificada", "lesion"];
@@ -135,6 +136,7 @@ const Trainings = () => {
                 <div>
                   <p className="font-semibold text-slate-800">{i.equipo_nombre}</p>
                   <p className="text-xs text-slate-500">{i.fecha} · {i.hora || "--:--"} · {i.campo || "—"}</p>
+                  <GoogleMapsLinks sources={i} className="mt-2" />
                 </div>
               </div>
               <div className="flex items-center gap-3">
