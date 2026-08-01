@@ -1768,7 +1768,8 @@ def _clean_doc(document: Optional[dict]) -> Optional[dict]:
 
 def _build_import_operations(analysis: dict, existing: dict, job_id: str,
                              decisions: Dict[str, str], *, allow_pending_team: bool = False,
-                             keep_family_candidates_separate: bool = False) -> list[dict]:
+                             keep_family_candidates_separate: bool = False,
+                             skip_payments: bool = False) -> list[dict]:
     now = now_iso()
     maps = {name: {str(doc.get("id")): _clean_doc(doc) for doc in existing[name]} for name in IMPORT_COLLECTIONS}
     team_by_name = {normalize_key(doc.get("nombre")): doc for doc in maps["teams"].values()}
@@ -1869,7 +1870,7 @@ def _build_import_operations(analysis: dict, existing: dict, job_id: str,
         inscription_by_key[ikey] = inscription
 
         protected_bank = row.get("_bank") or {}
-        if row.get("iban") or protected_bank.get("iban_encrypted"):
+        if not skip_payments and (row.get("iban") or protected_bank.get("iban_encrypted")):
             pay_key = (player["id"], analysis["season"])
             payment = payment_by_key.get(pay_key)
             payment_before = payment
@@ -2439,6 +2440,7 @@ async def confirm_import_staging(draft_id: str, request: StagingConfirmRequest):
     analysis = analyze_rows(
         rows, draft["season"], existing, draft["source_sha256"], False,
         allow_pending_team=historical, allow_pending_contact=historical,
+        ignore_team_name_suggestions=historical,
     )
     if analysis["blocking_errors"] or analysis["unresolved_conflicts"]:
         raise HTTPException(status_code=409, detail="La validación final ha detectado bloqueos")
@@ -2446,7 +2448,7 @@ async def confirm_import_staging(draft_id: str, request: StagingConfirmRequest):
     job_id = new_id()
     operations = _build_import_operations(
         analysis, existing, job_id, {}, allow_pending_team=historical,
-        keep_family_candidates_separate=historical,
+        keep_family_candidates_separate=historical, skip_payments=historical,
     )
     try:
         await db.import_locks.insert_one({"_id": lock_id, "job_id": job_id, "created_at": now_iso()})
