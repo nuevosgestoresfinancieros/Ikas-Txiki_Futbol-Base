@@ -37,7 +37,7 @@ def test_regular_import_still_rejects_team_name_with_incompatible_category():
 
 def test_historical_operations_keep_team_pending_and_never_create_payments():
     existing = {"players": [], "families": [], "inscriptions": [], "payments": [], "teams": []}
-    source = record(equipo="", iban="ES0000000000000000000000")
+    source = record(equipo="", iban="ES9121000418450200051332")
     analysis = analyze_rows(
         [source], "2026-2027", existing, "test", allow_pending_team=True,
         allow_pending_contact=True, ignore_team_name_suggestions=True,
