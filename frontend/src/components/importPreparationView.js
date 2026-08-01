@@ -129,8 +129,13 @@ export const importPreparationError = (error, fallback = "No se pudo preparar el
   return fallback;
 };
 
+// Older drafts can use "pending" instead of the newer explicit review values.
+// Keep every unknown value visible and blocked until an administrator decides it.
+export const isUnresolvedFuzzyMatch = (item = {}) =>
+  !["same_person", "different_people"].includes(item.decision);
+
 export const historicalReviewCounts = (draft = {}) => ({
-  fuzzy: (draft.fuzzy_matches || []).filter((item) => !item.decision).length,
+  fuzzy: (draft.fuzzy_matches || []).filter(isUnresolvedFuzzyMatch).length,
   families: (draft.family_candidates || []).filter((item) => !item.decision).length,
   officialWrites: draft.simulation?.official_writes || 0,
 });
