@@ -238,7 +238,8 @@ def _contact_values(record: Mapping[str, Any]) -> set[str]:
 def analyze_rows(rows: list[dict], season: str, existing: Mapping[str, list[dict]],
                  file_sha256: str, duplicate_file: bool = False,
                  *, allow_pending_team: bool = False,
-                 allow_pending_contact: bool = False) -> dict:
+                 allow_pending_contact: bool = False,
+                 ignore_team_name_suggestions: bool = False) -> dict:
     if season != SEASON:
         raise ImportValidationError(f"La temporada permitida es {SEASON}")
     players = list(existing.get("players") or [])
@@ -317,7 +318,13 @@ def analyze_rows(rows: list[dict], season: str, existing: Mapping[str, list[dict
             issues.append(result); row_results.append(result); continue
         seen.add(key)
         matches = players_by_key.get(key, [])
-        team_matches = teams_by_name.get(normalize_key(record.get("equipo")), []) if record.get("equipo") else []
+        # A historical workbook may contain a former team name.  It is a
+        # review suggestion, not an official assignment: only ``equipo_id``
+        # selected through the administrative catalogue can associate a
+        # player with an existing team.
+        team_matches = [] if ignore_team_name_suggestions else (
+            teams_by_name.get(normalize_key(record.get("equipo")), []) if record.get("equipo") else []
+        )
         conflict_message = None
         if len(matches) > 1:
             conflict_message = "Hay más de un jugador existente con la misma identidad."
