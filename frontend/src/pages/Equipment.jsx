@@ -116,11 +116,14 @@ const Equipment = () => {
   const exportCSV = () => {
     const headers = [t("name"), t("surname"), t("equipmentTeam"), t("category"), t("equipmentBib"),
       t("equipmentShirt"), t("equipmentShorts"), t("equipmentTracksuit"), t("equipmentSocks"), t("equipmentShoes"),
+      "2ª equipación nombre", "2ª equipación dorsal", "2ª equipación camiseta", "2ª equipación medias",
       t("equipmentDelivered"), t("equipmentDeliveryDate"), t("equipmentNotes")];
     const rows = filtered.map((p) => [
       p.nombre, p.apellidos, p.equipo_nombre, p.categoria || "", p.dorsal || "",
       p.talla_camiseta || "", p.talla_pantalon || "", p.talla_chandal || "",
       p.talla_medias || "", p.talla_calzado || "",
+      p.segunda_equipacion?.shirt_name || "", p.segunda_equipacion?.number || "",
+      p.segunda_equipacion?.shirt_size || "", p.segunda_equipacion?.socks_size || "",
       p.equipacion_entregada ? t("yes") : t("no"),
       p.fecha_entrega_equipacion || "", p.observaciones_material || ""
     ]);
@@ -180,7 +183,7 @@ const Equipment = () => {
       {/* Tabla */}
       <div className="surface-card overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm min-w-[900px]">
+          <table className="w-full text-sm min-w-[1250px]">
             <thead className="bg-slate-50 text-left text-xs font-bold uppercase tracking-wider text-slate-500 sticky top-0">
               <tr>
                 <th className="px-4 py-3 min-w-[160px]">{t("equipmentPlayer")}</th>
@@ -190,6 +193,10 @@ const Equipment = () => {
                 <th className="px-3 py-3">{t("equipmentShorts")}</th>
                 <th className="px-3 py-3">{t("equipmentTracksuit")}</th>
                 <th className="px-3 py-3">{t("equipmentSocks")}</th>
+                <th className="px-3 py-3 bg-sky-50">2ª nombre</th>
+                <th className="px-3 py-3 bg-sky-50">2ª dorsal</th>
+                <th className="px-3 py-3 bg-sky-50">2ª camiseta</th>
+                <th className="px-3 py-3 bg-sky-50">2ª medias</th>
                 <th className="px-3 py-3">{t("equipmentShoes")}</th>
                 <th className="px-3 py-3">{t("delivered")}</th>
                 <th className="px-3 py-3">{t("equipmentDeliveryDate")}</th>
@@ -199,7 +206,7 @@ const Equipment = () => {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.length === 0 ? (
-                <tr><td colSpan={12} className="px-4 py-10 text-center text-slate-400">{t("equipmentNoResults")}</td></tr>
+                <tr><td colSpan={16} className="px-4 py-10 text-center text-slate-400">{t("equipmentNoResults")}</td></tr>
               ) : filtered.map((p) => {
                 const isEditing = editingId === p.id;
                 const row = isEditing ? editForm : p;
@@ -225,6 +232,10 @@ const Equipment = () => {
                     <td className="px-3 py-2.5">
                       <Cell label={t("equipmentSocks")} value={row.talla_medias} editing={isEditing} onChange={setField("talla_medias")} options={isEditing ? TALLAS_MEDIAS : undefined} />
                     </td>
+                    <td className="bg-sky-50/40 px-3 py-2.5"><Cell value={p.segunda_equipacion?.shirt_name} editing={false} /></td>
+                    <td className="bg-sky-50/40 px-3 py-2.5"><Cell value={p.segunda_equipacion?.number} editing={false} /></td>
+                    <td className="bg-sky-50/40 px-3 py-2.5"><Cell value={p.segunda_equipacion?.shirt_size} editing={false} /></td>
+                    <td className="bg-sky-50/40 px-3 py-2.5"><Cell value={p.segunda_equipacion?.socks_size} editing={false} /></td>
                     <td className="px-3 py-2.5">
                       <Cell label={t("equipmentShoes")} value={row.talla_calzado} editing={isEditing} onChange={setField("talla_calzado")} />
                     </td>

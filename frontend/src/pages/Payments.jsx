@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Euro, Plus, Pencil, Trash2 } from "lucide-react";
+import { Euro, Plus, Pencil, Trash2, Landmark } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
 import { PermissionGate, usePermission } from "@/auth";
@@ -51,6 +51,11 @@ const Payments = () => {
       {payments.length === 0 ? (
         <EmptyState icon={Euro} message={t("noData")} action={canCreate ? <Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("newPayment")}</Button> : null} />
       ) : (
+        <>
+        <div className="mb-4 grid gap-3 sm:grid-cols-3">
+          <div className="surface-card p-4"><p className="text-xs font-bold uppercase text-slate-500">Cuentas bancarias protegidas</p><p className="mt-1 text-2xl font-bold text-primary">{payments.filter(p => p.historical_bank_reference && p.iban).length}</p></div>
+          <div className="surface-card p-4 sm:col-span-2"><p className="flex items-center gap-2 text-sm text-slate-600"><Landmark className="h-4 w-4 text-primary" />Los IBAN históricos se muestran enmascarados y no representan deudas ni recibos.</p></div>
+        </div>
         <div className="surface-card overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -60,6 +65,7 @@ const Payments = () => {
                   <th className="px-4 py-3 hidden sm:table-cell">{t("concept")}</th>
                   <th className="px-4 py-3">{t("finalAmount")}</th>
                   <th className="px-4 py-3 hidden md:table-cell">{t("paymentMethod")}</th>
+                  <th className="px-4 py-3">Cuenta protegida</th>
                   <th className="px-4 py-3">{t("status")}</th>
                   <th className="px-4 py-3 text-right">{t("actions")}</th>
                 </tr>
@@ -71,6 +77,7 @@ const Payments = () => {
                     <td className="px-4 py-3 hidden sm:table-cell text-slate-600">{p.concepto}</td>
                     <td className="px-4 py-3 font-heading font-bold text-slate-900">{(p.importe_final || 0).toFixed(2)} €</td>
                     <td className="px-4 py-3 hidden md:table-cell text-slate-600 capitalize">{p.forma_pago || "—"}</td>
+                    <td className="px-4 py-3"><div className="font-mono text-xs text-slate-700">{p.iban || "—"}</div>{p.titular_cuenta && <div className="mt-1 text-xs text-slate-400">{p.titular_cuenta}</div>}{p.historical_bank_reference && <div className="mt-1 text-[10px] font-bold uppercase text-sky-700">Referencia histórica · sin deuda</div>}</td>
                     <td className="px-4 py-3"><StatusBadge status={p.estado} /></td>
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-1">
@@ -84,6 +91,7 @@ const Payments = () => {
             </table>
           </div>
         </div>
+        </>
       )}
 
       <Dialog open={dialog} onOpenChange={setDialog}>

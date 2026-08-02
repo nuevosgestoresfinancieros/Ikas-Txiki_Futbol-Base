@@ -1349,6 +1349,9 @@ class Payment(BaseModel):
     fecha_pago: Optional[str] = None
     recibo_generado: bool = False
     observaciones: Optional[str] = None
+    titular_cuenta: Optional[str] = None
+    historical_bank_reference: bool = False
+    confirmed_debt: bool = False
 
 
 @api_router.post("/payments")
@@ -3850,6 +3853,8 @@ async def get_equipment(equipo_id: Optional[str] = None, entregada: Optional[str
             "equipacion_entregada": p.get("equipacion_entregada", False),
             "fecha_entrega_equipacion": p.get("fecha_entrega_equipacion"),
             "observaciones_material": p.get("observaciones_material"),
+            "segunda_equipacion": p.get("segunda_equipacion") or {},
+            "historial_equipacion": p.get("historial_equipacion") or {},
             "estado": p.get("estado"),
         })
     return result
