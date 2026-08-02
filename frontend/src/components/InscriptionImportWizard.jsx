@@ -5,7 +5,7 @@ import api from "@/api";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useI18n } from "@/i18n";
-import { activeModalitiesFromApi, activeTeamsFromApi, applyPreparationFilterChange, canApplyPreparationBulk, canFinalizeDraft, clearPreparationSelection, existingCategoriesFromApi, filterPreparationRecords, MODALITY_CONTROL_COPY, modalityAssignmentDisabledReason, modalityOptionLabel, officialModalityCode, selectedOctoberIds, selectVisiblePreparationRecords, teamsForCategory } from "./importPreparationView";
+import { activeModalitiesFromApi, activeTeamsFromApi, applyPreparationFilterChange, canApplyPreparationBulk, canFinalizeDraft, clearPreparationSelection, existingCategoriesFromApi, filterPreparationRecords, importPreparationError, MODALITY_CONTROL_COPY, modalityAssignmentDisabledReason, modalityOptionLabel, officialModalityCode, selectedOctoberIds, selectVisiblePreparationRecords, teamsForCategory } from "./importPreparationView";
 
 const IMPORT_PREPARATION_COPY = {
   es: {
@@ -102,7 +102,7 @@ export default function InscriptionImportWizard({ open, onOpenChange, onImported
   const upload = async () => {
     if (!file) return; setBusy(true); setError("");
     try { const body = new FormData(); body.append("file", file); body.append("season", "2026-2027"); const response = await api.post("/inscription-imports/staging", body); setDraft(response.data); setFile(null); await loadLists(); }
-    catch (e) { setError(e.response?.data?.detail || "No se pudo preparar el archivo."); } finally { setBusy(false); }
+    catch (e) { setError(importPreparationError(e)); } finally { setBusy(false); }
   };
   const template = async () => { const response = await api.get("/inscription-imports/template", { responseType: "blob" }); downloadBlob(response.data, "plantilla_inscripciones_2026-2027.xlsx"); };
   const refresh = (response) => { setDraft(response.data); setExpress(false); };

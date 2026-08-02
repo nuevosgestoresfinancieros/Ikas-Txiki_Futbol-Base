@@ -120,6 +120,15 @@ export const preparationProgressLabel = (summary = {}) => `${summary.preparation
 
 export const isHistoricalDraft = (draft) => draft?.source_format === "historical_bbdd_v1";
 
+export const importPreparationError = (error, fallback = "No se pudo preparar el archivo.") => {
+  const detail = error?.response?.data?.detail;
+  if (typeof detail === "string" && detail.trim()) return detail;
+  const status = error?.response?.status;
+  if (status) return `${fallback} (servidor ${status})`;
+  if (error?.code === "ERR_NETWORK") return "No se pudo conectar con el servidor. Comprueba que el backend esté publicado y activo.";
+  return fallback;
+};
+
 export const historicalReviewCounts = (draft = {}) => ({
   fuzzy: (draft.fuzzy_matches || []).filter((item) => !item.decision).length,
   families: (draft.family_candidates || []).filter((item) => !item.decision).length,

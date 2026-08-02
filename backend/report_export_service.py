@@ -1,7 +1,6 @@
 """Renderizadores en memoria para informes profesionales PDF y Excel."""
 from __future__ import annotations
 
-import base64
 import io
 import re
 from datetime import datetime, timezone
@@ -16,7 +15,8 @@ from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
-from reportlab.platypus import Image, LongTable, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import LongTable, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from brand_assets import BRAND_BLUE, BRAND_TEAL, pdf_logo
 
 
 REPORT_LABELS = {
@@ -137,15 +137,9 @@ def human_filters(filters: Mapping[str, Any], options: Mapping[str, Any], lang: 
 
 
 def _logo(branding: Mapping[str, Any]):
-    raw = branding.get("club_logo")
-    if not isinstance(raw, str) or not raw.startswith(("data:image/png;base64,", "data:image/jpeg;base64,")):
-        return None
     try:
-        payload = base64.b64decode(raw.split(",", 1)[1], validate=True)
-        if len(payload) > 2 * 1024 * 1024:
-            return None
-        return Image(io.BytesIO(payload), width=14 * mm, height=14 * mm)
-    except Exception:
+        return pdf_logo(branding.get("club_logo"), 14)
+    except (OSError, ValueError):
         return None
 
 
@@ -164,7 +158,7 @@ def generate_pdf(report: Mapping[str, Any], rows: list[dict], totals: Mapping[st
                                  author="Ikas-Txiki Manager", subject="Informe deportivo")
     styles = getSampleStyleSheet()
     title_style = ParagraphStyle("ReportTitle", parent=styles["Title"], fontName="Helvetica-Bold", fontSize=16,
-                                 leading=19, textColor=colors.HexColor("#102A43"), alignment=TA_CENTER)
+                                 leading=19, textColor=colors.HexColor(BRAND_BLUE), alignment=TA_CENTER)
     small = ParagraphStyle("ReportSmall", parent=styles["Normal"], fontName="Helvetica", fontSize=7.5,
                            leading=10, textColor=colors.HexColor("#475569"))
     cell = ParagraphStyle("ReportCell", parent=styles["Normal"], fontName="Helvetica", fontSize=7.5,
@@ -198,7 +192,7 @@ def generate_pdf(report: Mapping[str, Any], rows: list[dict], totals: Mapping[st
     widths = [available * weights.get(column, 1) / total_weight for column in columns]
     table = LongTable(table_data, colWidths=widths, repeatRows=1, splitByRow=1)
     commands = [
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0F766E")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(BRAND_TEAL)),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("GRID", (0, 0), (-1, -1), .25, colors.HexColor("#CBD5E1")),
         ("LEFTPADDING", (0, 0), (-1, -1), 4), ("RIGHTPADDING", (0, 0), (-1, -1), 4),
@@ -251,7 +245,7 @@ def generate_xlsx(report: Mapping[str, Any], rows: list[dict], totals: Mapping[s
     sheet.merge_cells(f"A1:{last_column}1")
     sheet["A1"] = title
     sheet["A1"].font = Font(name="Aptos Display", size=16, bold=True, color="FFFFFF")
-    sheet["A1"].fill = PatternFill("solid", fgColor="0F766E")
+    sheet["A1"].fill = PatternFill("solid", fgColor=BRAND_TEAL.lstrip("#"))
     sheet["A1"].alignment = Alignment(horizontal="center")
     sheet.row_dimensions[1].height = 28
     sheet["A2"] = labels["generated"]
@@ -286,7 +280,7 @@ def generate_xlsx(report: Mapping[str, Any], rows: list[dict], totals: Mapping[s
     for index, column in enumerate(columns, 1):
         target = sheet.cell(header_row, index, labels.get(COLUMN_KEYS.get(column, column), column))
         target.font = Font(bold=True, color="FFFFFF")
-        target.fill = PatternFill("solid", fgColor="0F766E")
+        target.fill = PatternFill("solid", fgColor=BRAND_TEAL.lstrip("#"))
         target.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     thin = Side(style="thin", color="CBD5E1")
     if rows:

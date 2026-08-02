@@ -102,3 +102,8 @@ android-sdk/
 credentials.json
 *.key
 .credentials
+
+# Private seasonal imports and review workbooks
+private-imports/
+*.private.xlsx
+*.private.xls

@@ -5,7 +5,7 @@ import zipfile
 from openpyxl import Workbook
 
 from historical_import_adapter import (
-    EXPECTED_TOTAL_COLUMNS, HISTORICAL_COLUMN_MAPPING, historical_quality_summary,
+    COMPACT_HEADERS, COMPACT_TOTAL_COLUMNS, EXPECTED_TOTAL_COLUMNS, HISTORICAL_COLUMN_MAPPING, historical_quality_summary,
     historical_simulation, parse_historical_excel, prepare_historical_staging,
 )
 
@@ -36,6 +36,14 @@ def workbook_bytes(rows, formulas=None):
         sheet.append(row)
     for cell, formula in formulas or []:
         sheet[cell] = formula
+    buffer = io.BytesIO(); workbook.save(buffer); return buffer.getvalue()
+
+
+def compact_workbook_bytes(rows):
+    workbook = Workbook(); sheet = workbook.active; sheet.title = "BBDD"
+    sheet.append(list(COMPACT_HEADERS))
+    for row in rows:
+        sheet.append(row)
     buffer = io.BytesIO(); workbook.save(buffer); return buffer.getvalue()
 
 
@@ -116,3 +124,29 @@ def test_no_original_workbook_or_clear_iban_is_present_in_staging_payload():
     assert "workbook" not in payload.lower()
     assert "ES0000000000000000000000" not in payload
     assert records[0]["bank"]["iban_encrypted"] is None
+
+
+def test_compact_64_column_export_maps_pending_player_history_without_fabricating_identity():
+    row = [None] * COMPACT_TOTAL_COLUMNS
+    row[0:2] = ["Ane", "Ficticia"]
+    row[29:33] = ["FICTICIA", 7, "M", "JR"]
+    row[33:37] = ["ANE", 9, "M", "JR"]
+    row[37] = "FEDERADO"
+    row[41:44] = ["Equipo 25/26", "Equipo 26/27", "Juvenil"]
+    row[44:52] = ["SI"] * 8
+    row[52] = "PORTERA"
+    row[53:58] = ["Titular Ficticio", "ES0000000000000000000000", "SI", 500, 500]
+    row[58:64] = ["SI", "NO", "SI", "NO", "SI", "SI"]
+
+    parsed = parse_historical_excel(compact_workbook_bytes([row]), _ids())
+    record = parsed["records"][0]
+    assert parsed["source_layout"] == "compact_64"
+    assert record["fecha_nacimiento"] is None
+    assert record["equipo"] == "Equipo 26/27" and record["equipo_anterior"] == "Equipo 25/26"
+    assert record["historical"]["equipment_history"]["2025-2026"] == ["FICTICIA", "7", "M", "JR"]
+    assert record["historical"]["equipment_current"]["number"] == "9"
+    assert record["historical"]["sport"]["position"] == "PORTERA"
+    assert record["historical"]["consents"]["images"] == "yes"
+    simulation = historical_simulation(parsed, [{"nombre": "Ane", "apellidos": "Ficticia", "fecha_nacimiento": "2010-01-01"}])
+    assert simulation["profile_enrichment_candidates"] == 1
+    assert simulation["proposed_creates"] == 0 and simulation["official_writes"] == 0

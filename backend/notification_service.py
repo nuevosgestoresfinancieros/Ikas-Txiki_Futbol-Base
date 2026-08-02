@@ -4,10 +4,12 @@ from __future__ import annotations
 import os
 import smtplib
 import ssl
+from html import escape
 from datetime import datetime, timezone
 from email.message import EmailMessage
 from typing import Mapping, Optional
 from uuid import uuid4
+from brand_assets import BRAND_BLUE, BRAND_NAME, CLUB_NAME, logo_bytes
 
 
 NOTIFICATION_TYPES = {
@@ -75,6 +77,32 @@ def dispatch_email(recipient: str, subject: str, body: str,
         message["To"] = recipient
         message["Subject"] = subject
         message.set_content(body)
+        safe_body = "<br>".join(escape(body).splitlines())
+        message.add_alternative(
+            f"""<!doctype html>
+<html lang="es">
+  <body style="margin:0;background:#f5fafc;font-family:Arial,sans-serif;color:#1f2937">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f5fafc;padding:24px 12px">
+      <tr><td align="center">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:640px;background:#ffffff;border:1px solid #dbe7ed;border-radius:16px">
+          <tr><td style="padding:24px;text-align:center;border-bottom:3px solid {BRAND_BLUE}">
+            <img src="cid:ikastxiki-logo" alt="{BRAND_NAME}" width="96" height="96" style="display:block;margin:0 auto 10px;object-fit:contain">
+            <strong style="font-size:20px;color:{BRAND_BLUE}">{BRAND_NAME}</strong><br>
+            <span style="font-size:13px;color:#52616b">{CLUB_NAME}</span>
+          </td></tr>
+          <tr><td style="padding:28px;font-size:15px;line-height:1.65">{safe_body}</td></tr>
+          <tr><td style="padding:16px 24px;background:#eef6f9;text-align:center;font-size:12px;color:#52616b">
+            {BRAND_NAME} · {CLUB_NAME}
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>""",
+            subtype="html",
+        )
+        html_part = message.get_payload()[-1]
+        html_part.add_related(logo_bytes(), maintype="image", subtype="png", cid="<ikastxiki-logo>")
         factory = smtp_factory or (smtplib.SMTP_SSL if env.get("SMTP_USE_SSL", "false").lower() == "true" else smtplib.SMTP)
         port = int(env.get("SMTP_PORT", "465" if factory is smtplib.SMTP_SSL else "587"))
         with factory(env["SMTP_HOST"], port, timeout=10) as client:

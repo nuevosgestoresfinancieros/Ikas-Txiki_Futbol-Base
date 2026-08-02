@@ -29,6 +29,8 @@ HISTORICAL_FORMAT = "historical_bbdd_v1"
 OPERATIONAL_COLUMN_COUNT = 79
 EXPECTED_TOTAL_COLUMNS = 129
 ALLOWED_FORMULA_COLUMNS = {70, 71, 72}
+COMPACT_TOTAL_COLUMNS = 64
+COMPACT_ALLOWED_FORMULA_COLUMNS = {57, 58}
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 PHONE_RE = re.compile(r"^\d{9,15}$")
 
@@ -114,6 +116,30 @@ HISTORICAL_COLUMN_MAPPING = (
     (77, "entrenamiento viernes 25/26", "schedule_history.2025-2026.friday"),
     (78, "BESTE DATU INTERESGARRIAK/ OTROS DATOS DE INTERÉS", "sensitive_quarantine.other_notes"),
     (79, "PERMISO PARA PUBLICAR IMÁGENES", "consents.image_permission"),
+)
+
+# Exportación compacta recibida a partir de diciembre de 2025. Conserva el
+# histórico deportivo/equipación y los datos económicos, pero ya no incluye
+# nacimiento, contactos ni domicilio. No se inventan esos datos ausentes.
+COMPACT_HEADERS = (
+    "NOMBRE", "APELLIDOS", "TALLA 16&17", "TALLA 17&18",
+    "NOMBRE CAMISETA 18&19", "Dorsal 18&19", "NOMBRE CAMISETA 19&20", "Dorsal 19&20",
+    "TALLA 19&20", "TALLA MEDIAS 19&20", "NOMBRE CAMISETA 20&21", "DORSAL 20&21",
+    "TALLA 20&21", "NOMBRE CAMISETA 21&22", "DORSAL 21&22", "TALLA 21&22",
+    "TALLA MEDIAS 21&22", "NOMBRE CAMISETA 22&23", "DORSAL 22&23", "TALLA 22&23",
+    "TALLA MEDIAS 22&23", "NOMBRE CAMISETA 23&24", "DORSAL 23&24", "TALLA 23&24",
+    "TALLA MEDIAS 23&24", "NOMBRE CAMISETA 24&25", "DORSAL 24&25", "TALLA 24&25",
+    "TALLA MEDIAS 24&25", "NOMBRE CAMISETA 25&26", "DORSAL 25&26", "TALLA 25&26",
+    "TALLA MEDIAS 25&26", "SEGUNDA EQUIPACION NOMBRE CAMISETA 26&27",
+    "SEGUNDA EQUIPACION DORSAL 26&27", "SEGUNDA EQUIPACION TALLA 26&27",
+    "SEGUNDA EQUIPACION TALLA MEDIAS 26&27", "Eskola/futbolfederado 25/26",
+    "EQUIPO 21&22", "EQUIPO 23&24", "EQUIPO 24&25", "EQUIPO 25&26", "EQUIPO 26&27",
+    "CATEGORÍA DE JUEGO", "FEDERADO 18&19", "FEDERADO 19&20", "FEDERADO 20&21",
+    "FEDERADO 21&22", "FEDERADO 22&23", "FEDERADO 24&25", "FEDERADO 25&26",
+    "FEDERADO 26&27", "DEMARCACIÓN", "TITULAR NÚMERO DE CUENTA", "NÚMERO DE CUENTA",
+    "PERMISO PARA COBRAR DEL NÚMERO DE CUENTA", "CUOTA A PAGAR", "CUOTA PENDIENTE DE PAGO",
+    "Entrenamiento lunes 25/26", "entrenamiento martes 25/26", "entrenamiento miércoles 25/26",
+    "entrenamiento jueves 25/26", "entrenamiento viernes 25/26", "PERMISO PARA PUBLICAR IMÁGENES",
 )
 
 
@@ -230,6 +256,102 @@ def _family_candidates(records: list[dict]) -> list[dict]:
     return result
 
 
+def _compact_headers_match(sheet) -> bool:
+    headers = [_norm(cell.value) for cell in next(sheet.iter_rows(min_row=1, max_row=1, max_col=COMPACT_TOTAL_COLUMNS))]
+    return all(normalize_key(actual) == normalize_key(expected) for actual, expected in zip(headers, COMPACT_HEADERS))
+
+
+def _parse_compact_sheets(formula_sheet, value_sheet, id_factory) -> dict:
+    """Normaliza la exportación compacta sin fabricar identidad o contactos."""
+    formula_rows = formula_sheet.iter_rows(min_row=2, max_col=COMPACT_TOTAL_COLUMNS, values_only=True)
+    value_rows = value_sheet.iter_rows(min_row=2, max_col=COMPACT_TOTAL_COLUMNS, values_only=True)
+    records, auxiliary, blocked_formulas, materialized = [], [], [], []
+    for source_row, (formula_row, value_row) in enumerate(zip(formula_rows, value_rows), 2):
+        if not any(_norm(value) for value in value_row):
+            continue
+        if not (_norm(value_row[0]) and _norm(value_row[1])):
+            auxiliary.append({"source_row": source_row, "nonempty_operational_cells": sum(bool(_norm(value)) for value in value_row)})
+            continue
+        formula_cells = []
+        for column, formula in enumerate(formula_row, 1):
+            if not (isinstance(formula, str) and formula.startswith("=")):
+                continue
+            cached = value_row[column - 1]
+            if column in COMPACT_ALLOWED_FORMULA_COLUMNS and _number(cached) is not None:
+                entry = {"source_row": source_row, "column": column, "value": _number(cached)}
+                materialized.append(entry)
+                formula_cells.append({"column": column, "status": "materialized", "value": entry["value"]})
+            else:
+                blocked_formulas.append({"source_row": source_row, "column": column})
+                formula_cells.append({"column": column, "status": "blocked"})
+
+        equipment_history = _seasonal(value_row, {
+            "2016-2017": (3,), "2017-2018": (4,), "2018-2019": (5, 6),
+            "2019-2020": (7, 8, 9, 10), "2020-2021": (11, 12, 13),
+            "2021-2022": (14, 15, 16, 17), "2022-2023": (18, 19, 20, 21),
+            "2023-2024": (22, 23, 24, 25), "2024-2025": (26, 27, 28, 29),
+            "2025-2026": (30, 31, 32, 33), "2026-2027-second-kit": (34, 35, 36, 37),
+        })
+        current_second_kit = {
+            "shirt_name": _norm(value_row[33]), "number": _norm(value_row[34]),
+            "shirt_size": _norm(value_row[35]), "socks_size": _norm(value_row[36]),
+        }
+        record = {
+            "id": id_factory(), "source_row": source_row,
+            "nombre": _norm(value_row[0]), "apellidos": _norm(value_row[1]),
+            "fecha_nacimiento": None, "tipo": "renovacion", "centro_escolar": "",
+            "progenitor1_nombre": "", "progenitor1_telefono": "", "progenitor1_email": "",
+            "progenitor2_nombre": "", "progenitor2_telefono": "", "progenitor2_email": "",
+            "domicilio": "", "equipo_anterior": _norm(value_row[41]),
+            "equipo": _norm(value_row[42]), "categoria": _norm(value_row[43]),
+            "categoria_juego": _norm(value_row[43]), "modalidad": "",
+            "equipamiento_items": [], "talla_camiseta": current_second_kit["shirt_size"],
+            "talla_medias": current_second_kit["socks_size"], "iban": _norm(value_row[54]),
+            "observaciones": "", "_phone_issue_count": 0,
+            "_bank_issue": (not valid_iban(_norm(value_row[54]))) or any(
+                unicodedata.category(char).startswith("C") for char in str(value_row[54] or "")
+            ),
+            "historical": {
+                "birth_year_reference": "",
+                "contacts": {"father": {"name": "", "phone": "", "email": ""},
+                             "mother": {"name": "", "phone": "", "email": ""}},
+                "equipment_current": current_second_kit,
+                "equipment_history": equipment_history,
+                "team_history": _seasonal(value_row, {
+                    "2021-2022": (39,), "2023-2024": (40,), "2024-2025": (41,), "2025-2026": (42,),
+                }),
+                "federation_history": _seasonal(value_row, {
+                    "2018-2019": (45,), "2019-2020": (46,), "2020-2021": (47,), "2021-2022": (48,),
+                    "2022-2023": (49,), "2024-2025": (50,), "2025-2026": (51,), "2026-2027": (52,),
+                }),
+                "sport": {"program_2025_2026": _norm(value_row[37]),
+                          "playing_category": _norm(value_row[43]), "position": _norm(value_row[52])},
+                "bank_source": {"holder": _norm(value_row[53]), "candidate": _norm(value_row[54])},
+                "fees": {"schedule": "", "due": _number(value_row[56]), "paid": None,
+                         "balance_reference": _number(value_row[57]),
+                         "source_present": [value_row[56] not in (None, ""), False, value_row[57] not in (None, "")],
+                         "source_numeric": [isinstance(value_row[56], (int, float)) and not isinstance(value_row[56], bool),
+                                            True, isinstance(value_row[57], (int, float)) and not isinstance(value_row[57], bool)],
+                         "confirmed_debt": False},
+                "consents": {"notifications": "unanswered", "debit": _tri_state(value_row[55]),
+                             "images": _tri_state(value_row[63]), "signed": False},
+                "schedule_history": [_norm(value_row[index]) for index in range(58, 63)],
+                "sensitive_quarantine": {"other_notes_present": False},
+                "formula_values": formula_cells,
+            },
+        }
+        record["import_identity_key"] = _identity(record)
+        records.append(record)
+
+    exact_groups = [values for values in _group_by(records, _identity).values() if len(values) > 1]
+    return {
+        "source_format": HISTORICAL_FORMAT, "source_layout": "compact_64",
+        "records": records, "auxiliary_rows": auxiliary, "exact_duplicate_groups": exact_groups,
+        "fuzzy_matches": [], "family_candidates": [], "materialized_formulas": materialized,
+        "blocked_formulas": blocked_formulas, "auxiliary_column_count": 0,
+    }
+
+
 def parse_historical_excel(content: bytes, id_factory) -> dict:
     _validate_archive(content)
     formula_book = load_workbook(io.BytesIO(content), read_only=True, data_only=False)
@@ -237,8 +359,17 @@ def parse_historical_excel(content: bytes, id_factory) -> dict:
     if HISTORICAL_SHEET not in formula_book.sheetnames:
         raise ImportValidationError(f"Falta la hoja histórica '{HISTORICAL_SHEET}'")
     formula_sheet, value_sheet = formula_book[HISTORICAL_SHEET], value_book[HISTORICAL_SHEET]
+    # Algunos exports de LibreOffice/Excel declaran una dimensión vacía aunque
+    # contengan celdas. Forzamos el cálculo antes de decidir el formato.
+    if formula_sheet.max_column is None:
+        formula_sheet.reset_dimensions(); value_sheet.reset_dimensions()
+        formula_sheet.calculate_dimension(force=True); value_sheet.calculate_dimension(force=True)
+    if (formula_sheet.max_column or 0) >= COMPACT_TOTAL_COLUMNS and _compact_headers_match(formula_sheet):
+        result = _parse_compact_sheets(formula_sheet, value_sheet, id_factory)
+        formula_book.close(); value_book.close()
+        return result
     if formula_sheet.max_column < EXPECTED_TOTAL_COLUMNS:
-        raise ImportValidationError("La base histórica no contiene las 129 columnas esperadas")
+        raise ImportValidationError("La base histórica no coincide con los formatos verificados de 64 o 129 columnas")
     headers = [_norm(cell.value) for cell in next(formula_sheet.iter_rows(min_row=1, max_row=1, max_col=EXPECTED_TOTAL_COLUMNS))]
     for position, expected, _ in HISTORICAL_COLUMN_MAPPING:
         if normalize_key(headers[position - 1]) != normalize_key(expected):
@@ -323,7 +454,7 @@ def parse_historical_excel(content: bytes, id_factory) -> dict:
     for item in fuzzy_matches + family_candidates:
         item["id"] = id_factory()
     result = {
-        "source_format": HISTORICAL_FORMAT, "records": records, "auxiliary_rows": auxiliary,
+        "source_format": HISTORICAL_FORMAT, "source_layout": "legacy_129", "records": records, "auxiliary_rows": auxiliary,
         "exact_duplicate_groups": exact_groups, "fuzzy_matches": fuzzy_matches,
         "family_candidates": family_candidates, "materialized_formulas": materialized,
         "blocked_formulas": blocked_formulas, "auxiliary_column_count": EXPECTED_TOTAL_COLUMNS - OPERATIONAL_COLUMN_COUNT,
@@ -382,12 +513,27 @@ def historical_quality_summary(parsed: Mapping[str, Any]) -> dict:
 
 
 def historical_simulation(parsed: Mapping[str, Any], existing_players: Iterable[Mapping[str, Any]] = ()) -> dict:
-    existing = {_identity(player): player for player in existing_players}
-    exact = sum(record["import_identity_key"] in existing for record in parsed["records"])
+    compact = parsed.get("source_layout") == "compact_64"
+    if compact:
+        existing_by_name = defaultdict(list)
+        for player in existing_players:
+            existing_by_name[(_signal(player.get("nombre")), _signal(player.get("apellidos")))].append(player)
+        exact = sum(
+            len(existing_by_name[(_signal(record.get("nombre")), _signal(record.get("apellidos")))]) == 1
+            for record in parsed["records"]
+        )
+    else:
+        existing = {_identity(player): player for player in existing_players}
+        exact = sum(record["import_identity_key"] in existing for record in parsed["records"])
     quality = historical_quality_summary(parsed)
     return {
         "mode": "simulation_only", "official_writes": 0,
-        "proposed_creates": len(parsed["records"]) - exact, "exact_matches": exact,
+        # El compacto no tiene fecha de nacimiento: solo puede enriquecer una
+        # coincidencia nominal única y nunca debe proponer altas automáticas.
+        "proposed_creates": 0 if compact else len(parsed["records"]) - exact,
+        "profile_enrichment_candidates": exact if compact else 0,
+        "unmatched_profile_rows": len(parsed["records"]) - exact if compact else 0,
+        "exact_matches": exact,
         "fuzzy_matches": quality["fuzzy_match_pairs"], "family_candidates": quality["family_candidate_groups"],
         "conflicts": quality["fuzzy_match_pairs"] + quality["family_candidate_groups"],
         "blocked_records": sum(

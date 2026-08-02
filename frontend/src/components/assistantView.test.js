@@ -3,6 +3,16 @@ import {
   normalizeGuidedValue, safeAssistantLinks, suggestedQuestions, bindAssistantTrigger,
 } from "./assistantView";
 import { translations } from "../i18n";
+import React, { act, useRef, useState } from "react";
+import { createRoot } from "react-dom/client";
+
+jest.mock("@/lib/utils", () => ({
+  cn: (...values) => values.filter(Boolean).join(" "),
+}), { virtual: true });
+
+import {
+  Sheet, SheetContent, SheetDescription, SheetTitle,
+} from "./ui/sheet";
 
 const t = (key) => key;
 
@@ -82,5 +92,65 @@ test("component source keeps accessible and explicit confirmation controls", () 
   expect(source).toContain("assistantConfirm");
   expect(source).toContain("triggerRef.current?.focus()");
   expect(source).toContain("h-[100dvh] w-screen");
+  expect(source).toContain("<SheetDescription>{t(\"assistantDescription\")}</SheetDescription>");
+  expect(source).not.toContain('aria-describedby=\"assistant-description\"');
+  expect(source).not.toContain('id=\"assistant-description\"');
   expect(source).not.toContain("dangerouslySetInnerHTML");
+});
+
+test("Radix associates the assistant title and description without warnings and restores focus", async () => {
+  global.IS_REACT_ACT_ENVIRONMENT = true;
+  const warning = jest.spyOn(console, "warn").mockImplementation(() => {});
+  const error = jest.spyOn(console, "error").mockImplementation(() => {});
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+
+  const Harness = () => {
+    const [open, setOpen] = useState(false);
+    const trigger = useRef(null);
+    const changeOpen = (nextOpen) => {
+      setOpen(nextOpen);
+      if (!nextOpen) window.requestAnimationFrame(() => trigger.current?.focus());
+    };
+    return (
+      <>
+        <button ref={trigger} type="button" onClick={() => changeOpen(true)}>
+          Asistente Cibermedida
+        </button>
+        <Sheet open={open} onOpenChange={changeOpen}>
+          <SheetContent closeLabel="Cerrar">
+            <SheetTitle>Asistente Ikas‑Txiki — Cibermedida</SheetTitle>
+            <SheetDescription>Ayuda contextual y gestión guiada con confirmación.</SheetDescription>
+          </SheetContent>
+        </Sheet>
+      </>
+    );
+  };
+
+  await act(async () => root.render(<Harness />));
+  const trigger = container.querySelector("button");
+  await act(async () => trigger.click());
+  const dialog = document.querySelector('[role="dialog"]');
+  expect(dialog).not.toBeNull();
+  expect(dialog.getAttribute("aria-labelledby")).toBeTruthy();
+  expect(dialog.getAttribute("aria-describedby")).toBeTruthy();
+  expect(document.getElementById(dialog.getAttribute("aria-labelledby")).textContent)
+    .toBe("Asistente Ikas‑Txiki — Cibermedida");
+  expect(document.getElementById(dialog.getAttribute("aria-describedby")).textContent)
+    .toBe("Ayuda contextual y gestión guiada con confirmación.");
+
+  await act(async () => {
+    dialog.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  });
+  await act(async () => new Promise((resolve) => window.requestAnimationFrame(resolve)));
+  expect(document.activeElement).toBe(trigger);
+  expect(warning.mock.calls.flat().join(" ")).not.toContain("Missing `Description`");
+  expect(error.mock.calls.flat().join(" ")).not.toContain("Missing `Description`");
+
+  await act(async () => root.unmount());
+  warning.mockRestore();
+  error.mockRestore();
+  container.remove();
+  delete global.IS_REACT_ACT_ENVIRONMENT;
 });

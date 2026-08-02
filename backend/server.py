@@ -26,7 +26,7 @@ from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, KeepTogether, Image as PdfImage
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, KeepTogether
 from datetime import datetime, timezone, date, timedelta
 from openpyxl import Workbook
 from pymongo.errors import DuplicateKeyError
@@ -51,6 +51,7 @@ from calendar_service import (
 )
 from portal_service import document_status, portal_attendance, portal_callups, safe_payment, safe_player, upcoming
 from notification_service import dispatch_email, make_notification, notification_enabled, provider_configuration
+from brand_assets import BRAND_BLUE, BRAND_TEAL, pdf_logo
 from inscription_import_service import (
     SEASON as IMPORT_SEASON, SAFE_PLAYER_FIELDS, ImportValidationError,
     analyze_rows, decode_plan, encode_plan, encrypt_iban, family_key,
@@ -1273,8 +1274,17 @@ async def export_callup_pdf(callup_id: str):
                             topMargin=14*mm, bottomMargin=14*mm)
     styles = getSampleStyleSheet()
     title = ParagraphStyle("CallupTitle", parent=styles["Title"], fontSize=16, leading=19, alignment=TA_CENTER)
+    callup_header = Table(
+        [[pdf_logo(settings.get("club_logo"), 16), Paragraph(str(settings.get("club_nombre") or "Ikas-Txiki"), styles["Heading2"])]],
+        colWidths=[20 * mm, 154 * mm],
+    )
+    callup_header.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+    ]))
     story = [
-        Paragraph(str(settings.get("club_nombre") or "Ikas-Txiki"), styles["Heading2"]),
+        callup_header,
         Paragraph("CONVOCATORIA / DEIALDIA", title), Spacer(1, 4*mm),
         Paragraph(f"<b>Equipo / Taldea:</b> {html_lib.escape(str(team.get('nombre') or '—'))}", styles["BodyText"]),
         Paragraph(f"<b>Partido / Partida:</b> {html_lib.escape(str(match.get('rival') or '—'))}", styles["BodyText"]),
@@ -1290,7 +1300,7 @@ async def export_callup_pdf(callup_id: str):
         table_data.append([name, labels[normalize_status(item.get("estado"))], item.get("motivo") or "—"])
     table = Table(table_data, colWidths=[78*mm, 49*mm, 48*mm], repeatRows=1)
     table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0f766e")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(BRAND_TEAL)),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white), ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("GRID", (0, 0), (-1, -1), .4, colors.HexColor("#cbd5e1")),
         ("VALIGN", (0, 0), (-1, -1), "TOP"), ("FONTSIZE", (0, 0), (-1, -1), 8),
@@ -1432,20 +1442,16 @@ def build_authorization_pdf(auth: dict, player: dict, settings: dict, lang: str 
     normal = ParagraphStyle("AuthNormal", parent=styles["Normal"], fontName="Helvetica", fontSize=10, leading=15, textColor=colors.HexColor("#1f2937"))
     small = ParagraphStyle("AuthSmall", parent=normal, fontSize=8, leading=11, textColor=colors.HexColor("#6b7280"))
     title = ParagraphStyle("AuthTitle", parent=styles["Heading1"], fontName="Helvetica-Bold", fontSize=15, leading=19, alignment=TA_CENTER, spaceAfter=4, textColor=colors.HexColor("#111827"))
-    club_style = ParagraphStyle("AuthClub", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=17, leading=20, textColor=colors.HexColor("#102A43"))
+    club_style = ParagraphStyle("AuthClub", parent=styles["Heading2"], fontName="Helvetica-Bold", fontSize=17, leading=20, textColor=colors.HexColor(BRAND_BLUE))
     esc = lambda value, fallback="": html_lib.escape(str(value if value not in (None, "") else fallback))
 
     club_name = settings.get("club_nombre") or "Ikas-Txiki"
     club_lines = [esc(settings.get("club_direccion")), esc(settings.get("club_email")), esc(settings.get("club_telefono"))]
     club_info = " · ".join(value for value in club_lines if value)
     header_cells = []
-    logo = settings.get("club_logo") or ""
-    if isinstance(logo, str) and logo.startswith("data:image") and "," in logo:
-        try:
-            header_cells.append(PdfImage(io.BytesIO(base64.b64decode(logo.split(",", 1)[1])), width=18 * mm, height=18 * mm))
-        except Exception:
-            header_cells.append(Spacer(18 * mm, 18 * mm))
-    else:
+    try:
+        header_cells.append(pdf_logo(settings.get("club_logo"), 18))
+    except (OSError, ValueError):
         header_cells.append(Spacer(18 * mm, 18 * mm))
     header_cells.append(Paragraph(f"<b>{esc(club_name)}</b>{'<br/><font size=8>' + club_info + '</font>' if club_info else ''}", club_style))
     header = Table([header_cells], colWidths=[22 * mm, 150 * mm])
@@ -1456,7 +1462,7 @@ def build_authorization_pdf(auth: dict, player: dict, settings: dict, lang: str 
     type_label_eu = type_data.get("eu") or auth.get("tipo") or "Baimena"
     player_name = f"{player.get('nombre', '')} {player.get('apellidos', '')}".strip() or "________________"
     season = settings.get("temporada_actual") or "2025-2026"
-    story = [header, Spacer(1, 5 * mm), HRFlowable(width="100%", thickness=1.5, color=colors.HexColor("#102A43")), Spacer(1, 8 * mm)]
+    story = [header, Spacer(1, 5 * mm), HRFlowable(width="100%", thickness=1.5, color=colors.HexColor(BRAND_BLUE)), Spacer(1, 8 * mm)]
     story.extend([
         Paragraph(esc(type_label_es).upper(), title),
         Paragraph(esc(type_label_eu).upper(), ParagraphStyle("AuthTitleEu", parent=title, fontSize=12, leading=15)),
@@ -1481,7 +1487,7 @@ def build_authorization_pdf(auth: dict, player: dict, settings: dict, lang: str 
         f"<b>AUTORIZO:</b><br/>{esc(type_data.get('text_es'))}<br/><br/>"
         f"<b>BAIMENA EMATEN DUT:</b><br/>{esc(type_data.get('text_eu'))}", normal
     )]], colWidths=[168 * mm])
-    consent.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f3f4f6")), ("LINEBEFORE", (0, 0), (0, 0), 3, colors.HexColor("#102A43")), ("BOX", (0, 0), (-1, -1), 0.25, colors.HexColor("#e5e7eb")), ("LEFTPADDING", (0, 0), (-1, -1), 12), ("RIGHTPADDING", (0, 0), (-1, -1), 12), ("TOPPADDING", (0, 0), (-1, -1), 10), ("BOTTOMPADDING", (0, 0), (-1, -1), 10)]))
+    consent.setStyle(TableStyle([("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f3f4f6")), ("LINEBEFORE", (0, 0), (0, 0), 3, colors.HexColor(BRAND_BLUE)), ("BOX", (0, 0), (-1, -1), 0.25, colors.HexColor("#e5e7eb")), ("LEFTPADDING", (0, 0), (-1, -1), 12), ("RIGHTPADDING", (0, 0), (-1, -1), 12), ("TOPPADDING", (0, 0), (-1, -1), 10), ("BOTTOMPADDING", (0, 0), (-1, -1), 10)]))
     story.extend([consent, Spacer(1, 6 * mm)])
 
     if auth.get("tipo") == "recogida":
@@ -2506,7 +2512,16 @@ def attendance_export_pdf(summary: dict, lang: str) -> io.BytesIO:
     buffer = io.BytesIO()
     document = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm, topMargin=18 * mm)
     styles = getSampleStyleSheet()
-    story = [Paragraph(title + " / " + labels["eu" if lang == "es" else "es"][0], styles["Title"]), Spacer(1, 8 * mm)]
+    heading = Table(
+        [[pdf_logo(size_mm=16), Paragraph(title + " / " + labels["eu" if lang == "es" else "es"][0], styles["Title"])]],
+        colWidths=[20 * mm, 140 * mm],
+    )
+    heading.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    story = [heading, Spacer(1, 8 * mm)]
     story.append(Table([[period, f"{data.get('desde') or '—'} — {data.get('hasta') or '—'}"],
                         [present, data["presente"]], [justified, data["justificada"]],
                         [unjustified, data["injustificada"]], [injury, data["lesion"]], [percentage, f"{data['porcentaje_presencia']}%"]],

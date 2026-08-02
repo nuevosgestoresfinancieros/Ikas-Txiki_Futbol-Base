@@ -66,8 +66,8 @@ def test_pdf_is_vector_searchable_bilingual_and_handles_missing_values(report_id
                            datetime(2026, 7, 22, 12, 0, tzinfo=timezone.utc))
     assert content.startswith(b"%PDF-") and len(content) > 2000
     assert b"/Font" in content and b"/Subtype /Type1" in content
-    # No raster image object: ReportLab lays out the report as text and vector shapes.
-    assert b"/Subtype /Image" not in content
+    # The only raster element is the corporate logo; report content remains vector text.
+    assert b"/Subtype /Image" in content
     assert expected in ("Generado" if lang == "es" else "Sortua")
 
 

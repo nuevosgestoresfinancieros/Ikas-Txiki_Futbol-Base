@@ -63,6 +63,11 @@ def test_configured_email_is_sent_only_after_provider_success():
     result = dispatch_email("family@example.test", "Subject", "Body", env, FakeSMTP)
     assert result["status"] == "sent" and result["sent_at"]
     assert len(sent) == 1
+    assert sent[0].is_multipart()
+    rendered = sent[0].as_string()
+    assert "Ikas-Txiki Manager" in rendered
+    assert "Zornotzako Futbol Eskola" in rendered
+    assert "Content-ID: <ikastxiki-logo>" in rendered
 
 
 @pytest.mark.parametrize("role", ["coordinator", "coach", "family", "player"])

@@ -138,8 +138,8 @@ const AssistantPanel = ({ user }) => {
     <Sheet open={open} onOpenChange={handleOpenChange}>
         <SheetContent
           side="right"
+          closeLabel={t("close")}
           className="flex h-[100dvh] w-screen max-w-none flex-col gap-0 overflow-hidden p-0 sm:w-[min(100vw,30rem)]"
-          aria-describedby="assistant-description"
           aria-label={t("assistantTitle")}
         >
           <SheetHeader className="border-b bg-slate-50 p-5 text-left">
@@ -147,7 +147,7 @@ const AssistantPanel = ({ user }) => {
               <Bot className="h-5 w-5 text-primary" aria-hidden="true" />
               {t("assistantTitle")}
             </SheetTitle>
-            <SheetDescription id="assistant-description">{t("assistantDescription")}</SheetDescription>
+            <SheetDescription>{t("assistantDescription")}</SheetDescription>
             <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900" role="note">
               {t("assistantPrivacyWarning")}
             </div>
