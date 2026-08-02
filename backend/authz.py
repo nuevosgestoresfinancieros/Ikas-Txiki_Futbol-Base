@@ -14,6 +14,7 @@ RESOURCES = (
     "matches", "callups", "attendance", "payments", "authorizations",
     "inscriptions", "communications", "reports", "stats", "search",
     "equipment", "settings", "modalities", "data", "calendar", "portal", "notifications", "assistant",
+    "exercises",
 )
 
 
@@ -43,6 +44,7 @@ ROLE_PERMISSIONS: Dict[str, Dict[str, Set[str]]] = {
         "notifications": _actions("read", "edit"),
         "modalities": _actions("read"),
         "assistant": _actions("read", "create", "edit"),
+        "exercises": _actions("read", "create", "edit", "delete", "export"),
     },
     "coach": {
         "dashboard": _actions("read"),
@@ -61,6 +63,7 @@ ROLE_PERMISSIONS: Dict[str, Dict[str, Set[str]]] = {
         "notifications": _actions("read", "edit"),
         "modalities": _actions("read"),
         "assistant": _actions("read", "create", "edit"),
+        "exercises": _actions("read", "create", "edit", "delete", "export"),
     },
     "family": {
         "dashboard": _actions("read"),
@@ -113,6 +116,7 @@ PATH_RESOURCES = {
     "equipment": "equipment", "settings": "settings", "dashboard": "dashboard",
     "users": "users", "categories": "teams", "compute-category": "players", "calendar": "calendar", "portal": "portal", "notifications": "notifications", "modalities": "modalities",
     "inscription-imports": "data", "assistant": "assistant",
+    "exercises": "exercises", "training-templates": "exercises",
     "export-excel": "data", "import-excel": "data", "clear-all": "data",
     "seed-demo": "data",
 }
@@ -126,12 +130,30 @@ def public_user(user: Mapping[str, Any]) -> dict:
     return {
         "id": user.get("id"),
         "username": user.get("username"),
+        "first_name": user.get("first_name"),
+        "last_name": user.get("last_name"),
+        "email": user.get("email"),
+        "phone": user.get("phone"),
         "role": role,
         "active": bool(user.get("active", True)),
+        "account_status": user.get("account_status") or ("active" if user.get("active", True) else "deactivated"),
+        "system_account": bool(user.get("system_account", False)),
+        "read_only": bool(user.get("read_only", False)),
+        "system_label": user.get("system_label"),
         "assigned_team_ids": list(user.get("assigned_team_ids") or []),
+        "assigned_category_ids": list(user.get("assigned_category_ids") or []),
         "player_id": user.get("player_id"),
         "family_id": user.get("family_id"),
+        "linked_player_ids": list(user.get("linked_player_ids") or []),
         "last_access_at": user.get("last_access_at"),
+        "created_at": user.get("created_at"),
+        "updated_at": user.get("updated_at"),
+        "must_change_password": bool(user.get("must_change_password", False)),
+        "locked_until": user.get("locked_until"),
+        "invitation_status": user.get("invitation_status") or "none",
+        "invitation_expires_at": user.get("invitation_expires_at"),
+        "last_password_change_at": user.get("last_password_change_at"),
+        "sessions_revoked_at": user.get("sessions_revoked_at"),
         "language": user.get("language", "es"),
         "notification_preferences": dict(user.get("notification_preferences") or {}),
         "permissions": {
@@ -162,6 +184,10 @@ def route_permission(request: Request) -> tuple[str, str]:
         if "confirm" in parts or "cancel" in parts:
             return "assistant", "edit"
         return "assistant", "create" if method == "POST" else "read"
+    if first in {"exercises", "training-templates"} and any(part in {"archive", "restore"} for part in parts):
+        return "exercises", "edit"
+    if first == "exercises" and "duplicate" in parts:
+        return "exercises", "create"
     if first in {"clear-all", "seed-demo", "import-excel", "inscription-imports"}:
         return resource, "administer"
     if first == "export-excel" or "pdf" in parts or "signed-file" in parts or any(part.endswith((".pdf", ".xlsx", ".ics")) for part in parts):

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Form, Depends, Cookie, Response, Request
+from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Form, Depends, Cookie, Response, Request, Query
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.responses import StreamingResponse, FileResponse
 from dotenv import load_dotenv
@@ -13,11 +13,12 @@ import html as html_lib
 import json
 import logging
 import math
+import re
 import shutil
 import time
 from collections import defaultdict, deque
 from pathlib import Path
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import List, Optional, Dict, Any, Mapping
 import uuid
 import pandas as pd
@@ -29,6 +30,7 @@ from reportlab.lib.units import mm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, KeepTogether
 from datetime import datetime, timezone, date, timedelta
 from openpyxl import Workbook
+from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 from authz import (
@@ -60,7 +62,7 @@ from inscription_import_service import (
 )
 from import_staging_service import (
     ALLOWED_RECORD_FIELDS, audit_event, draft_summary, effective_records, expiry, field_is_valid,
-    prepare_records, public_draft, valid_iban as staging_valid_iban,
+    historical_readiness, prepare_records, public_draft, valid_iban as staging_valid_iban,
 )
 from historical_import_adapter import (
     HISTORICAL_FORMAT, historical_quality_summary, historical_simulation,
@@ -80,6 +82,23 @@ from assistant_knowledge import KNOWLEDGE_VERSION, available_modules
 from assistant_service import (
     ACTION_DEFINITIONS, ExternalAssistantProvider, ProposalStore, answer_help,
     public_proposal, session_fingerprint,
+)
+from user_admin_service import (
+    ACCOUNT_STATUSES, account_status, effective_scope, link_is_complete, normalized_key, normalized_text,
+    safe_audit_detail, security_state, status_is_active, user_search_text, validate_password_strength,
+)
+from communication_recipient_service import (
+    communication_record_active, consented_contacts, recipient_summary, usable_account,
+)
+from exercise_service import (
+    EXERCISE_CATEGORIES, EXERCISE_STATES, INTENSITIES, RATINGS, VISIBILITIES,
+    ExerciseValidationError, exercise_statistics, normalize_exercise,
+    normalize_planned_exercises, normalize_template, validate_exercise_update,
+)
+from user_security_service import (
+    INVITATION_TTL_HOURS, LOCK_DURATION_MINUTES, MAX_ACCOUNT_ATTEMPTS,
+    generate_temporary_password, invitation_status, issue_token, legacy_session_allowed,
+    parse_time, safe_security_audit, security_public, token_digest, token_is_usable, utcnow,
 )
 
 
@@ -105,8 +124,9 @@ if not ADMIN_USER or not ADMIN_PASSWORD or ADMIN_PASSWORD.lower() == "admin":
     raise RuntimeError("Configura ADMIN_USER y una ADMIN_PASSWORD segura en el entorno")
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-LOGIN_WINDOW_SECONDS = 10 * 60
-LOGIN_MAX_ATTEMPTS = 6
+LOGIN_WINDOW_SECONDS = max(60, int(os.environ.get("LOGIN_WINDOW_SECONDS", "600")))
+LOGIN_MAX_ATTEMPTS = max(3, min(20, int(os.environ.get("LOGIN_MAX_ATTEMPTS", "6"))))
+ACCOUNT_LOCK_MINUTES = max(1, min(1440, int(os.environ.get("ACCOUNT_LOCK_MINUTES", str(LOCK_DURATION_MINUTES)))))
 login_attempts = defaultdict(deque)
 assistant_attempts = defaultdict(deque)
 assistant_proposals = ProposalStore(int(os.environ.get("ASSISTANT_PROPOSAL_TTL_SECONDS", "600")))
@@ -119,16 +139,36 @@ ASSISTANT_RATE_MAX_REQUESTS = 30
 
 def create_access_token(data: dict) -> str:
     expire = datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRE_HOURS)
-    return jwt.encode({**data, "exp": expire}, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return jwt.encode({**data, "iat": datetime.now(timezone.utc), "exp": expire}, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 async def load_user(username: str) -> Optional[dict]:
     if username == ADMIN_USER:
         return {
             "id": "environment-admin", "username": username, "role": "admin",
             "active": True, "assigned_team_ids": [], "language": "es",
-            "notification_preferences": {},
+            "notification_preferences": {}, "account_status": "active",
+            "system_account": True, "read_only": True,
         }
     return await db["users"].find_one({"username": username}, {"_id": 0, "password_hash": 0})
+
+
+async def record_security_event(event_type: str, user: Optional[Mapping[str, Any]], action: str,
+                                reason: str, *, aggregate: Optional[dict] = None) -> None:
+    """Best-effort security audit containing no target or contact data."""
+    try:
+        await db.internal_events.insert_one({
+            "id": str(uuid.uuid4()),
+            "type": event_type,
+            "actor_user_id": (user or {}).get("id"),
+            "actor_role": (user or {}).get("role"),
+            "action": action,
+            "result": "denied" if event_type.endswith(".denied") else "filtered",
+            "reason": reason,
+            "aggregate": {str(key): int(value) for key, value in (aggregate or {}).items()},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception:
+        logging.getLogger(__name__).warning("Security audit event could not be persisted: %s", event_type)
 
 
 async def get_current_user(request: Request):
@@ -141,8 +181,20 @@ async def get_current_user(request: Request):
         if not username:
             raise HTTPException(status_code=401, detail="Token inválido")
         user = await load_user(username)
-        if not user or not user.get("active", True):
+        if not user:
+            raise HTTPException(status_code=403, detail="Usuario sin acceso")
+        if not user.get("active", True) or not status_is_active(account_status(user)):
+            await record_security_event("security.authentication.denied", user, "authenticated_request", "account_inactive")
             raise HTTPException(status_code=403, detail="Usuario inactivo o sin acceso")
+        locked_until = parse_time(user.get("locked_until"))
+        if locked_until and locked_until > utcnow():
+            await record_security_event("security.authentication.denied", user, "authenticated_request", "account_locked")
+            raise HTTPException(status_code=403, detail="Usuario inactivo o sin acceso")
+        if not user.get("system_account") and not legacy_session_allowed(payload, user):
+            await record_security_event("security.authentication.denied", user, "authenticated_request", "session_revoked")
+            raise HTTPException(status_code=401, detail="Sesión revocada")
+        if payload.get("purpose") == "password_change":
+            raise HTTPException(status_code=403, detail="Debes cambiar la contraseña")
         request.state.current_user = user
         current_user_context.set(user)
         return user
@@ -171,15 +223,34 @@ async def login(request: Request, response: Response, data: Dict[str, Any]):
     # También buscar en colección users de MongoDB
     if not valid_user:
         db_user = await db["users"].find_one({"username": username})
-        if db_user and db_user.get("active", True) and pwd_context.verify(password, db_user.get("password_hash", "")):
+        if db_user and db_user.get("active", True) and status_is_active(account_status(db_user)) and pwd_context.verify(password, db_user.get("password_hash", "")):
             valid_user = True
+    locked_until = parse_time(db_user.get("locked_until")) if db_user else None
+    if locked_until and locked_until > utcnow():
+        raise HTTPException(status_code=429, detail="Acceso bloqueado temporalmente")
     if not valid_user:
         attempts.append(now)
+        if db_user:
+            updated = await db.users.find_one_and_update(
+                {"id": db_user["id"]}, {"$inc": {"failed_login_count": 1},
+                "$set": {"last_failed_login_at": now_iso()}}, return_document=ReturnDocument.AFTER,
+            )
+            if int((updated or {}).get("failed_login_count", 0)) >= MAX_ACCOUNT_ATTEMPTS:
+                await db.users.update_one({"id": db_user["id"], "locked_until": {"$in": [None, ""]}},
+                                          {"$set": {"locked_until": (utcnow() + timedelta(minutes=ACCOUNT_LOCK_MINUTES)).isoformat()}})
         raise HTTPException(status_code=401, detail="Usuario o contraseña incorrectos")
     login_attempts.pop(attempt_key, None)
     if db_user:
-        await db["users"].update_one({"id": db_user["id"]}, {"$set": {"last_access_at": now_iso()}})
-    token = create_access_token({"sub": username})
+        await db["users"].update_one({"id": db_user["id"]}, {"$set": {
+            "last_access_at": now_iso(), "failed_login_count": 0, "locked_until": None,
+        }})
+    if db_user and db_user.get("must_change_password"):
+        change_token = create_access_token({
+            "sub": username, "purpose": "password_change", "ver": int(db_user.get("session_version", 0)),
+        })
+        return {"ok": False, "requires_password_change": True, "password_change_token": change_token}
+    token = create_access_token({"sub": username, "sid": str(uuid.uuid4()),
+                                 "ver": int((db_user or {}).get("session_version", 0))})
     response.set_cookie(
         key="ikastxiki_session",
         value=token,
@@ -202,6 +273,101 @@ async def logout(response: Response):
 @app.get("/api/auth/me")
 async def me(current_user: dict = Depends(get_current_user)):
     return public_user(current_user)
+
+
+class PasswordChangeRequest(BaseModel):
+    token: str
+    password: str
+    password_confirmation: str
+
+
+class RecoveryRequest(BaseModel):
+    identifier: str
+
+
+class TokenPasswordRequest(BaseModel):
+    token: str
+    password: str
+    password_confirmation: str
+
+
+async def consume_password_token(kind: str, request: TokenPasswordRequest) -> dict:
+    if request.password != request.password_confirmation:
+        raise HTTPException(status_code=422, detail="Las contraseñas no coinciden")
+    validate_password_strength(request.password)
+    digest = token_digest(request.token, JWT_SECRET)
+    field = "invitation" if kind == "invitation" else "recovery"
+    user = await db.users.find_one({f"{field}.digest": digest})
+    record = (user or {}).get(field)
+    if not user or not token_is_usable(record):
+        raise HTTPException(status_code=400, detail="Enlace inválido o caducado")
+    moment = now_iso()
+    result = await db.users.update_one({
+        "id": user["id"], f"{field}.digest": digest, f"{field}.used_at": None,
+        f"{field}.cancelled_at": None, f"{field}.expires_at": {"$gt": moment},
+    }, {"$set": {
+        "password_hash": pwd_context.hash(request.password), "must_change_password": False,
+        "account_status": "active", "active": True, f"{field}.used_at": moment,
+        "last_password_change_at": moment, "sessions_revoked_at": moment,
+    }, "$inc": {"session_version": 1}})
+    if not result.modified_count:
+        raise HTTPException(status_code=400, detail="Enlace inválido, caducado o ya utilizado")
+    await record_user_audit(f"{kind}_completed", user, [])
+    return {"ok": True}
+
+
+@app.post("/api/auth/change-temporary-password")
+async def change_temporary_password(request: PasswordChangeRequest):
+    if request.password != request.password_confirmation:
+        raise HTTPException(status_code=422, detail="Las contraseñas no coinciden")
+    validate_password_strength(request.password)
+    try:
+        payload = jwt.decode(request.token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except JWTError:
+        raise HTTPException(status_code=400, detail="Enlace inválido o caducado")
+    if payload.get("purpose") != "password_change":
+        raise HTTPException(status_code=400, detail="Token no válido")
+    user = await db.users.find_one({"username": payload.get("sub")})
+    if not user or not user.get("must_change_password") or not legacy_session_allowed(payload, user):
+        raise HTTPException(status_code=400, detail="Token ya utilizado o no válido")
+    moment = now_iso()
+    result = await db.users.update_one({
+        "id": user["id"], "must_change_password": True,
+        "session_version": int(user.get("session_version", 0)),
+    }, {"$set": {
+        "password_hash": pwd_context.hash(request.password), "must_change_password": False,
+        "last_password_change_at": moment, "sessions_revoked_at": moment,
+    }, "$inc": {"session_version": 1}})
+    if not result.modified_count:
+        raise HTTPException(status_code=400, detail="Token ya utilizado o no válido")
+    await record_user_audit("temporary_password_changed", user, [])
+    return {"ok": True}
+
+
+@app.post("/api/auth/activate")
+async def activate_invitation(request: TokenPasswordRequest):
+    return await consume_password_token("invitation", request)
+
+
+@app.post("/api/auth/recovery/request")
+async def request_recovery(request: RecoveryRequest):
+    identifier = normalized_key(request.identifier)
+    user = await db.users.find_one({"$or": [
+        {"username_normalized": identifier}, {"email_normalized": identifier},
+        {"username": request.identifier.strip()},
+    ]})
+    if user and user.get("active", True) and status_is_active(account_status(user)):
+        plain, record = issue_token(JWT_SECRET)
+        await db.users.update_one({"id": user["id"]}, {"$set": {"recovery": record}})
+        await record_user_audit("recovery_requested", user, [])
+        if os.environ.get("SECURITY_TEST_MODE") == "1":
+            return {"ok": True, "message": "Si la cuenta existe, recibirá instrucciones", "test_token": plain}
+    return {"ok": True, "message": "Si la cuenta existe, recibirá instrucciones"}
+
+
+@app.post("/api/auth/recovery/reset")
+async def reset_recovery_password(request: TokenPasswordRequest):
+    return await consume_password_token("recovery", request)
 
 
 @app.get("/api/public/branding")
@@ -491,14 +657,21 @@ class NotificationPreferences(BaseModel):
 
 class UserCreate(BaseModel):
     username: str
-    password: str
+    password: Optional[str] = None
+    password_confirmation: Optional[str] = None
+    first_name: str
+    last_name: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
     role: str
-    active: bool = True
+    account_status: str = "active"
     assigned_team_ids: List[str] = Field(default_factory=list)
+    assigned_category_ids: List[str] = Field(default_factory=list)
     player_id: Optional[str] = None
     family_id: Optional[str] = None
     language: str = "es"
     notification_preferences: NotificationPreferences = Field(default_factory=NotificationPreferences)
+    access_method: str = "password"
 
     @field_validator("username")
     @classmethod
@@ -510,9 +683,45 @@ class UserCreate(BaseModel):
 
     @field_validator("password")
     @classmethod
-    def validate_password(cls, value: str):
-        if len(value) < 12:
-            raise ValueError("La contraseña debe tener al menos 12 caracteres")
+    def validate_password(cls, value: Optional[str]):
+        return validate_password_strength(value) if value else None
+
+    @model_validator(mode="after")
+    def validate_access_credentials(self):
+        if self.access_method == "password":
+            if not self.password or self.password != self.password_confirmation:
+                raise ValueError("Las contraseñas no coinciden")
+        return self
+
+    @field_validator("first_name", "last_name")
+    @classmethod
+    def validate_identity(cls, value: str):
+        value = normalized_text(value)
+        if len(value) < 2:
+            raise ValueError("Nombre y apellidos son obligatorios")
+        return value
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: Optional[str]):
+        value = normalized_key(value)
+        if value and ("@" not in value or value.startswith("@") or value.endswith("@")):
+            raise ValueError("Correo no válido")
+        return value or None
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, value: Optional[str]):
+        value = normalized_text(value)
+        if value and (len(value) < 7 or len(value) > 24 or not re.fullmatch(r"[+() 0-9.-]+", value)):
+            raise ValueError("Teléfono no válido")
+        return value or None
+
+    @field_validator("access_method")
+    @classmethod
+    def validate_access_method(cls, value: str):
+        if value not in {"password", "temporary_password", "invitation", "pending"}:
+            raise ValueError("Método de acceso no válido")
         return value
 
     @field_validator("role")
@@ -529,10 +738,23 @@ class UserCreate(BaseModel):
             raise ValueError("Idioma no válido")
         return value
 
+    @field_validator("account_status")
+    @classmethod
+    def validate_status(cls, value: str):
+        if value not in ACCOUNT_STATUSES:
+            raise ValueError("Estado de cuenta no válido")
+        return value
+
 
 class UserUpdate(BaseModel):
-    active: Optional[bool] = None
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    role: Optional[str] = None
+    account_status: Optional[str] = None
     assigned_team_ids: Optional[List[str]] = None
+    assigned_category_ids: Optional[List[str]] = None
     player_id: Optional[str] = None
     family_id: Optional[str] = None
     language: Optional[str] = None
@@ -545,15 +767,133 @@ class UserUpdate(BaseModel):
             raise ValueError("Idioma no válido")
         return value
 
+    @field_validator("role")
+    @classmethod
+    def validate_update_role(cls, value: Optional[str]):
+        if value is not None and value not in ROLES:
+            raise ValueError("Rol no válido")
+        return value
 
-def validate_user_relationships(data: dict) -> None:
+    @field_validator("account_status")
+    @classmethod
+    def validate_update_status(cls, value: Optional[str]):
+        if value is not None and value not in ACCOUNT_STATUSES:
+            raise ValueError("Estado de cuenta no válido")
+        return value
+
+    @field_validator("first_name", "last_name")
+    @classmethod
+    def validate_update_identity(cls, value: Optional[str]):
+        if value is not None and len(normalized_text(value)) < 2:
+            raise ValueError("Nombre y apellidos no válidos")
+        return normalized_text(value) if value is not None else None
+
+    @field_validator("email")
+    @classmethod
+    def validate_update_email(cls, value: Optional[str]):
+        value = normalized_key(value)
+        if value and ("@" not in value or value.startswith("@") or value.endswith("@")):
+            raise ValueError("Correo no válido")
+        return value or None
+
+    @field_validator("phone")
+    @classmethod
+    def validate_update_phone(cls, value: Optional[str]):
+        value = normalized_text(value)
+        if value and (len(value) < 7 or len(value) > 24 or not re.fullmatch(r"[+() 0-9.-]+", value)):
+            raise ValueError("Teléfono no válido")
+        return value or None
+
+
+async def validate_user_relationships(data: dict) -> dict:
     role = data.get("role")
-    if role == "player" and not data.get("player_id"):
+    allow_incomplete = data.get("account_status") in {"pending_activation", "incomplete_link", "deactivated"}
+    team_ids = sorted(set(ids(data.get("assigned_team_ids") or [])))
+    category_ids = sorted(set(ids(data.get("assigned_category_ids") or [])))
+    if any(normalized_key(value) == "no aplica" for value in [*team_ids, *category_ids]):
+        raise HTTPException(status_code=422, detail="NO APLICA no es una vinculación válida")
+    if role == "admin":
+        team_ids, category_ids = [], []
+        data["player_id"], data["family_id"], data["linked_player_ids"] = None, None, []
+    if role == "player" and not data.get("player_id") and not allow_incomplete:
         raise HTTPException(status_code=422, detail="El rol jugador requiere un jugador asociado")
-    if role == "family" and not data.get("family_id"):
+    if role == "family" and not data.get("family_id") and not allow_incomplete:
         raise HTTPException(status_code=422, detail="El rol familia requiere una familia asociada")
-    if role in {"coordinator", "coach"} and not data.get("assigned_team_ids"):
+    if role in {"coordinator", "coach"} and not team_ids and not allow_incomplete:
         raise HTTPException(status_code=422, detail="El rol requiere al menos un equipo asignado")
+    if role in {"coordinator", "coach"}:
+        found = set(ids(await db.teams.distinct("id", {"id": {"$in": team_ids}})))
+        if found != set(team_ids):
+            raise HTTPException(status_code=422, detail="Uno o varios equipos no existen")
+    if role == "coordinator" and category_ids:
+        known_categories = set(ids(await db.teams.distinct("categoria")))
+        if not set(category_ids).issubset(known_categories):
+            raise HTTPException(status_code=422, detail="Una o varias categorías no existen")
+        compatible = set(ids(await db.teams.distinct("id", {
+            "id": {"$in": team_ids}, "categoria": {"$in": category_ids},
+        })))
+        if compatible != set(team_ids):
+            raise HTTPException(status_code=422, detail="Hay equipos incompatibles con las categorías asignadas")
+    if role == "family" and data.get("family_id"):
+        family = await db.families.find_one({"id": data.get("family_id")}, {"_id": 0, "id": 1})
+        if not family:
+            raise HTTPException(status_code=422, detail="La familia asociada no existe")
+        data["linked_player_ids"] = ids(await db.players.distinct("id", {"familia_id": data["family_id"]}))
+        data["player_id"], team_ids, category_ids = None, [], []
+    if role == "player" and data.get("player_id"):
+        player = await db.players.find_one({"id": data.get("player_id")}, {"_id": 0, "id": 1})
+        if not player:
+            raise HTTPException(status_code=422, detail="El jugador asociado no existe")
+        data["family_id"], data["linked_player_ids"], team_ids, category_ids = None, [], [], []
+    if role not in {"family", "player"}:
+        data["linked_player_ids"] = []
+    if role != "admin" and not link_is_complete({**data, "assigned_team_ids": team_ids,
+                                                   "assigned_category_ids": category_ids}):
+        data["account_status"], data["active"] = "incomplete_link", False
+    data["assigned_team_ids"] = team_ids
+    data["assigned_category_ids"] = category_ids
+    return data
+
+
+async def record_user_audit(action: str, target: dict, changed_fields: list[str] | None = None,
+                            previous: dict | None = None) -> None:
+    actor = current_user_context.get() or {}
+    await db.internal_events.insert_one({
+        "id": new_id(), "type": f"user.{action}", "actor_user_id": actor.get("id"),
+        "actor_role": actor.get("role"), "target_user_id": target.get("id"),
+        "detail": safe_audit_detail(action, changed_fields, previous, target), "created_at": now_iso(),
+    })
+
+
+def system_admin_public() -> dict:
+    return public_user({
+        "id": "environment-admin", "username": None, "first_name": "Administrador del sistema",
+        "last_name": "", "role": "admin", "active": True, "account_status": "active",
+        "system_account": True, "read_only": True,
+        "system_label": "Configurado en el servidor", "language": "es",
+    })
+
+
+def secured_public_user(user: dict) -> dict:
+    return {**public_user(user), **security_public(user),
+            "security_state": security_state(user), "link_complete": link_is_complete(user)}
+
+
+async def ensure_admin_protection(existing: dict, candidate: dict) -> None:
+    actor = current_user_context.get() or {}
+    removing_admin = existing.get("role") == "admin" and (
+        candidate.get("role") != "admin" or not status_is_active(account_status(candidate))
+    )
+    same_actor = actor.get("id") == existing.get("id") or actor.get("username") == existing.get("username")
+    if removing_admin and same_actor:
+        raise HTTPException(status_code=409, detail="No puedes retirar tu propio acceso administrativo")
+    if removing_admin:
+        others = await db.users.count_documents({
+            "id": {"$ne": existing.get("id")}, "role": "admin", "active": {"$ne": False},
+            "account_status": {"$nin": ["suspended", "deactivated"]},
+        })
+        if others == 0:
+            raise HTTPException(status_code=409, detail="No se puede retirar al último administrador persistente")
 
 
 @api_router.get("/users/permissions")
@@ -567,55 +907,305 @@ async def get_permission_matrix():
 @api_router.post("/users")
 async def create_user(user: UserCreate):
     data = user.model_dump()
-    validate_user_relationships(data)
-    if data["username"] == ADMIN_USER or await db.users.find_one({"username": data["username"]}):
+    data.pop("password_confirmation")
+    access_method = data.pop("access_method", "password")
+    if access_method in {"invitation", "pending"}:
+        data["account_status"], data["active"] = "pending_activation", False
+    data["username"] = normalized_text(data["username"])
+    data["username_normalized"] = normalized_key(data["username"])
+    data["email_normalized"] = normalized_key(data.get("email")) or None
+    data = await validate_user_relationships(data)
+    if data["username"] == ADMIN_USER or await db.users.find_one({"username_normalized": data["username_normalized"]}):
         raise HTTPException(status_code=409, detail="El nombre de usuario ya existe")
-    password = data.pop("password")
+    if data.get("email_normalized") and await db.users.find_one({"email_normalized": data["email_normalized"]}):
+        raise HTTPException(status_code=409, detail="El correo ya está asociado a otra cuenta")
+    password = data.pop("password") or generate_temporary_password()
+    must_change = access_method == "temporary_password"
     data.update({
         "id": new_id(), "password_hash": pwd_context.hash(password),
+        "active": status_is_active(data["account_status"]),
+        "must_change_password": must_change, "session_version": 0,
+        "failed_login_count": 0, "locked_until": None,
         "created_at": now_iso(), "updated_at": now_iso(), "last_access_at": None,
     })
     data["notification_preferences"] = dict(data["notification_preferences"])
     await db.users.insert_one(dict(data))
-    return public_user(data)
+    await record_user_audit("created", data, list(data.keys()))
+    response = secured_public_user(data)
+    if access_method == "temporary_password":
+        response.update({"temporary_password": password, "show_once": True})
+    elif access_method == "invitation":
+        plain, record = issue_token(JWT_SECRET, ttl_minutes=0, ttl_hours=INVITATION_TTL_HOURS)
+        await db.users.update_one({"id": data["id"]}, {"$set": {"invitation": record}})
+        response.update({"invitation_token": plain, "expires_at": record["expires_at"], "show_once": True, "delivery": "not_sent"})
+    return response
 
 
 @api_router.get("/users")
-async def get_users():
-    users = await db.users.find({}, {"_id": 0, "password_hash": 0}).sort("username", 1).to_list(5000)
-    return [public_user(user) for user in users]
+async def get_users(
+    page: Optional[int] = Query(default=None, ge=1), page_size: int = Query(default=25, ge=1, le=100),
+    search: str = "", role: str = "", status: str = "", team_id: str = "",
+    last_access: str = "", sort_by: str = "username", sort_dir: str = "asc",
+):
+    users = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(5000)
+    public = [system_admin_public(), *[secured_public_user(user) for user in users]]
+    if page is None:
+        return sorted(public, key=lambda item: normalized_key(item.get("username") or item.get("first_name")))
+    counters = {
+        "total": len(public),
+        "active": sum(account_status(user) == "active" for user in public),
+        "pending": sum(account_status(user) == "pending_activation" for user in public),
+        "blocked": sum(security_state(user) == "locked" for user in public),
+        "deactivated": sum(account_status(user) == "deactivated" for user in public),
+        "incomplete": sum(not link_is_complete(user) for user in public),
+    }
+    if role:
+        public = [user for user in public if user.get("role") == role]
+    if status:
+        public = [user for user in public if account_status(user) == status or security_state(user) == status]
+    if team_id:
+        public = [user for user in public if team_id in (user.get("assigned_team_ids") or [])]
+    if search:
+        needle = normalized_key(search)
+        public = [user for user in public if needle in user_search_text(user)]
+    if last_access == "never":
+        public = [user for user in public if not user.get("last_access_at")]
+    elif last_access in {"7d", "30d", "90d"}:
+        cutoff = utcnow() - timedelta(days=int(last_access[:-1]))
+        public = [user for user in public if parse_time(user.get("last_access_at")) and parse_time(user.get("last_access_at")) >= cutoff]
+    allowed_sort = {"username", "first_name", "role", "account_status", "last_access_at"}
+    sort_key = sort_by if sort_by in allowed_sort else "username"
+    public.sort(key=lambda item: normalized_key(item.get(sort_key)), reverse=sort_dir == "desc")
+    start = (page - 1) * page_size
+    return {"items": public[start:start + page_size], "total": len(public), "page": page,
+            "page_size": page_size, "pages": max(1, math.ceil(len(public) / page_size)), "counters": counters}
+
+
+@api_router.get("/users/options")
+async def get_user_administration_options():
+    teams = await db.teams.find({}, {"_id": 0, "id": 1, "nombre": 1, "categoria": 1, "modalidad": 1, "temporada": 1, "estado": 1}).to_list(1000)
+    usable_teams = [team for team in teams if normalized_key(team.get("nombre")) not in {"", "no aplica"}
+                    and normalized_key(team.get("estado") or "activo") not in {"inactivo", "archivado", "cerrado"}]
+    players = await db.players.find({}, {"_id": 0, "id": 1, "nombre": 1, "apellidos": 1, "familia_id": 1, "equipo_id": 1}).to_list(5000)
+    families = await db.families.find({}, {"_id": 0, "id": 1, "progenitor1_nombre": 1, "contacto_principal": 1}).to_list(5000)
+    return {"teams": usable_teams, "players": players, "families": families}
+
+
+@api_router.get("/users/{user_id}/effective-permissions")
+async def get_effective_permissions(user_id: str):
+    if user_id == "environment-admin":
+        user = {"id": user_id, "role": "admin", "active": True, "system_account": True}
+    else:
+        user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="No encontrado")
+    role = user.get("role", "player")
+    return {
+        "role": role,
+        "permissions": {resource: sorted(actions) for resource, actions in ROLE_PERMISSIONS.get(role, {}).items()},
+        "scope": effective_scope(user),
+    }
+
+
+@api_router.get("/users/{user_id}/administration-profile")
+async def get_user_administration_profile(user_id: str):
+    if user_id == "environment-admin":
+        system = system_admin_public()
+        return {"user": {**system, "security_state": "verified", "link_complete": True},
+                "permissions": {resource: sorted(actions) for resource, actions in ROLE_PERMISSIONS["admin"].items()},
+                "scope": effective_scope(system), "activity": [], "sessions": {"individual_tracking": False},
+                "communications": {"count": 0}, "read_only": True}
+    user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0, "invitation": 0,
+                                                         "recovery": 0, "previous_invitation": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="No encontrado")
+    events = await db.internal_events.find(
+        {"target_user_id": user_id}, {"_id": 0, "id": 1, "type": 1, "actor_user_id": 1,
+                                      "actor_role": 1, "detail": 1, "created_at": 1},
+    ).sort("created_at", -1).to_list(100)
+    communication_count = await db.communications.count_documents({"$or": [
+        {"recipient_user_id": user_id}, {"recipient_username": user.get("username")},
+    ]})
+    role = user.get("role", "player")
+    return {"user": secured_public_user(user),
+            "permissions": {resource: sorted(actions) for resource, actions in ROLE_PERMISSIONS.get(role, {}).items()},
+            "scope": effective_scope(user), "activity": events,
+            "sessions": {"individual_tracking": False, "sessions_revoked_at": user.get("sessions_revoked_at")},
+            "communications": {"count": communication_count}, "read_only": False}
 
 
 @api_router.get("/users/{user_id}")
 async def get_user(user_id: str):
+    if user_id == "environment-admin":
+        return system_admin_public()
     user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
     if not user:
         raise HTTPException(status_code=404, detail="No encontrado")
-    return public_user(user)
+    return secured_public_user(user)
 
 
 @api_router.put("/users/{user_id}")
 async def edit_user(user_id: str, changes: UserUpdate):
+    if user_id == "environment-admin":
+        raise HTTPException(status_code=403, detail="La cuenta del sistema es de solo lectura")
     existing = await db.users.find_one({"id": user_id}, {"_id": 0})
     if not existing:
         raise HTTPException(status_code=404, detail="No encontrado")
     data = changes.model_dump(exclude_unset=True)
     if data.get("notification_preferences") is not None:
         data["notification_preferences"] = dict(data["notification_preferences"])
-    candidate = {**existing, **data}
-    validate_user_relationships(candidate)
+    if "email" in data:
+        data["email_normalized"] = normalized_key(data.get("email")) or None
+        if data["email_normalized"] and await db.users.find_one({
+            "id": {"$ne": user_id}, "email_normalized": data["email_normalized"],
+        }):
+            raise HTTPException(status_code=409, detail="El correo ya está asociado a otra cuenta")
+    candidate = await validate_user_relationships({**existing, **data})
+    if "account_status" in data:
+        candidate["active"] = status_is_active(candidate["account_status"])
+    await ensure_admin_protection(existing, candidate)
+    data = {key: value for key, value in candidate.items() if existing.get(key) != value and key not in {"_id", "password_hash"}}
+    if "account_status" in data:
+        data["active"] = status_is_active(data["account_status"])
     data["updated_at"] = now_iso()
     await db.users.update_one({"id": user_id}, {"$set": data})
-    return public_user(candidate)
+    changed = set(data)
+    if "role" in changed:
+        audit_action = "role_changed"
+    elif changed & {"assigned_team_ids", "assigned_category_ids", "player_id", "family_id", "linked_player_ids"}:
+        audit_action = "scope_changed"
+    elif "account_status" in changed:
+        audit_action = {
+            "active": "activated", "suspended": "suspended", "deactivated": "deactivated",
+            "pending_activation": "activation_pending", "incomplete_link": "link_incomplete",
+        }.get(candidate.get("account_status"), "status_changed")
+    else:
+        audit_action = "updated"
+    await record_user_audit(audit_action, candidate, list(data.keys()), existing)
+    return secured_public_user(candidate)
 
 
 @api_router.delete("/users/{user_id}")
 async def deactivate_user(user_id: str):
-    result = await db.users.update_one(
-        {"id": user_id}, {"$set": {"active": False, "updated_at": now_iso()}}
-    )
-    if not result.matched_count:
+    if user_id == "environment-admin":
+        raise HTTPException(status_code=403, detail="La cuenta del sistema es de solo lectura")
+    existing = await db.users.find_one({"id": user_id}, {"_id": 0})
+    if not existing:
         raise HTTPException(status_code=404, detail="No encontrado")
+    candidate = {**existing, "active": False, "account_status": "deactivated"}
+    await ensure_admin_protection(existing, candidate)
+    await db.users.update_one({"id": user_id}, {"$set": {
+        "active": False, "account_status": "deactivated", "updated_at": now_iso(),
+    }})
+    await record_user_audit("deactivated", candidate, ["active", "account_status"], existing)
+    return {"ok": True}
+
+
+security_attempts = defaultdict(deque)
+
+
+def enforce_sensitive_rate(actor: dict, action: str, maximum: int = 10) -> None:
+    key = f"{actor.get('id')}:{action}"
+    current = time.monotonic()
+    bucket = security_attempts[key]
+    while bucket and current - bucket[0] > 60:
+        bucket.popleft()
+    if len(bucket) >= maximum:
+        raise HTTPException(status_code=429, detail="Demasiadas operaciones. Inténtalo más tarde")
+    bucket.append(current)
+
+
+async def mutable_security_user(user_id: str) -> dict:
+    if user_id == "environment-admin":
+        raise HTTPException(status_code=403, detail="La cuenta del sistema es de solo lectura")
+    user = await db.users.find_one({"id": user_id}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="No encontrado")
+    return user
+
+
+@api_router.get("/users/{user_id}/security")
+async def get_user_security(user_id: str):
+    if user_id == "environment-admin":
+        return {**security_public({}), "system_account": True, "read_only": True}
+    return security_public(await mutable_security_user(user_id))
+
+
+@api_router.post("/users/{user_id}/security/temporary-password")
+async def generate_user_temporary_password(user_id: str):
+    actor = current_user_context.get() or {}
+    enforce_sensitive_rate(actor, "temporary-password")
+    user = await mutable_security_user(user_id)
+    temporary = generate_temporary_password()
+    moment = now_iso()
+    await db.users.update_one({"id": user_id}, {"$set": {
+        "password_hash": pwd_context.hash(temporary), "must_change_password": True,
+        "last_password_change_at": moment, "sessions_revoked_at": moment,
+    }, "$inc": {"session_version": 1}})
+    await record_user_audit("temporary_password_generated", user, [])
+    return {"ok": True, "temporary_password": temporary, "show_once": True}
+
+
+@api_router.post("/users/{user_id}/security/invitation")
+async def generate_user_invitation(user_id: str):
+    actor = current_user_context.get() or {}
+    enforce_sensitive_rate(actor, "invitation")
+    user = await mutable_security_user(user_id)
+    plain, record = issue_token(JWT_SECRET, ttl_minutes=0, ttl_hours=INVITATION_TTL_HOURS)
+    previous = user.get("invitation") or {}
+    if previous and not previous.get("used_at"):
+        previous = {**previous, "cancelled_at": now_iso()}
+    await db.users.update_one({"id": user_id}, {"$set": {
+        "invitation": record, "previous_invitation": previous or None,
+        "account_status": "pending_activation", "active": False,
+    }})
+    await record_user_audit("invitation_generated", user, [])
+    return {"ok": True, "invitation_token": plain, "expires_at": record["expires_at"],
+            "show_once": True, "delivery": "not_sent"}
+
+
+@api_router.delete("/users/{user_id}/security/invitation")
+async def cancel_user_invitation(user_id: str):
+    user = await mutable_security_user(user_id)
+    if not user.get("invitation"):
+        raise HTTPException(status_code=409, detail="No existe una invitación activa")
+    await db.users.update_one({"id": user_id}, {"$set": {"invitation.cancelled_at": now_iso()}})
+    await record_user_audit("invitation_cancelled", user, [])
+    return {"ok": True}
+
+
+@api_router.post("/users/{user_id}/security/revoke-sessions")
+async def revoke_user_sessions(user_id: str):
+    actor = current_user_context.get() or {}
+    user = await mutable_security_user(user_id)
+    if actor.get("id") == user_id:
+        raise HTTPException(status_code=409, detail="No puedes revocar accidentalmente tu propia sesión")
+    moment = now_iso()
+    await db.users.update_one({"id": user_id}, {"$set": {"sessions_revoked_at": moment},
+                                                   "$inc": {"session_version": 1}})
+    await record_user_audit("sessions_revoked", user, [])
+    return {"ok": True}
+
+
+@api_router.post("/users/{user_id}/security/lock")
+async def lock_user_access(user_id: str):
+    actor = current_user_context.get() or {}
+    user = await mutable_security_user(user_id)
+    candidate = {**user, "account_status": "suspended", "active": False}
+    await ensure_admin_protection(user, candidate)
+    if actor.get("id") == user_id:
+        raise HTTPException(status_code=409, detail="No puedes bloquear tu propia cuenta")
+    until = (utcnow() + timedelta(minutes=ACCOUNT_LOCK_MINUTES)).isoformat()
+    await db.users.update_one({"id": user_id}, {"$set": {"locked_until": until}})
+    await record_user_audit("locked", user, [])
+    return {"ok": True, "locked_until": until}
+
+
+@api_router.post("/users/{user_id}/security/unlock")
+async def unlock_user_access(user_id: str):
+    user = await mutable_security_user(user_id)
+    await db.users.update_one({"id": user_id}, {"$set": {"locked_until": None, "failed_login_count": 0}})
+    await record_user_audit("unlocked", user, [])
     return {"ok": True}
 
 
@@ -781,8 +1371,15 @@ class Team(BaseModel):
     segundo_entrenador: Optional[str] = None
     delegado: Optional[str] = None
     dias_entrenamiento: Optional[str] = None
+    # Los campos de texto históricos siguen siendo la fuente compatible para
+    # clientes anteriores. Los campos estructurados se añaden de forma
+    # opcional, sin migrar ni modificar los equipos ya existentes.
+    dias_entrenamiento_lista: Optional[list[str]] = None
     horario: Optional[str] = None
+    hora_inicio: Optional[str] = None
+    hora_fin: Optional[str] = None
     campo: Optional[str] = None
+    direccion_campo: Optional[str] = None
     limite_jugadores: Optional[int] = 20
     estado: str = "activo"  # activo, cerrado, pendiente
 
@@ -1767,7 +2364,9 @@ def _clean_doc(document: Optional[dict]) -> Optional[dict]:
 
 
 def _build_import_operations(analysis: dict, existing: dict, job_id: str,
-                             decisions: Dict[str, str]) -> list[dict]:
+                             decisions: Dict[str, str], *, allow_pending_team: bool = False,
+                             keep_family_candidates_separate: bool = False,
+                             skip_payments: bool = False) -> list[dict]:
     now = now_iso()
     maps = {name: {str(doc.get("id")): _clean_doc(doc) for doc in existing[name]} for name in IMPORT_COLLECTIONS}
     team_by_name = {normalize_key(doc.get("nombre")): doc for doc in maps["teams"].values()}
@@ -1807,8 +2406,10 @@ def _build_import_operations(analysis: dict, existing: dict, job_id: str,
             continue
         row = result["record"]
         team_key = normalize_key(row.get("equipo"))
-        team = team_by_name.get(team_key)
-        if not team:
+        team = maps["teams"].get(str(row.get("equipo_id"))) if row.get("equipo_id") else None
+        if not team and team_key and not allow_pending_team:
+            team = team_by_name.get(team_key)
+        if not team and not allow_pending_team:
             team = {
                 "id": new_id(), "nombre": row["equipo"], "categoria": row["categoria"],
                 "modalidad": row["modalidad"], "temporada": analysis["season"],
@@ -1818,6 +2419,10 @@ def _build_import_operations(analysis: dict, existing: dict, job_id: str,
             schedule("teams", None, team); team_by_name[team_key] = team
 
         fkey = family_key(row)
+        if keep_family_candidates_separate and row.get("_family_candidate_pending"):
+            # Possible sibling links are a review suggestion, never a reason to
+            # silently merge two households during the initial historical load.
+            fkey = f"{fkey}:staging:{row.get('_staging_id') or row.get('_row')}"
         family = family_by_key.get(fkey)
         family_before = family
         if family:
@@ -1839,7 +2444,7 @@ def _build_import_operations(analysis: dict, existing: dict, job_id: str,
             if item.casefold() not in {value.casefold() for value in current_equipment}:
                 current_equipment.append(item)
         player.update({
-            "equipo_id": team["id"], "familia_id": family["id"], "equipamiento_items": current_equipment,
+            "equipo_id": team["id"] if team else None, "familia_id": family["id"], "equipamiento_items": current_equipment,
             "import_identity_key": pkey, "import_job_id": job_id, "updated_at": now,
         })
         player.setdefault("estado", "pendiente_documentacion")
@@ -1853,7 +2458,7 @@ def _build_import_operations(analysis: dict, existing: dict, job_id: str,
         inscription_before = inscription
         inscription = merge_nonempty(inscription or {"id": new_id(), "created_at": now}, row, inscription_fields)
         inscription.update({
-            "temporada": analysis["season"], "equipo_id": team["id"], "familia_id": family["id"],
+            "temporada": analysis["season"], "equipo_id": team["id"] if team else None, "familia_id": family["id"],
             "player_id": player["id"], "modalidad": row["modalidad"], "import_identity_key": pkey,
             "import_job_id": job_id, "estado": inscription.get("estado", "recibida"), "updated_at": now,
         })
@@ -1862,7 +2467,7 @@ def _build_import_operations(analysis: dict, existing: dict, job_id: str,
         inscription_by_key[ikey] = inscription
 
         protected_bank = row.get("_bank") or {}
-        if row.get("iban") or protected_bank.get("iban_encrypted"):
+        if not skip_payments and (row.get("iban") or protected_bank.get("iban_encrypted")):
             pay_key = (player["id"], analysis["season"])
             payment = payment_by_key.get(pay_key)
             payment_before = payment
@@ -2097,6 +2702,27 @@ async def get_import_staging_simulation(draft_id: str):
             "summary": draft_summary(draft)}
 
 
+@api_router.post("/inscription-imports/staging/{draft_id}/historical-readiness")
+async def apply_historical_readiness(draft_id: str):
+    """Persist deterministic readiness rules for an authenticated admin draft."""
+    draft = await _staging_doc(draft_id)
+    if draft.get("source_format") != HISTORICAL_FORMAT:
+        raise HTTPException(status_code=409, detail="El borrador no utiliza el adaptador histórico")
+    if draft.get("status") != "draft":
+        raise HTTPException(status_code=409, detail="Solo se puede preparar un borrador activo")
+    try:
+        prepared, result = historical_readiness(draft)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    now = datetime.now(timezone.utc)
+    await db.import_staging.update_one({"id": draft_id}, {"$set": {
+        "records": prepared["records"], "incidents": prepared["incidents"],
+        "historical_readiness": prepared["historical_readiness"], "updated_at": now,
+        "expires_at": expiry(_staging_ttl_hours()),
+    }, "$push": {"audit": audit_event(_staging_actor(), "historical_readiness_applied", result)}})
+    return public_draft(await _staging_doc(draft_id))
+
+
 def _existing_category(value: Any) -> Optional[str]:
     requested = str(value or "").strip()
     return next((item["name"] for item in CATEGORIES if item["name"] == requested), None)
@@ -2312,7 +2938,7 @@ async def resolve_staging_duplicate(draft_id: str, group_id: str, request: Stagi
 @api_router.post("/inscription-imports/staging/{draft_id}/reviews/{kind}/{group_id}")
 async def resolve_historical_review(draft_id: str, kind: str, group_id: str, request: StagingHistoricalReview):
     config = {
-        "fuzzy": ("fuzzy_matches", {"same_person", "different_people"}),
+        "fuzzy": ("fuzzy_matches", {"same_person", "different_people", "leave_pending"}),
         "family": ("family_candidates", {"confirm_shared", "keep_separate"}),
     }
     if kind not in config or request.decision not in config.get(kind, (None, set()))[1]:
@@ -2385,15 +3011,22 @@ async def confirm_import_staging(draft_id: str, request: StagingConfirmRequest):
     if request.confirmed is not True:
         raise HTTPException(status_code=422, detail="La importación requiere confirmación expresa")
     draft = await _staging_doc(draft_id)
-    if draft.get("source_format") == HISTORICAL_FORMAT:
-        raise HTTPException(status_code=409, detail="La base histórica está habilitada únicamente para simulación")
     summary = draft_summary(draft)
     if not summary["can_import"]:
         raise HTTPException(status_code=409, detail="El borrador mantiene bloqueos pendientes")
+    historical = draft.get("source_format") == HISTORICAL_FORMAT
+    family_candidate_ids = {
+        record_id for group in draft.get("family_candidates", []) if not group.get("decision")
+        for record_id in (group.get("record_ids") or [])
+    }
     rows = []
     for record in effective_records(draft):
         row = {key: value for key, value in record.items() if key in ALLOWED_RECORD_FIELDS}
         row["_row"] = record.get("source_row")
+        if historical:
+            row["_staging_id"] = record.get("id")
+            row["equipo_id"] = record.get("equipo_id")
+            row["_family_candidate_pending"] = record.get("id") in family_candidate_ids
         if record.get("identity_override"):
             row["external_id"] = record["identity_override"]
         bank = record.get("bank") or {}
@@ -2401,12 +3034,19 @@ async def confirm_import_staging(draft_id: str, request: StagingConfirmRequest):
             row["_bank"] = {"iban_encrypted": bank.get("iban_encrypted"), "iban_last4": bank.get("iban_last4")}
         rows.append(row)
     existing = await _import_existing()
-    analysis = analyze_rows(rows, draft["season"], existing, draft["source_sha256"], False)
+    analysis = analyze_rows(
+        rows, draft["season"], existing, draft["source_sha256"], False,
+        allow_pending_team=historical, allow_pending_contact=historical,
+        ignore_team_name_suggestions=historical,
+    )
     if analysis["blocking_errors"] or analysis["unresolved_conflicts"]:
         raise HTTPException(status_code=409, detail="La validación final ha detectado bloqueos")
     lock_id = f"{draft['season']}:{draft['source_sha256']}"
     job_id = new_id()
-    operations = _build_import_operations(analysis, existing, job_id, {})
+    operations = _build_import_operations(
+        analysis, existing, job_id, {}, allow_pending_team=historical,
+        keep_family_candidates_separate=historical, skip_payments=historical,
+    )
     try:
         await db.import_locks.insert_one({"_id": lock_id, "job_id": job_id, "created_at": now_iso()})
     except DuplicateKeyError as exc:
@@ -2426,6 +3066,360 @@ async def confirm_import_staging(draft_id: str, request: StagingConfirmRequest):
         await db.inscription_import_jobs.update_one({"id": job_id}, {"$set": {"status": "failed", "updated_at": now_iso()}})
         raise HTTPException(status_code=500, detail="La importación fue revertida sin cambios parciales") from exc
     return {"ok": True, "job_id": job_id, "status": "applied", "operations": len(operations)}
+
+
+# ================= EXERCISE LIBRARY =================
+EXERCISE_PUBLIC_FIELDS = {
+    "_id": 0, "id": 1, "name": 1, "category": 1, "objective": 1, "description": 1,
+    "instructions": 1, "recommended_duration": 1, "min_players": 1, "max_players": 1,
+    "materials": 1, "intensity": 1, "recommended_space": 1, "safety_notes": 1,
+    "image_url": 1, "author_id": 1, "author_name": 1, "team_ids": 1, "visibility": 1,
+    "status": 1, "created_at": 1, "updated_at": 1, "usage_count": 1,
+}
+TEMPLATE_PUBLIC_FIELDS = {
+    "_id": 0, "id": 1, "name": 1, "description": 1, "team_ids": 1, "visibility": 1,
+    "status": 1, "planned_exercises": 1, "author_id": 1, "author_name": 1,
+    "created_at": 1, "updated_at": 1,
+}
+
+
+class ExercisePayload(BaseModel):
+    name: Optional[str] = None
+    category: Optional[str] = None
+    objective: Optional[str] = None
+    description: Optional[str] = None
+    instructions: List[str] = []
+    recommended_duration: Optional[int] = None
+    min_players: Optional[int] = None
+    max_players: Optional[int] = None
+    materials: List[str] = []
+    intensity: Optional[str] = "medium"
+    recommended_space: Optional[str] = None
+    safety_notes: Optional[str] = None
+    image_url: Optional[str] = None
+    team_ids: List[str] = []
+    visibility: str = "private"
+    status: Optional[str] = None
+
+
+class PlannedExercisePayload(BaseModel):
+    exercise_id: str
+    planned_duration: Optional[int] = None
+    completed: Optional[bool] = None
+    actual_duration: Optional[int] = None
+    rating: Optional[str] = None
+    observation: Optional[str] = None
+    not_completed_reason: Optional[str] = None
+
+
+class TrainingTemplatePayload(BaseModel):
+    name: str
+    description: Optional[str] = None
+    team_ids: List[str] = []
+    visibility: str = "private"
+    status: str = "active"
+    planned_exercises: List[PlannedExercisePayload] = []
+
+
+def exercise_scope_query(actor: dict) -> dict:
+    if actor.get("role") == "admin":
+        return {}
+    team_ids = ids(actor.get("assigned_team_ids") or [])
+    return {"$or": [
+        {"visibility": "club"},
+        {"author_id": actor.get("id")},
+        {"visibility": "teams", "team_ids": {"$in": team_ids}},
+    ]}
+
+
+async def validate_exercise_teams(team_ids: list[str], actor: dict) -> None:
+    if not team_ids:
+        return
+    found = await db.teams.count_documents({"id": {"$in": team_ids}})
+    if found != len(set(team_ids)):
+        raise HTTPException(status_code=422, detail="Uno de los equipos no existe")
+    if actor.get("role") != "admin":
+        allowed = set(ids(actor.get("assigned_team_ids") or []))
+        if not set(team_ids).issubset(allowed):
+            raise HTTPException(status_code=403, detail="Uno de los equipos queda fuera de tu ámbito")
+
+
+def can_manage_exercise(actor: dict, exercise: dict) -> bool:
+    if actor.get("role") == "admin":
+        return True
+    if exercise.get("author_id") == actor.get("id"):
+        return True
+    return bool(set(ids(exercise.get("team_ids") or [])) & set(ids(actor.get("assigned_team_ids") or [])))
+
+
+async def exercise_doc(identifier: str, *, manage: bool = False) -> dict:
+    actor = current_user_context.get() or {}
+    document = await db.exercises.find_one({"id": identifier}, EXERCISE_PUBLIC_FIELDS)
+    if not document:
+        raise HTTPException(status_code=404, detail="Ejercicio no encontrado")
+    visible = actor.get("role") == "admin" or bool(await db.exercises.find_one(
+        merge_query({"id": identifier}, exercise_scope_query(actor)), {"_id": 0, "id": 1},
+    ))
+    if not visible or (manage and not can_manage_exercise(actor, document)):
+        raise HTTPException(status_code=403, detail="El ejercicio no pertenece a tu ámbito")
+    return clean(document)
+
+
+async def record_exercise_audit(action: str, identifier: str, detail: Optional[dict] = None) -> None:
+    actor = current_user_context.get() or {}
+    await db.internal_events.insert_one({
+        "id": new_id(), "type": f"exercise.{action}", "exercise_id": identifier,
+        "actor_id": actor.get("id"), "actor_role": actor.get("role"),
+        "detail": detail or {}, "created_at": now_iso(),
+    })
+
+
+@api_router.get("/exercises/meta")
+async def exercise_meta():
+    return {
+        "categories": EXERCISE_CATEGORIES, "intensities": INTENSITIES,
+        "visibilities": VISIBILITIES, "states": EXERCISE_STATES, "ratings": RATINGS,
+    }
+
+
+@api_router.get("/exercises")
+async def list_exercises(
+    search: str = "", category: Optional[str] = None, objective: Optional[str] = None,
+    team_id: Optional[str] = None, author_id: Optional[str] = None,
+    status: str = "active", visibility: Optional[str] = None,
+    sort: str = "name", page: int = Query(1, ge=1), page_size: int = Query(25, ge=1, le=100),
+):
+    actor = current_user_context.get() or {}
+    clauses = [exercise_scope_query(actor)]
+    if search.strip():
+        clauses.append({"$or": [
+            {"name": {"$regex": re.escape(search.strip()), "$options": "i"}},
+            {"objective": {"$regex": re.escape(search.strip()), "$options": "i"}},
+            {"description": {"$regex": re.escape(search.strip()), "$options": "i"}},
+        ]})
+    for field, value in (("category", category), ("objective", objective), ("author_id", author_id),
+                         ("status", status), ("visibility", visibility)):
+        if value and value != "all":
+            clauses.append({field: value})
+    if team_id:
+        if actor.get("role") != "admin" and team_id not in ids(actor.get("assigned_team_ids") or []):
+            raise HTTPException(status_code=403, detail="El equipo no pertenece a tu ámbito")
+        clauses.append({"team_ids": team_id})
+    query = {"$and": clauses}
+    order = {
+        "name": ("name", 1), "category": ("category", 1),
+        "created_at": ("created_at", -1), "usage": ("usage_count", -1),
+    }.get(sort, ("name", 1))
+    total = await db.exercises.count_documents(query)
+    rows = await db.exercises.find(query, EXERCISE_PUBLIC_FIELDS).sort(*order).skip(
+        (page - 1) * page_size
+    ).limit(page_size).to_list(page_size)
+    return {"items": [clean(row) for row in rows], "page": page, "page_size": page_size, "total": total}
+
+
+@api_router.post("/exercises")
+async def create_exercise(payload: ExercisePayload):
+    actor = current_user_context.get() or {}
+    try:
+        values = normalize_exercise(payload.model_dump())
+    except ExerciseValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if values["visibility"] == "club" and actor.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Solo administración puede publicar para todo el club")
+    await validate_exercise_teams(values["team_ids"], actor)
+    identifier = new_id()
+    now = now_iso()
+    document = {
+        "id": identifier, **values, "status": "active", "author_id": actor.get("id"),
+        "author_name": actor.get("username"), "usage_count": 0,
+        "created_at": now, "updated_at": now,
+    }
+    await db.exercises.insert_one(document)
+    await record_exercise_audit("created", identifier)
+    return clean(document)
+
+
+@api_router.get("/exercises/statistics")
+async def get_exercise_statistics():
+    actor = current_user_context.get() or {}
+    exercises = await db.exercises.find(exercise_scope_query(actor), EXERCISE_PUBLIC_FIELDS).to_list(5000)
+    trainings = await list_docs("trainings")
+    return exercise_statistics(exercises, trainings)
+
+
+@api_router.get("/exercises/{exercise_id}")
+async def get_exercise(exercise_id: str):
+    return await exercise_doc(exercise_id)
+
+
+@api_router.put("/exercises/{exercise_id}")
+async def update_exercise(exercise_id: str, payload: ExercisePayload):
+    actor = current_user_context.get() or {}
+    existing = await exercise_doc(exercise_id, manage=True)
+    try:
+        values = normalize_exercise(payload.model_dump(exclude_unset=True), partial=True)
+    except ExerciseValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        validate_exercise_update(existing, values)
+    except ExerciseValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    visibility = values.get("visibility", existing.get("visibility"))
+    if visibility == "club" and actor.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Solo administración puede publicar para todo el club")
+    team_ids = values.get("team_ids", existing.get("team_ids") or [])
+    await validate_exercise_teams(team_ids, actor)
+    values["updated_at"] = now_iso()
+    updated = await db.exercises.find_one_and_update(
+        {"id": exercise_id}, {"$set": values}, return_document=ReturnDocument.AFTER,
+        projection=EXERCISE_PUBLIC_FIELDS,
+    )
+    await record_exercise_audit("updated", exercise_id, {"fields": sorted(values)})
+    return clean(updated)
+
+
+@api_router.post("/exercises/{exercise_id}/duplicate")
+async def duplicate_exercise(exercise_id: str):
+    source = await exercise_doc(exercise_id)
+    actor = current_user_context.get() or {}
+    values = {key: source.get(key) for key in (
+        "name", "category", "objective", "description", "instructions", "recommended_duration",
+        "min_players", "max_players", "materials", "intensity", "recommended_space",
+        "safety_notes", "image_url", "team_ids", "visibility",
+    )}
+    if values["visibility"] == "club" and actor.get("role") != "admin":
+        values["visibility"] = "private"; values["team_ids"] = []
+    values["name"] = f"{values['name']} (copia)"
+    return await create_exercise(ExercisePayload(**values))
+
+
+@api_router.post("/exercises/{exercise_id}/archive")
+async def archive_exercise(exercise_id: str):
+    await exercise_doc(exercise_id, manage=True)
+    updated = await db.exercises.find_one_and_update(
+        {"id": exercise_id}, {"$set": {"status": "archived", "updated_at": now_iso()}},
+        return_document=ReturnDocument.AFTER, projection=EXERCISE_PUBLIC_FIELDS,
+    )
+    await record_exercise_audit("archived", exercise_id)
+    return clean(updated)
+
+
+@api_router.post("/exercises/{exercise_id}/restore")
+async def restore_exercise(exercise_id: str):
+    await exercise_doc(exercise_id, manage=True)
+    updated = await db.exercises.find_one_and_update(
+        {"id": exercise_id}, {"$set": {"status": "active", "updated_at": now_iso()}},
+        return_document=ReturnDocument.AFTER, projection=EXERCISE_PUBLIC_FIELDS,
+    )
+    await record_exercise_audit("restored", exercise_id)
+    return clean(updated)
+
+
+async def template_doc(identifier: str, *, manage: bool = False) -> dict:
+    actor = current_user_context.get() or {}
+    query = exercise_scope_query(actor)
+    document = await db.training_templates.find_one(
+        merge_query({"id": identifier}, query), TEMPLATE_PUBLIC_FIELDS,
+    )
+    if not document:
+        raise HTTPException(status_code=404, detail="Plantilla no encontrada")
+    document = clean(document)
+    if manage and not can_manage_exercise(actor, document):
+        raise HTTPException(status_code=403, detail="La plantilla no pertenece a tu ámbito")
+    return document
+
+
+@api_router.get("/training-templates")
+async def list_training_templates(status: str = "active"):
+    actor = current_user_context.get() or {}
+    query = merge_query({"status": status}, exercise_scope_query(actor))
+    rows = await db.training_templates.find(query, TEMPLATE_PUBLIC_FIELDS).sort("name", 1).to_list(1000)
+    return [clean(row) for row in rows]
+
+
+async def accessible_exercise_map(identifiers: list[str]) -> dict[str, dict]:
+    actor = current_user_context.get() or {}
+    rows = await db.exercises.find(
+        merge_query({"id": {"$in": identifiers}}, exercise_scope_query(actor)),
+        EXERCISE_PUBLIC_FIELDS,
+    ).to_list(100)
+    return {row["id"]: clean(row) for row in rows}
+
+
+def validate_exercises_for_training(exercises: dict[str, dict], identifiers: list[str], team_id: Optional[str]) -> None:
+    for identifier in identifiers:
+        exercise = exercises.get(identifier)
+        if not exercise:
+            raise HTTPException(status_code=422, detail="Uno de los ejercicios no está disponible")
+        if exercise.get("visibility") == "teams" and team_id not in ids(exercise.get("team_ids") or []):
+            raise HTTPException(status_code=403, detail="Uno de los ejercicios no pertenece al equipo del entrenamiento")
+
+
+async def validate_training_template_reference(template_id: Optional[str]) -> None:
+    if template_id:
+        await template_doc(template_id)
+
+
+@api_router.post("/training-templates")
+async def create_training_template(payload: TrainingTemplatePayload):
+    actor = current_user_context.get() or {}
+    raw = payload.model_dump()
+    exercises = await accessible_exercise_map([row["exercise_id"] for row in raw["planned_exercises"]])
+    try:
+        values = normalize_template(raw, exercises)
+    except ExerciseValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if values["visibility"] == "club" and actor.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Solo administración puede publicar para todo el club")
+    await validate_exercise_teams(values["team_ids"], actor)
+    now = now_iso()
+    document = {
+        "id": new_id(), **values, "author_id": actor.get("id"),
+        "author_name": actor.get("username"), "created_at": now, "updated_at": now,
+    }
+    await db.training_templates.insert_one(document)
+    return clean(document)
+
+
+@api_router.put("/training-templates/{template_id}")
+async def update_training_template(template_id: str, payload: TrainingTemplatePayload):
+    existing = await template_doc(template_id, manage=True)
+    actor = current_user_context.get() or {}
+    raw = payload.model_dump()
+    exercises = await accessible_exercise_map([row["exercise_id"] for row in raw["planned_exercises"]])
+    try:
+        values = normalize_template(raw, exercises)
+    except ExerciseValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if values["visibility"] == "club" and actor.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Solo administración puede publicar para todo el club")
+    await validate_exercise_teams(values["team_ids"], actor)
+    values["updated_at"] = now_iso()
+    updated = await db.training_templates.find_one_and_update(
+        {"id": existing["id"]}, {"$set": values}, return_document=ReturnDocument.AFTER,
+        projection=TEMPLATE_PUBLIC_FIELDS,
+    )
+    return clean(updated)
+
+
+@api_router.post("/training-templates/{template_id}/archive")
+async def archive_training_template(template_id: str):
+    await template_doc(template_id, manage=True)
+    updated = await db.training_templates.find_one_and_update(
+        {"id": template_id}, {"$set": {"status": "archived", "updated_at": now_iso()}},
+        return_document=ReturnDocument.AFTER, projection=TEMPLATE_PUBLIC_FIELDS,
+    )
+    return clean(updated)
+
+
+@api_router.post("/training-templates/{template_id}/restore")
+async def restore_training_template(template_id: str):
+    await template_doc(template_id, manage=True)
+    updated = await db.training_templates.find_one_and_update(
+        {"id": template_id}, {"$set": {"status": "active", "updated_at": now_iso()}},
+        return_document=ReturnDocument.AFTER, projection=TEMPLATE_PUBLIC_FIELDS,
+    )
+    return clean(updated)
 
 
 # ================= TRAININGS =================
@@ -2449,6 +3443,8 @@ class Training(BaseModel):
     campo: Optional[str] = None
     asistencia: List[AsistenciaItem] = []
     ejercicios: Optional[str] = None
+    planned_exercises: List[PlannedExercisePayload] = []
+    session_template_id: Optional[str] = None
     observaciones: Optional[str] = None
     callup_id: Optional[str] = None
 
@@ -2557,9 +3553,22 @@ async def export_attendance_excel(desde: Optional[str] = None, hasta: Optional[s
 @api_router.post("/trainings")
 async def create_training(tr: Training):
     payload = tr.model_dump()
+    exercise_ids = [row["exercise_id"] for row in payload.get("planned_exercises") or []]
+    exercises = await accessible_exercise_map(exercise_ids)
+    validate_exercises_for_training(exercises, exercise_ids, payload.get("equipo_id"))
+    await validate_training_template_reference(payload.get("session_template_id"))
+    try:
+        payload["planned_exercises"] = normalize_planned_exercises(payload.get("planned_exercises"), exercises)
+    except ExerciseValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     payload["attendance_history"] = []
     payload["attendance_updated_by"] = None
-    return await insert_doc("trainings", payload)
+    created = await insert_doc("trainings", payload)
+    if exercise_ids:
+        await db.exercises.update_many({"id": {"$in": exercise_ids}}, {"$inc": {"usage_count": 1}})
+        for identifier in exercise_ids:
+            await record_exercise_audit("assigned", identifier, {"training_id": created["id"]})
+    return created
 
 
 @api_router.get("/trainings")
@@ -2589,12 +3598,31 @@ async def get_training(tr_id: str):
 async def edit_training(tr_id: str, tr: Training):
     existing = await get_doc("trainings", tr_id)
     payload = tr.model_dump()
+    exercise_ids = [row["exercise_id"] for row in payload.get("planned_exercises") or []]
+    exercises = await accessible_exercise_map(exercise_ids)
+    validate_exercises_for_training(exercises, exercise_ids, payload.get("equipo_id"))
+    if payload.get("session_template_id") != existing.get("session_template_id"):
+        await validate_training_template_reference(payload.get("session_template_id"))
+    existing_ids = {row.get("exercise_id") for row in existing.get("planned_exercises") or []}
+    if any(exercises.get(identifier, {}).get("status") != "active" for identifier in set(exercise_ids) - existing_ids):
+        raise HTTPException(status_code=422, detail="No se puede añadir un ejercicio archivado")
+    try:
+        payload["planned_exercises"] = normalize_planned_exercises(
+            payload.get("planned_exercises"), exercises, allow_archived_existing=True,
+        )
+    except ExerciseValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     actor = current_user_context.get() or {}
     changes = attendance_history(existing.get("asistencia", []), payload.get("asistencia", []), actor)
     payload["attendance_history"] = [*(existing.get("attendance_history") or []), *changes]
     if changes:
         payload["attendance_updated_by"] = {"id": actor.get("id"), "role": actor.get("role"), "at": now_iso()}
     updated = await update_doc("trainings", tr_id, payload)
+    added_ids = set(exercise_ids) - existing_ids
+    if added_ids:
+        await db.exercises.update_many({"id": {"$in": list(added_ids)}}, {"$inc": {"usage_count": 1}})
+        for identifier in added_ids:
+            await record_exercise_audit("assigned", identifier, {"training_id": tr_id})
     schedule_changed = any(existing.get(field) != updated.get(field) for field in ("fecha", "hora", "campo"))
     if schedule_changed:
         users = await users_for_team_players(updated.get("equipo_id"))
@@ -2607,6 +3635,42 @@ async def edit_training(tr_id: str, tr: Training):
 @api_router.delete("/trainings/{tr_id}")
 async def remove_training(tr_id: str):
     return await delete_doc("trainings", tr_id)
+
+
+@api_router.post("/trainings/{tr_id}/duplicate")
+async def duplicate_training(tr_id: str, data: Dict[str, Any]):
+    source = await get_doc("trainings", tr_id)
+    payload = {
+        "fecha": data.get("fecha"), "hora": data.get("hora", source.get("hora")),
+        "equipo_id": data.get("equipo_id", source.get("equipo_id")),
+        "campo": data.get("campo", source.get("campo")), "asistencia": [],
+        "ejercicios": source.get("ejercicios"),
+        "planned_exercises": [
+            {**row, "completed": None, "actual_duration": None, "rating": None,
+             "observation": None, "not_completed_reason": None}
+            for row in source.get("planned_exercises") or []
+        ],
+        "session_template_id": source.get("session_template_id"),
+        "observaciones": data.get("observaciones"), "callup_id": None,
+    }
+    model = Training(**payload)
+    duplicate_payload = model.model_dump()
+    exercise_ids = [row["exercise_id"] for row in duplicate_payload.get("planned_exercises") or []]
+    exercises = await accessible_exercise_map(exercise_ids)
+    validate_exercises_for_training(exercises, exercise_ids, duplicate_payload.get("equipo_id"))
+    await validate_training_template_reference(duplicate_payload.get("session_template_id"))
+    try:
+        duplicate_payload["planned_exercises"] = normalize_planned_exercises(
+            duplicate_payload["planned_exercises"], exercises, allow_archived_existing=True,
+        )
+    except ExerciseValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    duplicate_payload["attendance_history"] = []
+    duplicate_payload["attendance_updated_by"] = None
+    created = await insert_doc("trainings", duplicate_payload)
+    if exercise_ids:
+        await db.exercises.update_many({"id": {"$in": exercise_ids}}, {"$inc": {"usage_count": 1}})
+    return created
 
 
 # ================= STATS =================
@@ -2762,6 +3826,13 @@ class Communication(BaseModel):
             raise ValueError("Canal no válido")
         return value
 
+    @field_validator("destinatario_tipo")
+    @classmethod
+    def validate_recipient_type(cls, value: str):
+        if value not in {"equipo", "categoria", "individual"}:
+            raise ValueError("Destinatario no válido")
+        return value
+
     @field_validator("prioridad")
     @classmethod
     def validate_priority(cls, value: str):
@@ -2770,9 +3841,67 @@ class Communication(BaseModel):
         return value
 
 
-async def communication_targets(data: dict) -> tuple[list[dict], list[str]]:
+async def validate_communication_scope(data: Mapping[str, Any], user: Optional[Mapping[str, Any]] = None) -> None:
+    """Validate a target using only the authenticated user's effective scope."""
+    user = user or current_user_context.get() or {}
+    target_type = data.get("destinatario_tipo")
+    target_id = str(data.get("destinatario_id") or "").strip()
+    if target_type not in {"equipo", "categoria", "individual"} or not target_id:
+        raise HTTPException(status_code=422, detail="No se ha podido resolver el destinatario")
+    if user.get("role") == "admin":
+        return
+    if user.get("role") not in {"coordinator", "coach"}:
+        await record_security_event(
+            "security.communication_scope.denied", user, "communication_recipients", "permission_denied",
+        )
+        raise HTTPException(status_code=403, detail="No tienes permiso para consultar estos destinatarios")
+
+    team_ids = set(ids(user.get("assigned_team_ids") or []))
+    allowed = False
+    if target_type == "equipo":
+        allowed = target_id in team_ids
+    elif target_type == "categoria":
+        own_categories = {
+            normalized_key(value) for value in await db.teams.distinct(
+                "categoria", {"id": {"$in": list(team_ids)}},
+            ) if value
+        } if team_ids else set()
+        if normalized_key(target_id) in own_categories:
+            category_team_ids = set(ids(await db.teams.distinct("id", {"categoria": target_id})))
+            allowed = bool(category_team_ids) and category_team_ids.issubset(team_ids)
+    elif target_type == "individual":
+        player_ids = set(await user_player_ids(dict(user)))
+        if target_id in player_ids:
+            allowed = True
+        elif player_ids:
+            family_ids = set(ids(await db.players.distinct(
+                "familia_id", {"id": {"$in": list(player_ids)}},
+            )))
+            allowed = target_id in family_ids
+    if not allowed:
+        await record_security_event(
+            "security.communication_scope.denied", user, "communication_recipients", "outside_scope",
+        )
+        raise HTTPException(status_code=403, detail="No tienes permiso para consultar estos destinatarios")
+
+
+def _contact_candidates(document: Mapping[str, Any], channel: str) -> list[dict]:
+    fields = {
+        "email": ("email", "email_formulario", "progenitor1_email", "progenitor2_email"),
+        "sms": ("phone", "progenitor1_telefono", "progenitor2_telefono"),
+        "whatsapp": ("phone", "progenitor1_telefono", "progenitor2_telefono"),
+    }.get(channel, ())
+    return [{**dict(document), "value": document.get(field)} for field in fields if document.get(field)]
+
+
+async def communication_targets(data: dict, user: Optional[Mapping[str, Any]] = None,
+                                *, validate_scope: bool = True
+                                ) -> tuple[list[dict], list[str], dict[str, int]]:
+    if validate_scope:
+        await validate_communication_scope(data, user)
     target_type = data.get("destinatario_tipo")
     target_id = data.get("destinatario_id")
+    channel = data.get("canal") or "email"
     team_ids: list[str] = []
     player_ids: list[str] = []
     family_ids: list[str] = []
@@ -2789,21 +3918,118 @@ async def communication_targets(data: dict) -> tuple[list[dict], list[str]]:
             family_ids = [target_id]
     if player_ids:
         family_ids = sorted(set(family_ids + ids(await db.players.distinct("familia_id", {"id": {"$in": player_ids}}))))
-    users = await notification_users(team_ids, player_ids, family_ids)
-    emails = set()
-    async for player in db.players.find({"id": {"$in": player_ids}}, {"_id": 0, "email_formulario": 1, "progenitor1_email": 1, "progenitor2_email": 1}):
-        emails.update(value for value in (player.get("email_formulario"), player.get("progenitor1_email"), player.get("progenitor2_email")) if value)
-    async for family in db.families.find({"id": {"$in": family_ids}}, {"_id": 0, "progenitor1_email": 1, "progenitor2_email": 1}):
-        emails.update(value for value in (family.get("progenitor1_email"), family.get("progenitor2_email")) if value)
-    return users, sorted(emails)
+    users_all = await notification_users(team_ids, player_ids, family_ids)
+    users = [candidate for candidate in users_all if usable_account(candidate)[0]]
+    contacts: list[dict] = []
+    for user_row in users:
+        user_contacts = _contact_candidates(user_row, channel)
+        if (user_row.get("notification_preferences") or {}).get(channel, True) is False:
+            for candidate in user_contacts:
+                candidate["communication_consents"] = {
+                    **(candidate.get("communication_consents") or {}), channel: "no",
+                }
+        contacts.extend(user_contacts)
+    eligibility_exclusions: dict[str, int] = defaultdict(int)
+    player_projection = {
+        "_id": 0, "active": 1, "estado": 1, "account_status": 1,
+        "email_formulario": 1, "progenitor1_email": 1, "progenitor2_email": 1,
+        "progenitor1_telefono": 1, "progenitor2_telefono": 1,
+        "communication_consents": 1, "consents": 1, "historical.consents": 1,
+    }
+    async for player in db.players.find({"id": {"$in": player_ids}}, player_projection):
+        player_contacts = _contact_candidates(player, channel)
+        if communication_record_active(player):
+            contacts.extend(player_contacts)
+        elif player_contacts:
+            eligibility_exclusions["recipient_inactive"] += 1
+    family_projection = {
+        "_id": 0, "active": 1, "estado": 1, "account_status": 1,
+        "progenitor1_email": 1, "progenitor2_email": 1,
+        "progenitor1_telefono": 1, "progenitor2_telefono": 1,
+        "communication_consents": 1, "consents": 1, "historical.consents": 1,
+    }
+    async for family in db.families.find({"id": {"$in": family_ids}}, family_projection):
+        family_contacts = _contact_candidates(family, channel)
+        if communication_record_active(family):
+            contacts.extend(family_contacts)
+        elif family_contacts:
+            eligibility_exclusions["recipient_inactive"] += 1
+    destinations, consent_exclusions = consented_contacts(contacts, channel)
+    for reason, count in eligibility_exclusions.items():
+        consent_exclusions[reason] = consent_exclusions.get(reason, 0) + count
+    return users, destinations, consent_exclusions
+
+
+async def communication_target_context(data: dict, user: Optional[Mapping[str, Any]] = None,
+                                       *, audit_exclusions: bool = False,
+                                       validate_scope: bool = True) -> dict:
+    user = user or current_user_context.get() or {}
+    if validate_scope:
+        await validate_communication_scope(data, user)
+    target_type = data.get("destinatario_tipo")
+    target_id = data.get("destinatario_id")
+    team_ids: list[str] = []
+    player_ids: list[str] = []
+    family_ids: list[str] = []
+    resolved_name = data.get("destinatario_nombre") or ""
+    if target_type == "equipo" and target_id:
+        team = await db.teams.find_one({"id": target_id}, {"_id": 0, "id": 1, "nombre": 1})
+        if team:
+            team_ids, resolved_name = [target_id], team.get("nombre") or resolved_name
+            player_ids = ids(await db.players.distinct("id", {"equipo_id": target_id}))
+    elif target_type == "categoria" and target_id:
+        team_ids = ids(await db.teams.distinct("id", {"categoria": target_id}))
+        player_ids = ids(await db.players.distinct("id", {"equipo_id": {"$in": team_ids}}))
+        resolved_name = resolved_name or str(target_id)
+    elif target_type == "individual" and target_id:
+        player = await db.players.find_one({"id": target_id}, {"_id": 0, "id": 1, "nombre": 1, "apellidos": 1})
+        family = None if player else await db.families.find_one(
+            {"id": target_id}, {"_id": 0, "id": 1, "contacto_principal": 1, "progenitor1_nombre": 1},
+        )
+        if player:
+            player_ids = [target_id]
+            resolved_name = " ".join(value for value in (player.get("nombre"), player.get("apellidos")) if value)
+        elif family:
+            family_ids = [target_id]
+            resolved_name = family.get("progenitor1_nombre") or family.get("contacto_principal") or resolved_name
+    if player_ids:
+        family_ids = sorted(set(family_ids + ids(await db.players.distinct("familia_id", {"id": {"$in": player_ids}}))))
+    users_all = await notification_users(team_ids, player_ids, family_ids)
+    _, destinations, consent_exclusions = await communication_targets(
+        data, user, validate_scope=validate_scope,
+    )
+    if audit_exclusions and consent_exclusions:
+        await record_security_event(
+            "security.communication_consent.filtered", user, "communication_recipients",
+            "consent_not_granted", aggregate=consent_exclusions,
+        )
+    return {
+        "resolved_name": resolved_name,
+        "summary": recipient_summary(
+            users_all, len(destinations), team_count=len(team_ids), player_count=len(player_ids),
+            family_count=len(family_ids), extra_exclusions=consent_exclusions,
+        ),
+    }
+
+
+@api_router.post("/communications/recipients/preview")
+async def preview_communication_recipients(comm: Communication):
+    data = comm.model_dump()
+    user = current_user_context.get() or {}
+    context = await communication_target_context(data, user, audit_exclusions=True)
+    if not context["resolved_name"]:
+        raise HTTPException(status_code=422, detail="No se ha podido resolver el destinatario")
+    return context
 
 
 @api_router.post("/communications")
 async def create_communication(comm: Communication):
     data = comm.model_dump()
     data.update({"enviado": False, "fecha_envio": None, "estado_envio": "pending", "error_envio": None})
+    user = current_user_context.get() or {}
+    await communication_target_context(data, user)
     created = await insert_doc("communications", data)
-    users, emails = await communication_targets(data)
+    users, destinations, consent_exclusions = await communication_targets(data, user)
     await enqueue_notifications(
         users, "communication.created", "Nueva comunicación / Komunikazio berria",
         str(data.get("asunto") or "Ikas-Txiki"), "/comunicacion", data.get("prioridad") or "normal",
@@ -2811,8 +4037,17 @@ async def create_communication(comm: Communication):
     )
     logs = []
     if data.get("canal") == "email":
-        if emails:
-            logs = [dispatch_email(email, data.get("asunto") or "Ikas-Txiki", data.get("mensaje") or "") for email in emails]
+        # Re-resolve immediately before the provider boundary. A preview is
+        # never treated as authorization for a later delivery.
+        _, destinations, consent_exclusions = await communication_targets(data, user)
+        if consent_exclusions:
+            await record_security_event(
+                "security.communication_consent.filtered", user, "communication_delivery",
+                "consent_not_granted", aggregate=consent_exclusions,
+            )
+        if destinations:
+            logs = [dispatch_email(destination, data.get("asunto") or "Ikas-Txiki", data.get("mensaje") or "")
+                    for destination in destinations]
         else:
             logs = [{"id": new_id(), "channel": "email", "recipient": None, "provider": "smtp",
                      "status": "pending", "error": "recipient_missing", "created_at": now_iso(), "sent_at": None}]
@@ -2840,7 +4075,11 @@ async def create_communication(comm: Communication):
 
 @api_router.get("/communications")
 async def get_communications():
-    return await list_docs("communications")
+    items = await list_docs("communications")
+    for item in items:
+        context = await communication_target_context(item, validate_scope=False)
+        item["destinatario_nombre_resuelto"] = context["resolved_name"] or item.get("destinatario_nombre")
+    return items
 
 
 @api_router.put("/communications/{comm_id}")

@@ -1,4 +1,4 @@
-import { activeModalitiesFromApi, activeTeamsFromApi, applyPreparationAssignmentChange, applyPreparationFilterChange, canApplyPreparationBulk, canFinalizeDraft, clearPreparationSelection, existingCategoriesFromApi, filterPreparationRecords, historicalReviewCounts, isHistoricalDraft, MODALITY_CONTROL_COPY, modalityAssignmentDisabledReason, modalityOptionLabel, officialModalityCode, preparationProgressLabel, selectedOctoberIds, selectVisiblePreparationRecords, teamMatchesCategory, teamsForCategory } from "./importPreparationView";
+import { activeModalitiesFromApi, activeTeamsFromApi, applyPreparationAssignmentChange, applyPreparationFilterChange, canApplyPreparationBulk, canFinalizeDraft, clearPreparationSelection, existingCategoriesFromApi, filterPreparationRecords, historicalReviewCounts, isHistoricalDraft, isUnresolvedFuzzyMatch, MODALITY_CONTROL_COPY, modalityAssignmentDisabledReason, modalityOptionLabel, officialModalityCode, preparationProgressLabel, selectedOctoberIds, selectVisiblePreparationRecords, teamMatchesCategory, teamsForCategory } from "./importPreparationView";
 
 const records = [
   { id: "one", nombre: "Ane", apellidos: "Ficticia", categoria: "Alevín", equipo: "F7 A", selected_october: true },
@@ -156,13 +156,21 @@ test.each([
   });
 });
 
-test("historical drafts remain simulation-only and expose aggregate review counts", () => {
+test("historical drafts expose aggregate review counts and can finalize once only warnings remain", () => {
   const draft = {
-    source_format: "historical_bbdd_v1", summary: { can_import: false },
+    source_format: "historical_bbdd_v1", summary: { can_import: true },
     fuzzy_matches: [{ id: "f1", decision: null }, { id: "f2", decision: "different_people" }],
     family_candidates: [{ id: "g1", decision: null }], simulation: { official_writes: 0 },
   };
   expect(isHistoricalDraft(draft)).toBe(true);
   expect(historicalReviewCounts(draft)).toEqual({ fuzzy: 1, families: 1, officialWrites: 0 });
-  expect(canFinalizeDraft(draft, true)).toBe(false);
+  expect(canFinalizeDraft(draft, true)).toBe(true);
+});
+
+test("legacy pending fuzzy matches remain visible until a safe explicit decision", () => {
+  expect(isUnresolvedFuzzyMatch({ decision: "pending" })).toBe(true);
+  expect(isUnresolvedFuzzyMatch({ decision: "leave_pending" })).toBe(true);
+  expect(isUnresolvedFuzzyMatch({ decision: "same_person" })).toBe(false);
+  expect(isUnresolvedFuzzyMatch({ decision: "different_people" })).toBe(false);
+  expect(historicalReviewCounts({ fuzzy_matches: [{ decision: "pending" }] }).fuzzy).toBe(1);
 });
