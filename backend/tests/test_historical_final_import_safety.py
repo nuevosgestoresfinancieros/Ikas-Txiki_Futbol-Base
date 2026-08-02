@@ -76,7 +76,7 @@ def test_compact_history_enriches_only_unique_existing_player_and_protects_bank(
                 "payments": [], "families": [], "teams": [{"id": "t1", "nombre": "Cadete A"}], "inscriptions": []}
     operations, summary = _historical_enrichment_operations(draft, existing, "job-1")
     assert summary == {"matched_players": 1, "unmatched_rows": 0, "ambiguous_rows": 0,
-                       "bank_references": 1, "team_assignments": 1, "team_names_pending": 0,
+                       "bank_references": 1, "team_assignments": 1, "teams_created": 0, "team_names_pending": 0,
                        "created_players": 0, "official_debts": 0}
     player = next(op["after"] for op in operations if op["collection"] == "players")
     payment = next(op["after"] for op in operations if op["collection"] == "payments")
@@ -100,3 +100,21 @@ def test_compact_history_never_creates_or_updates_ambiguous_players():
     assert operations == []
     assert summary["ambiguous_rows"] == 1
     assert summary["created_players"] == 0
+
+
+def test_historical_enrichment_creates_missing_real_team_and_assigns_player():
+    draft = {"season": "2026-2027", "duplicates": [], "fuzzy_matches": [], "records": [{
+        "id": "r1", "nombre": "Ane", "apellidos": "Ficticia", "equipo": "Anboto",
+        "categoria": "Alevín", "modalidad": "F7", "historical": {
+            "sport": {"team_assignment_source": "2025-2026"}
+        }, "bank": {},
+    }]}
+    existing = {"players": [{"id": "p1", "nombre": "Ane", "apellidos": "Ficticia"}],
+                "teams": [], "payments": []}
+    operations, summary = _historical_enrichment_operations(draft, existing, "job-team")
+    team_op = next(op for op in operations if op["collection"] == "teams")
+    player_op = next(op for op in operations if op["collection"] == "players")
+    assert team_op["after"]["nombre"] == "Anboto"
+    assert team_op["after"]["temporada"] == "2025-2026"
+    assert player_op["after"]["equipo_id"] == team_op["id"]
+    assert summary["teams_created"] == 1 and summary["team_assignments"] == 1

@@ -1932,7 +1932,7 @@ def _historical_enrichment_operations(draft: dict, existing: dict, job_id: str) 
         for item in existing.get("payments", []) if item.get("historical_bank_reference")
     }
     operations, matched, unmatched, ambiguous, bank_refs = [], 0, 0, 0, 0
-    team_assignments = team_pending = 0
+    team_assignments = team_pending = teams_created = 0
     for record in effective_records(draft):
         key = (normalize_key(record.get("nombre")), normalize_key(record.get("apellidos")))
         matches = players_by_name.get(key, [])
@@ -1959,12 +1959,26 @@ def _historical_enrichment_operations(draft: dict, existing: dict, job_id: str) 
         if not player.get("posicion") and (historical.get("sport") or {}).get("position"):
             player["posicion"] = historical["sport"]["position"]
         team_name = record.get("equipo") or record.get("equipo_anterior")
-        team_matches = teams_by_name.get(normalize_key(team_name), []) if team_name else []
+        team_key = normalize_key(team_name)
+        team_matches = teams_by_name.get(team_key, []) if team_name else []
+        if not team_matches and team_key and team_key != "no_aplica":
+            source_season = (historical.get("sport") or {}).get("team_assignment_source") or "2025-2026"
+            team = {
+                "id": new_id(), "nombre": team_name, "categoria": record.get("categoria") or None,
+                "modalidad": record.get("modalidad") or None, "temporada": source_season,
+                "limite_jugadores": 18 if record.get("modalidad") == "F7" else 25,
+                "estado": "activo", "created_at": now, "updated_at": now,
+                "historical_import_job_id": job_id,
+            }
+            operations.append({"collection": "teams", "id": team["id"], "before": None, "after": team})
+            teams_by_name[team_key] = [team]
+            team_matches = [team]
+            teams_created += 1
         if len(team_matches) == 1:
             player["equipo_id"] = team_matches[0]["id"]
             player["equipo_historico_referencia"] = team_name
             team_assignments += 1
-        elif team_name:
+        elif team_name and team_key != "no_aplica":
             player["equipo_historico_referencia"] = team_name
             team_pending += 1
         operations.append({"collection": "players", "id": player["id"], "before": before, "after": player})
@@ -1992,7 +2006,8 @@ def _historical_enrichment_operations(draft: dict, existing: dict, job_id: str) 
     return operations, {
         "matched_players": matched, "unmatched_rows": unmatched,
         "ambiguous_rows": ambiguous, "bank_references": bank_refs,
-        "team_assignments": team_assignments, "team_names_pending": team_pending,
+        "team_assignments": team_assignments, "teams_created": teams_created,
+        "team_names_pending": team_pending,
         "created_players": 0, "official_debts": 0,
     }
 
@@ -2514,7 +2529,7 @@ async def confirm_import_staging(draft_id: str, request: StagingConfirmRequest):
         # El importador antiguo pudo registrar el mismo fichero sin guardar el
         # histórico. Esta versión tiene su propio bloqueo idempotente y solo se
         # podrá aplicar una vez.
-        lock_id = f"historical-enrichment-v1:{draft['season']}:{draft['source_sha256']}"
+        lock_id = f"historical-enrichment-v2:{draft['season']}:{draft['source_sha256']}"
         job_id = new_id()
         operations, enrichment = _historical_enrichment_operations(draft, existing, job_id)
         if not enrichment["matched_players"]:
