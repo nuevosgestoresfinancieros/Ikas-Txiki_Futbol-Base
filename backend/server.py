@@ -1963,7 +1963,13 @@ def _historical_enrichment_operations(draft: dict, existing: dict, job_id: str) 
             player["posicion"] = historical["sport"]["position"]
         team_name = record.get("equipo") or record.get("equipo_anterior")
         team_key = normalize_key(team_name)
-        team_matches = teams_by_name.get(team_key, []) if team_name else []
+        # "NO APLICA" means that the player has no team.  Never resolve it
+        # against a legacy catalogue entry with that display name.
+        if team_key == "no_aplica":
+            team_matches = []
+            player["equipo_id"] = None
+        else:
+            team_matches = teams_by_name.get(team_key, []) if team_name else []
         if not team_matches and team_key and team_key != "no_aplica":
             source_season = (historical.get("sport") or {}).get("team_assignment_source") or "2025-2026"
             team = {

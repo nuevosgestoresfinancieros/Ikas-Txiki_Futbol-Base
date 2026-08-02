@@ -118,3 +118,19 @@ def test_historical_enrichment_creates_missing_real_team_and_assigns_player():
     assert team_op["after"]["temporada"] == "2025-2026"
     assert player_op["after"]["equipo_id"] == team_op["id"]
     assert summary["teams_created"] == 1 and summary["team_assignments"] == 1
+
+
+def test_historical_enrichment_never_assigns_existing_no_aplica_team():
+    draft = {"season": "2026-2027", "duplicates": [], "fuzzy_matches": [], "records": [{
+        "id": "r1", "nombre": "Ane", "apellidos": "Ficticia", "equipo": "NO APLICA",
+        "historical": {}, "bank": {},
+    }]}
+    existing = {
+        "players": [{"id": "p1", "nombre": "Ane", "apellidos": "Ficticia", "equipo_id": "legacy-team"}],
+        "teams": [{"id": "legacy-team", "nombre": "NO APLICA"}], "payments": [],
+    }
+    operations, summary = _historical_enrichment_operations(draft, existing, "job-no-team")
+    player_op = next(op for op in operations if op["collection"] == "players")
+    assert player_op["after"]["equipo_id"] is None
+    assert summary["team_assignments"] == 0
+    assert not any(op["collection"] == "teams" for op in operations)
