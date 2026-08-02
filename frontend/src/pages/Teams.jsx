@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Shield, Plus, Pencil, Trash2, Users } from "lucide-react";
+import { Shield, Plus, Pencil, Trash2, Users, UserRound, Hash, MapPin, CalendarDays } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
 import { PermissionGate, usePermission } from "@/auth";
@@ -19,6 +19,9 @@ const Teams = () => {
   const [teams, setTeams] = useState([]);
   const [categories, setCategories] = useState([]);
   const [dialog, setDialog] = useState(false);
+  const [squadDialog, setSquadDialog] = useState(false);
+  const [selectedTeam, setSelectedTeam] = useState(null);
+  const [loadingSquad, setLoadingSquad] = useState(false);
   const [form, setForm] = useState(empty);
 
   const load = async () => setTeams((await api.get("/teams")).data);
@@ -39,6 +42,19 @@ const Teams = () => {
     toast.success(t("saved")); setDialog(false); load();
   };
   const remove = async (tm) => { if (!window.confirm(t("confirmDelete"))) return; await api.delete(`/teams/${tm.id}`); toast.success(t("deleted")); load(); };
+  const openSquad = async (tm) => {
+    setSelectedTeam({ ...tm, jugadores: [] });
+    setSquadDialog(true);
+    setLoadingSquad(true);
+    try {
+      setSelectedTeam((await api.get(`/teams/${tm.id}`)).data);
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "No se pudo cargar la plantilla");
+      setSquadDialog(false);
+    } finally {
+      setLoadingSquad(false);
+    }
+  };
 
   return (
     <div data-testid="teams-page">
@@ -50,7 +66,10 @@ const Teams = () => {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {teams.map((tm) => (
-            <div key={tm.id} data-testid={`team-card-${tm.id}`} className="surface-card interactive-card p-5">
+            <div key={tm.id} data-testid={`team-card-${tm.id}`} role="button" tabIndex={0}
+              aria-label={`Ver plantilla de ${tm.nombre}`} onClick={() => openSquad(tm)}
+              onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openSquad(tm); } }}
+              className="surface-card interactive-card cursor-pointer p-5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-3">
                   <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary/10 text-primary"><Shield className="h-5 w-5" /></div>
@@ -69,14 +88,51 @@ const Teams = () => {
               <div className="mt-4 flex items-center justify-between">
                 <span className="inline-flex items-center gap-1.5 text-sm text-slate-500"><Users className="h-4 w-4" />{tm.num_jugadores}/{tm.limite_jugadores} {t("playersCount")}</span>
                 <div className="flex gap-1">
-                  <PermissionGate resource="teams" action="edit"><Button variant="ghost" size="icon" aria-label={`${t("edit")} ${tm.nombre}`} data-testid={`edit-team-${tm.id}`} onClick={() => openEdit(tm)}><Pencil className="h-4 w-4" /></Button></PermissionGate>
-                  <PermissionGate resource="teams" action="delete"><Button variant="ghost" size="icon" aria-label={`${t("delete")} ${tm.nombre}`} data-testid={`delete-team-${tm.id}`} onClick={() => remove(tm)} className="text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button></PermissionGate>
+                  <PermissionGate resource="teams" action="edit"><Button variant="ghost" size="icon" aria-label={`${t("edit")} ${tm.nombre}`} data-testid={`edit-team-${tm.id}`} onClick={(event) => { event.stopPropagation(); openEdit(tm); }}><Pencil className="h-4 w-4" /></Button></PermissionGate>
+                  <PermissionGate resource="teams" action="delete"><Button variant="ghost" size="icon" aria-label={`${t("delete")} ${tm.nombre}`} data-testid={`delete-team-${tm.id}`} onClick={(event) => { event.stopPropagation(); remove(tm); }} className="text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button></PermissionGate>
                 </div>
               </div>
             </div>
           ))}
         </div>
       )}
+
+      <Dialog open={squadDialog} onOpenChange={setSquadDialog}>
+        <DialogContent className="max-w-5xl max-h-[92vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="font-heading flex items-center gap-3">
+              <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary"><Shield className="h-5 w-5" /></span>
+              <span>{selectedTeam?.nombre || "Equipo"}<span className="block text-sm font-normal text-slate-500">Plantilla completa</span></span>
+            </DialogTitle>
+          </DialogHeader>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="rounded-xl bg-slate-50 p-3 text-sm"><CalendarDays className="mb-1 h-4 w-4 text-primary" /><span className="font-semibold">Temporada</span><div className="text-slate-500">{selectedTeam?.temporada || "—"}</div></div>
+            <div className="rounded-xl bg-slate-50 p-3 text-sm"><Users className="mb-1 h-4 w-4 text-primary" /><span className="font-semibold">Jugadores</span><div className="text-slate-500">{selectedTeam?.jugadores?.length ?? selectedTeam?.num_jugadores ?? 0}/{selectedTeam?.limite_jugadores || "—"}</div></div>
+            <div className="rounded-xl bg-slate-50 p-3 text-sm"><MapPin className="mb-1 h-4 w-4 text-primary" /><span className="font-semibold">Campo</span><div className="text-slate-500">{selectedTeam?.campo || "—"}</div></div>
+          </div>
+          {loadingSquad ? (
+            <div className="py-16 text-center text-sm text-slate-500">Cargando plantilla…</div>
+          ) : !selectedTeam?.jugadores?.length ? (
+            <EmptyState icon={Users} message="Este equipo todavía no tiene jugadores asignados" />
+          ) : (
+            <div className="overflow-hidden rounded-xl border border-slate-200">
+              <div className="grid grid-cols-[minmax(0,2fr)_minmax(120px,1fr)_90px_minmax(110px,1fr)] gap-3 bg-slate-50 px-4 py-3 text-xs font-bold uppercase tracking-wider text-slate-500">
+                <span>Jugador</span><span>Posición</span><span>Dorsal</span><span>Estado</span>
+              </div>
+              {selectedTeam.jugadores
+                .slice().sort((a, b) => `${a.nombre} ${a.apellidos || ""}`.localeCompare(`${b.nombre} ${b.apellidos || ""}`))
+                .map((player) => (
+                  <div key={player.id} data-testid={`team-player-${player.id}`} className="grid grid-cols-[minmax(0,2fr)_minmax(120px,1fr)_90px_minmax(110px,1fr)] items-center gap-3 border-t border-slate-100 px-4 py-3 text-sm">
+                    <div className="flex min-w-0 items-center gap-3"><span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary"><UserRound className="h-4 w-4" /></span><div className="min-w-0"><p className="truncate font-semibold text-slate-800">{player.nombre} {player.apellidos || ""}</p><p className="truncate text-xs text-slate-400">{player.categoria || selectedTeam.categoria || "—"}</p></div></div>
+                    <span className="text-slate-600">{player.posicion || "—"}</span>
+                    <span className="inline-flex items-center gap-1 text-slate-600"><Hash className="h-3.5 w-3.5" />{player.dorsal || "—"}</span>
+                    <StatusBadge status={player.estado} />
+                  </div>
+                ))}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={dialog} onOpenChange={setDialog}>
         <DialogContent className="max-w-2xl max-h-[92vh] overflow-y-auto">

@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
-import { FileSignature, Plus, Pencil, Trash2, Printer, Download, Upload, FileCheck, X, ChevronDown, ChevronUp, Check, Clock } from "lucide-react";
+import { FileSignature, Plus, Pencil, Trash2, Printer, Download, Upload, FileCheck, X, ChevronDown, ChevronUp, Check, Clock, Users } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
 import { PermissionGate, usePermission } from "@/auth";
@@ -113,6 +113,7 @@ const Authorizations = () => {
   const [form, setForm] = useState({ tipo: "general", estado: "pendiente" });
   const [bulkForm, setBulkForm] = useState({ player_id: "", firmante: "" });
   const [bulkDialog, setBulkDialog] = useState(false);
+  const [syncingAll, setSyncingAll] = useState(false);
   const [expanded, setExpanded] = useState({}); // { player_id: true/false }
   const uploadRefs = useRef({});
 
@@ -151,6 +152,22 @@ const Authorizations = () => {
     // Expandir automáticamente al jugador recién creado
     setExpanded((e) => ({ ...e, [bulkForm.player_id]: true }));
     load();
+  };
+
+  const ensureAllPlayers = async () => {
+    if (!window.confirm(`Se crearán las autorizaciones pendientes para los ${players.length} jugadores. ¿Continuar?`)) return;
+    setSyncingAll(true);
+    try {
+      const { data } = await api.post("/authorizations/ensure-all");
+      toast.success(data.created
+        ? `${data.created} autorizaciones creadas para ${data.players} jugadores`
+        : `Los ${data.players} jugadores ya tienen todas sus autorizaciones`);
+      await load();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || "No se pudieron integrar todos los jugadores");
+    } finally {
+      setSyncingAll(false);
+    }
   };
 
   const getPlayer = (id) => players.find((p) => p.id === id);
@@ -231,13 +248,22 @@ const Authorizations = () => {
     toast.success("PDF firmado eliminado"); load();
   };
 
-  // Agrupar autorizaciones por jugador
-  const byPlayer = auths.reduce((acc, a) => {
-    const key = a.player_id || "sin-jugador";
-    if (!acc[key]) acc[key] = { player_id: a.player_id, player_nombre: a.player_nombre, items: [] };
-    acc[key].items.push(a);
+  // Todos los jugadores deben aparecer, incluso cuando todavía tienen 0 autorizaciones.
+  const byPlayer = players.reduce((acc, player) => {
+    acc[player.id] = {
+      player_id: player.id,
+      player_nombre: `${player.nombre || ""} ${player.apellidos || ""}`.trim(),
+      equipo_id: player.equipo_id,
+      categoria: player.categoria,
+      items: [],
+    };
     return acc;
   }, {});
+  auths.forEach((a) => {
+    const key = a.player_id || "sin-jugador";
+    if (!byPlayer[key]) byPlayer[key] = { player_id: a.player_id, player_nombre: a.player_nombre, items: [] };
+    byPlayer[key].items.push(a);
+  });
 
   const playerGroups = Object.values(byPlayer).sort((a, b) =>
     (a.player_nombre || "").localeCompare(b.player_nombre || "")
@@ -281,9 +307,14 @@ const Authorizations = () => {
     <div data-testid="authorizations-page">
       <PageHeader title={t("authorizations")} icon={FileSignature}
         action={canCreate ?
-          <Button data-testid="add-auth-btn" onClick={() => { setBulkForm({ player_id: "", firmante: "" }); setBulkDialog(true); }} className="h-11 px-5">
-            <Plus className="h-5 w-5" />{t("newAuthorization")}
-          </Button> : null
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" data-testid="ensure-all-authorizations" onClick={ensureAllPlayers} disabled={syncingAll || !players.length} className="h-11 px-5">
+              <Users className="h-5 w-5" />{syncingAll ? "Integrando…" : "Integrar todos los jugadores"}
+            </Button>
+            <Button data-testid="add-auth-btn" onClick={() => { setBulkForm({ player_id: "", firmante: "" }); setBulkDialog(true); }} className="h-11 px-5">
+              <Plus className="h-5 w-5" />{t("newAuthorization")}
+            </Button>
+          </div> : null
         }
       />
 

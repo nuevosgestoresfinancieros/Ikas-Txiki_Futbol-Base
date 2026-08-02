@@ -1531,6 +1531,36 @@ async def create_authorization(auth: Authorization):
     return await insert_doc("authorizations", auth.model_dump())
 
 
+@api_router.post("/authorizations/ensure-all")
+async def ensure_all_player_authorizations():
+    """Create the missing authorization set for every player in the caller's scope."""
+    authorization_types = tuple(AUTHORIZATION_PDF_TYPES.keys())
+    players = await list_docs("players")
+    player_ids = ids(player.get("id") for player in players)
+    existing = await list_docs("authorizations")
+    existing_keys = {
+        (item.get("player_id"), item.get("tipo"))
+        for item in existing
+        if item.get("player_id") in player_ids
+    }
+    now = now_iso()
+    missing = []
+    for player_id in player_ids:
+        for authorization_type in authorization_types:
+            if (player_id, authorization_type) in existing_keys:
+                continue
+            document = Authorization(
+                player_id=player_id, tipo=authorization_type, estado="pendiente"
+            ).model_dump()
+            await ensure_data_scope("authorizations", document)
+            missing.append({
+                **document, "id": new_id(), "created_at": now, "updated_at": now,
+            })
+    if missing:
+        await db.authorizations.insert_many(missing)
+    return {"players": len(player_ids), "created": len(missing), "types": len(authorization_types)}
+
+
 @api_router.get("/authorizations")
 async def get_authorizations(estado: Optional[str] = None):
     query = {"estado": estado} if estado else {}
