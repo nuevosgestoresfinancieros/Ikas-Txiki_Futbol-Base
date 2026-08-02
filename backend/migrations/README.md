@@ -12,6 +12,17 @@ Para aplicarla de forma consciente, después de crear una copia de seguridad:
 ../.venv/bin/python migrations/001_users_rbac.py --apply
 ```
 
+## Límites de plantillas
+
+Registra y reproduce el ajuste conservador de límites de equipos. Solo amplía
+los límites que sean inferiores al número actual de jugadores; nunca reduce
+límites ni cambia asignaciones.
+
+```bash
+../.venv/bin/python migrations/002_team_roster_limits.py
+../.venv/bin/python migrations/002_team_roster_limits.py --apply
+```
+
 Efectos:
 
 - Solo asigna `admin` al usuario cuyo nombre coincide con `ADMIN_USER`.
