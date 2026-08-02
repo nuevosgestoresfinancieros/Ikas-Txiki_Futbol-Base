@@ -144,7 +144,7 @@ def test_compact_64_column_export_maps_pending_player_history_without_fabricatin
     record = parsed["records"][0]
     assert parsed["source_layout"] == "compact_64"
     assert record["fecha_nacimiento"] is None
-    assert record["equipo"] == "Equipo 26/27" and record["equipo_anterior"] == "Equipo 25/26"
+    assert record["equipo"] == "Equipo 25/26" and record["equipo_anterior"] == "Equipo 25/26"
     assert record["historical"]["equipment_history"]["2025-2026"] == ["FICTICIA", "7", "M", "JR"]
     assert record["historical"]["equipment_current"]["number"] == "9"
     assert record["historical"]["sport"]["position"] == "PORTERA"

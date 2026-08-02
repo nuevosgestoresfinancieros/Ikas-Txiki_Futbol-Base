@@ -2532,7 +2532,7 @@ async def confirm_import_staging(draft_id: str, request: StagingConfirmRequest):
         # El importador antiguo pudo registrar el mismo fichero sin guardar el
         # histórico. Esta versión tiene su propio bloqueo idempotente y solo se
         # podrá aplicar una vez.
-        lock_id = f"historical-enrichment-v2:{draft['season']}:{draft['source_sha256']}"
+        lock_id = f"historical-enrichment-v3:{draft['season']}:{draft['source_sha256']}"
         job_id = new_id()
         operations, enrichment = _historical_enrichment_operations(draft, existing, job_id)
         if not enrichment["matched_players"]:
