@@ -150,7 +150,7 @@ export default function InscriptionImportWizard({ open, onOpenChange, onImported
   const removeDraft = async () => { if (!window.confirm(c.confirmDelete)) return; await api.delete(`/inscription-imports/staging/${draft.id}`); setDraft(null); await loadLists(); };
   const finalize = async () => {
     if (!canFinalizeDraft(draft, express)) return; setBusy(true);
-    try { await api.post(`/inscription-imports/staging/${draft.id}/confirm`, { confirmed: true }); toast.success(c.final); setDraft(null); await loadLists(); onImported?.(); }
+    try { const result = await api.post(`/inscription-imports/staging/${draft.id}/confirm`, { confirmed: true }); const summary = result?.summary; toast.success(summary ? `${summary.matched_players} fichas actualizadas · ${summary.bank_references} cuentas protegidas · ${summary.unmatched_rows + summary.ambiguous_rows} pendientes` : c.final); setDraft(null); await loadLists(); onImported?.(); }
     catch (e) { setError(e.response?.data?.detail || "No se pudo completar la importación."); } finally { setBusy(false); }
   };
   const undo = async (job) => { if (!window.confirm(c.undo)) return; await api.post(`/inscription-imports/${job.id}/undo`); await loadLists(); onImported?.(); };

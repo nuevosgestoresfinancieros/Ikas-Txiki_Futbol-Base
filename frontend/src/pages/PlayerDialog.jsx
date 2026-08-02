@@ -88,13 +88,14 @@ const PlayerDialog = ({ open, onClose, player, teams, onSaved }) => {
         </DialogHeader>
 
         <Tabs value={tab} onValueChange={setTab}>
-          <TabsList className="grid h-auto grid-cols-3 gap-1 sm:grid-cols-6">
+          <TabsList className="grid h-auto grid-cols-3 gap-1 sm:grid-cols-7">
             <TabsTrigger value="personal" data-testid="tab-personal">{t("tabPersonal")}</TabsTrigger>
             <TabsTrigger value="sport" data-testid="tab-sport">{t("tabSport")}</TabsTrigger>
             <TabsTrigger value="family" data-testid="tab-family">{t("tabFamily")}</TabsTrigger>
             <TabsTrigger value="health" data-testid="tab-health">{t("tabHealth")}</TabsTrigger>
             <TabsTrigger value="kit" data-testid="tab-kit">{t("tabKit")}</TabsTrigger>
             <TabsTrigger value="docs" data-testid="tab-docs">{t("tabDocs")}</TabsTrigger>
+            <TabsTrigger value="history" data-testid="tab-history">Histórico</TabsTrigger>
           </TabsList>
 
           <TabsContent value="personal" className="space-y-4 pt-4">
@@ -202,6 +203,21 @@ const PlayerDialog = ({ open, onClose, player, teams, onSaved }) => {
               options={["completo","pendiente","incompleto"].map(s=>({value:s,label:statusLabel(s)}))} testid="doc-estado" />
             <Area label={t("notes")} value={form.observaciones_doc} onChange={set("observaciones_doc")} testid="doc-obs" />
           </TabsContent>
+
+          <TabsContent value="history" className="space-y-4 pt-4">
+            {!Object.keys(form.historial_equipacion || {}).length && !Object.keys(form.historial_equipos || {}).length ? (
+              <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">Todavía no hay datos históricos importados.</p>
+            ) : <>
+              <HistoryBlock title="Segunda equipación 2026-2027" value={form.segunda_equipacion} />
+              <HistoryBlock title="Historial de equipaciones" value={form.historial_equipacion} />
+              <HistoryBlock title="Historial de equipos" value={form.historial_equipos} />
+              <HistoryBlock title="Historial federativo" value={form.historial_federacion} />
+              <HistoryBlock title="Datos deportivos" value={form.historial_deportivo} />
+              <HistoryBlock title="Entrenamientos 2025-2026" value={form.historial_entrenamientos} />
+              <HistoryBlock title="Cuotas (referencia, no deuda)" value={form.referencias_cuotas} />
+              <HistoryBlock title="Permisos (referencia, no firma)" value={form.referencias_permisos} />
+            </>}
+          </TabsContent>
         </Tabs>
 
         <DialogFooter className="sticky -bottom-5 z-10 -mx-5 -mb-5 border-t border-slate-200 bg-white/95 px-5 py-4 backdrop-blur-xl sm:-bottom-6 sm:-mx-6 sm:-mb-6 sm:px-6">
@@ -211,6 +227,14 @@ const PlayerDialog = ({ open, onClose, player, teams, onSaved }) => {
       </DialogContent>
     </Dialog>
   );
+};
+
+const HistoryBlock = ({ title, value }) => {
+  const entries = Array.isArray(value)
+    ? value.map((item, index) => [String(index + 1), item])
+    : Object.entries(value || {});
+  if (!entries.length) return null;
+  return <section className="rounded-xl border border-slate-200 p-3"><h3 className="mb-2 font-bold text-slate-700">{title}</h3><div className="grid gap-2 sm:grid-cols-2">{entries.map(([key, item]) => <div key={key} className="rounded-lg bg-slate-50 px-3 py-2 text-sm"><span className="font-semibold text-slate-500">{key}: </span><span>{Array.isArray(item) ? item.filter(Boolean).join(" · ") : typeof item === "object" ? Object.entries(item || {}).filter(([, v]) => v !== "" && v != null).map(([k, v]) => `${k}: ${v}`).join(" · ") : String(item || "—")}</span></div>)}</div></section>;
 };
 
 export default PlayerDialog;

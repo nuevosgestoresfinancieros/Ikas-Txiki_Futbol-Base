@@ -669,6 +669,16 @@ class Player(BaseModel):
     equipacion_entregada: bool = False
     fecha_entrega_equipacion: Optional[str] = None
     observaciones_material: Optional[str] = None
+    # Datos históricos importados. Son referencias, no sustituyen asignaciones,
+    # autorizaciones firmadas ni deudas oficiales.
+    historial_equipacion: Dict[str, Any] = Field(default_factory=dict)
+    segunda_equipacion: Dict[str, Any] = Field(default_factory=dict)
+    historial_equipos: Dict[str, Any] = Field(default_factory=dict)
+    historial_federacion: Dict[str, Any] = Field(default_factory=dict)
+    historial_deportivo: Dict[str, Any] = Field(default_factory=dict)
+    historial_entrenamientos: List[Any] = Field(default_factory=list)
+    referencias_cuotas: Dict[str, Any] = Field(default_factory=dict)
+    referencias_permisos: Dict[str, Any] = Field(default_factory=dict)
     # Documentación
     doc_dni_jugador: bool = False
     doc_dni_tutor: bool = False
@@ -1906,6 +1916,72 @@ async def _apply_operations(operations: list[dict], reverse: bool = False) -> No
         raise
 
 
+def _historical_enrichment_operations(draft: dict, existing: dict, job_id: str) -> tuple[list[dict], dict]:
+    """Enriquece solo coincidencias nominales únicas; nunca crea jugadores."""
+    now = now_iso()
+    players_by_name: Dict[tuple[str, str], list[dict]] = {}
+    for player in existing.get("players", []):
+        key = (normalize_key(player.get("nombre")), normalize_key(player.get("apellidos")))
+        players_by_name.setdefault(key, []).append(player)
+    payments = {
+        (item.get("player_id"), item.get("temporada")): item
+        for item in existing.get("payments", []) if item.get("historical_bank_reference")
+    }
+    operations, matched, unmatched, ambiguous, bank_refs = [], 0, 0, 0, 0
+    for record in effective_records(draft):
+        key = (normalize_key(record.get("nombre")), normalize_key(record.get("apellidos")))
+        matches = players_by_name.get(key, [])
+        if not matches:
+            unmatched += 1
+            continue
+        if len(matches) != 1:
+            ambiguous += 1
+            continue
+        before = _clean_doc(matches[0])
+        player = dict(before)
+        historical = record.get("historical") or {}
+        player.update({
+            "historial_equipacion": historical.get("equipment_history") or {},
+            "segunda_equipacion": historical.get("equipment_current") or {},
+            "historial_equipos": historical.get("team_history") or {},
+            "historial_federacion": historical.get("federation_history") or {},
+            "historial_deportivo": historical.get("sport") or {},
+            "historial_entrenamientos": historical.get("schedule_history") or [],
+            "referencias_cuotas": historical.get("fees") or {},
+            "referencias_permisos": historical.get("consents") or {},
+            "historical_import_job_id": job_id, "updated_at": now,
+        })
+        if not player.get("posicion") and (historical.get("sport") or {}).get("position"):
+            player["posicion"] = historical["sport"]["position"]
+        operations.append({"collection": "players", "id": player["id"], "before": before, "after": player})
+        matched += 1
+
+        bank = record.get("bank") or {}
+        if bank.get("status") == "valid" and bank.get("iban_encrypted"):
+            pay_key = (player["id"], draft["season"])
+            payment_before = _clean_doc(payments.get(pay_key))
+            payment = dict(payment_before or {"id": new_id(), "created_at": now})
+            payment.update({
+                "player_id": player["id"], "temporada": draft["season"],
+                "concepto": "Cuenta bancaria histórica (sin deuda)",
+                "importe_base": 0, "importe_final": 0, "descuento_hermano": 0,
+                "forma_pago": "domiciliacion", "estado": "referencia",
+                "iban": None, "iban_encrypted": bank["iban_encrypted"],
+                "iban_last4": bank.get("iban_last4"), "iban_validado": True,
+                "titular_cuenta": (historical.get("bank_reference") or {}).get("holder") or "",
+                "historical_bank_reference": True, "confirmed_debt": False,
+                "import_job_id": job_id, "updated_at": now,
+            })
+            operations.append({"collection": "payments", "id": payment["id"], "before": payment_before, "after": payment})
+            payments[pay_key] = payment
+            bank_refs += 1
+    return operations, {
+        "matched_players": matched, "unmatched_rows": unmatched,
+        "ambiguous_rows": ambiguous, "bank_references": bank_refs,
+        "created_players": 0, "official_debts": 0,
+    }
+
+
 @api_router.get("/inscription-imports/template")
 async def download_inscription_template():
     path = ROOT_DIR / "templates" / "plantilla_inscripciones_2026-2027.xlsx"
@@ -2418,6 +2494,35 @@ async def confirm_import_staging(draft_id: str, request: StagingConfirmRequest):
     if not summary["can_import"]:
         raise HTTPException(status_code=409, detail="El borrador mantiene bloqueos pendientes")
     historical = draft.get("source_format") == HISTORICAL_FORMAT
+    if historical:
+        existing = await _import_existing()
+        # El importador antiguo pudo registrar el mismo fichero sin guardar el
+        # histórico. Esta versión tiene su propio bloqueo idempotente y solo se
+        # podrá aplicar una vez.
+        lock_id = f"historical-enrichment-v1:{draft['season']}:{draft['source_sha256']}"
+        job_id = new_id()
+        operations, enrichment = _historical_enrichment_operations(draft, existing, job_id)
+        if not enrichment["matched_players"]:
+            raise HTTPException(status_code=409, detail="No hay coincidencias únicas con jugadores existentes")
+        try:
+            await db.import_locks.insert_one({"_id": lock_id, "job_id": job_id, "created_at": now_iso()})
+        except DuplicateKeyError as exc:
+            raise HTTPException(status_code=409, detail="Este archivo ya fue importado") from exc
+        job = {"id": job_id, "season": draft["season"], "file_sha256": draft["source_sha256"],
+               "status": "applying", "summary": enrichment, "operations": operations,
+               "created_by_user_id": _staging_actor(), "staging_id": draft_id,
+               "created_at": now_iso(), "updated_at": now_iso()}
+        try:
+            await db.inscription_import_jobs.insert_one(job)
+            await _apply_operations(operations)
+            await db.inscription_import_jobs.update_one({"id": job_id}, {"$set": {"status": "applied", "updated_at": now_iso()}})
+            await db.import_staging.update_one({"id": draft_id}, {"$set": {"status": "imported", "updated_at": datetime.now(timezone.utc)},
+                                                                      "$unset": {"records": "", "incidents": "", "duplicates": ""}})
+        except Exception as exc:
+            await db.import_locks.delete_one({"_id": lock_id})
+            await db.inscription_import_jobs.update_one({"id": job_id}, {"$set": {"status": "failed", "updated_at": now_iso()}})
+            raise HTTPException(status_code=500, detail="La actualización histórica fue revertida") from exc
+        return {"ok": True, "job_id": job_id, "status": "applied", "operations": len(operations), "summary": enrichment}
     family_candidate_ids = {
         record_id for group in draft.get("family_candidates", []) if not group.get("decision")
         for record_id in (group.get("record_ids") or [])

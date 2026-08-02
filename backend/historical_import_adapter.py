@@ -571,7 +571,10 @@ def prepare_historical_staging(parsed: Mapping[str, Any], secret: str) -> tuple[
     for record in records:
         source = by_source_row[record["source_row"]]
         historical = dict(source["historical"])
-        historical.pop("bank_source", None)
+        # El IBAN en claro nunca entra en staging. Conservamos únicamente el
+        # titular para que la referencia bancaria cifrada sea identificable.
+        bank_source = historical.pop("bank_source", {}) or {}
+        historical["bank_reference"] = {"holder": bank_source.get("holder") or ""}
         record["historical"] = historical
         record["categoria_juego"] = source.get("categoria_juego")
         record["modality_suggestion"] = None if not source.get("categoria") else record.get("modality_suggestion")
