@@ -303,7 +303,9 @@ def _parse_compact_sheets(formula_sheet, value_sheet, id_factory) -> dict:
             "progenitor1_nombre": "", "progenitor1_telefono": "", "progenitor1_email": "",
             "progenitor2_nombre": "", "progenitor2_telefono": "", "progenitor2_email": "",
             "domicilio": "", "equipo_anterior": _norm(value_row[41]),
-            "equipo": _norm(value_row[42]), "categoria": _norm(value_row[43]),
+            # Si 26/27 está vacío, el club ha confirmado que EQUIPO 25&26 es
+            # la referencia operativa del jugador para esta carga.
+            "equipo": _norm(value_row[42]) or _norm(value_row[41]), "categoria": _norm(value_row[43]),
             "categoria_juego": _norm(value_row[43]), "modalidad": "",
             "equipamiento_items": [], "talla_camiseta": current_second_kit["shirt_size"],
             "talla_medias": current_second_kit["socks_size"], "iban": _norm(value_row[54]),
@@ -325,7 +327,8 @@ def _parse_compact_sheets(formula_sheet, value_sheet, id_factory) -> dict:
                     "2022-2023": (49,), "2024-2025": (50,), "2025-2026": (51,), "2026-2027": (52,),
                 }),
                 "sport": {"program_2025_2026": _norm(value_row[37]),
-                          "playing_category": _norm(value_row[43]), "position": _norm(value_row[52])},
+                          "playing_category": _norm(value_row[43]), "position": _norm(value_row[52]),
+                          "team_assignment_source": "2026-2027" if _norm(value_row[42]) else "2025-2026"},
                 "bank_source": {"holder": _norm(value_row[53]), "candidate": _norm(value_row[54])},
                 "fees": {"schedule": "", "due": _number(value_row[56]), "paid": None,
                          "balance_reference": _number(value_row[57]),

@@ -151,6 +151,17 @@ def test_compact_64_column_export_maps_pending_player_history_without_fabricatin
     assert record["historical"]["consents"]["images"] == "yes"
 
 
+def test_compact_uses_2025_2026_team_when_2026_2027_is_empty():
+    row = [None] * COMPACT_TOTAL_COLUMNS
+    row[0:2] = ["Ane", "Ficticia"]
+    row[41] = "Anboto"
+    row[43] = "Alevín"
+    parsed = parse_historical_excel(compact_workbook_bytes([row]), _ids())
+    record = parsed["records"][0]
+    assert record["equipo"] == "Anboto"
+    assert record["historical"]["sport"]["team_assignment_source"] == "2025-2026"
+
+
 def test_compact_missing_birthdate_and_broken_fee_formula_do_not_block_profile_enrichment():
     row = [None] * COMPACT_TOTAL_COLUMNS
     row[0:2] = ["Ane", "Ficticia"]

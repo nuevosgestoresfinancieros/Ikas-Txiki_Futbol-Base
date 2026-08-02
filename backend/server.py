@@ -676,6 +676,7 @@ class Player(BaseModel):
     historial_equipos: Dict[str, Any] = Field(default_factory=dict)
     historial_federacion: Dict[str, Any] = Field(default_factory=dict)
     historial_deportivo: Dict[str, Any] = Field(default_factory=dict)
+    equipo_historico_referencia: Optional[str] = None
     historial_entrenamientos: List[Any] = Field(default_factory=list)
     referencias_cuotas: Dict[str, Any] = Field(default_factory=dict)
     referencias_permisos: Dict[str, Any] = Field(default_factory=dict)
@@ -1923,11 +1924,15 @@ def _historical_enrichment_operations(draft: dict, existing: dict, job_id: str) 
     for player in existing.get("players", []):
         key = (normalize_key(player.get("nombre")), normalize_key(player.get("apellidos")))
         players_by_name.setdefault(key, []).append(player)
+    teams_by_name: Dict[str, list[dict]] = {}
+    for team in existing.get("teams", []):
+        teams_by_name.setdefault(normalize_key(team.get("nombre")), []).append(team)
     payments = {
         (item.get("player_id"), item.get("temporada")): item
         for item in existing.get("payments", []) if item.get("historical_bank_reference")
     }
     operations, matched, unmatched, ambiguous, bank_refs = [], 0, 0, 0, 0
+    team_assignments = team_pending = 0
     for record in effective_records(draft):
         key = (normalize_key(record.get("nombre")), normalize_key(record.get("apellidos")))
         matches = players_by_name.get(key, [])
@@ -1953,6 +1958,15 @@ def _historical_enrichment_operations(draft: dict, existing: dict, job_id: str) 
         })
         if not player.get("posicion") and (historical.get("sport") or {}).get("position"):
             player["posicion"] = historical["sport"]["position"]
+        team_name = record.get("equipo") or record.get("equipo_anterior")
+        team_matches = teams_by_name.get(normalize_key(team_name), []) if team_name else []
+        if len(team_matches) == 1:
+            player["equipo_id"] = team_matches[0]["id"]
+            player["equipo_historico_referencia"] = team_name
+            team_assignments += 1
+        elif team_name:
+            player["equipo_historico_referencia"] = team_name
+            team_pending += 1
         operations.append({"collection": "players", "id": player["id"], "before": before, "after": player})
         matched += 1
 
@@ -1978,6 +1992,7 @@ def _historical_enrichment_operations(draft: dict, existing: dict, job_id: str) 
     return operations, {
         "matched_players": matched, "unmatched_rows": unmatched,
         "ambiguous_rows": ambiguous, "bank_references": bank_refs,
+        "team_assignments": team_assignments, "team_names_pending": team_pending,
         "created_players": 0, "official_debts": 0,
     }
 

@@ -71,15 +71,18 @@ def test_compact_history_enriches_only_unique_existing_player_and_protects_bank(
             "bank": {"status": "valid", "iban_encrypted": "ciphertext", "iban_last4": "1332"},
         }],
     }
+    draft["records"][0]["equipo"] = "Cadete A"
     existing = {"players": [{"id": "p1", "nombre": "Alex", "apellidos": "de la Fuente"}],
-                "payments": [], "families": [], "teams": [], "inscriptions": []}
+                "payments": [], "families": [], "teams": [{"id": "t1", "nombre": "Cadete A"}], "inscriptions": []}
     operations, summary = _historical_enrichment_operations(draft, existing, "job-1")
     assert summary == {"matched_players": 1, "unmatched_rows": 0, "ambiguous_rows": 0,
-                       "bank_references": 1, "created_players": 0, "official_debts": 0}
+                       "bank_references": 1, "team_assignments": 1, "team_names_pending": 0,
+                       "created_players": 0, "official_debts": 0}
     player = next(op["after"] for op in operations if op["collection"] == "players")
     payment = next(op["after"] for op in operations if op["collection"] == "payments")
     assert player["segunda_equipacion"]["number"] == "9"
     assert player["posicion"] == "PORTERO"
+    assert player["equipo_id"] == "t1"
     assert payment["iban_encrypted"] == "ciphertext"
     assert payment["importe_final"] == 0 and payment["confirmed_debt"] is False
     assert "ES91" not in str(operations)
@@ -92,7 +95,7 @@ def test_compact_history_never_creates_or_updates_ambiguous_players():
     existing = {"players": [
         {"id": "p1", "nombre": "Mismo", "apellidos": "Nombre"},
         {"id": "p2", "nombre": "Mismo", "apellidos": "Nombre"},
-    ], "payments": []}
+    ], "payments": [], "teams": []}
     operations, summary = _historical_enrichment_operations(draft, existing, "job-1")
     assert operations == []
     assert summary["ambiguous_rows"] == 1
