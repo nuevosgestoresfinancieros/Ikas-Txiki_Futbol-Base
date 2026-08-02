@@ -39,11 +39,13 @@ def workbook_bytes(rows, formulas=None):
     buffer = io.BytesIO(); workbook.save(buffer); return buffer.getvalue()
 
 
-def compact_workbook_bytes(rows):
+def compact_workbook_bytes(rows, formulas=None):
     workbook = Workbook(); sheet = workbook.active; sheet.title = "BBDD"
     sheet.append(list(COMPACT_HEADERS))
     for row in rows:
         sheet.append(row)
+    for cell, formula in formulas or []:
+        sheet[cell] = formula
     buffer = io.BytesIO(); workbook.save(buffer); return buffer.getvalue()
 
 
@@ -147,6 +149,20 @@ def test_compact_64_column_export_maps_pending_player_history_without_fabricatin
     assert record["historical"]["equipment_current"]["number"] == "9"
     assert record["historical"]["sport"]["position"] == "PORTERA"
     assert record["historical"]["consents"]["images"] == "yes"
+
+
+def test_compact_missing_birthdate_and_broken_fee_formula_do_not_block_profile_enrichment():
+    row = [None] * COMPACT_TOTAL_COLUMNS
+    row[0:2] = ["Ane", "Ficticia"]
+    row[43] = "Alevín"
+    parsed = parse_historical_excel(compact_workbook_bytes([row], [("BF2", "=BE2-#REF!")]), _ids())
+    records, _, incidents = prepare_historical_staging(parsed, SECRET)
+    assert records[0]["fecha_nacimiento"] is None
+    birth = next(item for item in incidents if item["field"] == "fecha_nacimiento")
+    formula = next(item for item in incidents if item["field"] == "formula")
+    assert birth["blocking"] is False
+    assert formula["blocking"] is False
+    assert formula["code"] == "formula_fee_reference_ignored"
     simulation = historical_simulation(parsed, [{"nombre": "Ane", "apellidos": "Ficticia", "fecha_nacimiento": "2010-01-01"}])
     assert simulation["profile_enrichment_candidates"] == 1
     assert simulation["proposed_creates"] == 0 and simulation["official_writes"] == 0

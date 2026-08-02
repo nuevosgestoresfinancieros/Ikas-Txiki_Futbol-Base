@@ -568,6 +568,15 @@ def prepare_historical_staging(parsed: Mapping[str, Any], secret: str) -> tuple[
         row.update({"_row": source["source_row"], "_staging_id": source["id"]})
         rows.append(row); by_source_row[source["source_row"]] = source
     records, duplicates, incidents = prepare_records(rows, secret)
+    compact = parsed.get("source_layout") == "compact_64"
+    if compact:
+        # La exportación compacta no contiene fecha de nacimiento. Solo puede
+        # enriquecer jugadores ya existentes mediante coincidencia nominal
+        # única, por lo que esta ausencia no es un bloqueo de identidad.
+        for incident in incidents:
+            if incident.get("field") == "fecha_nacimiento" and incident.get("code") == "missing":
+                incident["blocking"] = False
+                incident["classification"] = "not_present_in_compact_source"
     for record in records:
         source = by_source_row[record["source_row"]]
         historical = dict(source["historical"])
@@ -587,9 +596,14 @@ def prepare_historical_staging(parsed: Mapping[str, Any], secret: str) -> tuple[
     record_ids = {record["source_row"]: record["id"] for record in records}
     for blocked in parsed.get("blocked_formulas", []):
         if blocked["source_row"] in record_ids:
+            # BF (58) es un saldo económico de referencia. Las fórmulas #REF!
+            # no se materializan y el valor queda vacío; nunca crean deuda.
+            ignored_fee_reference = compact and blocked.get("column") == 58
             incidents.append({
                 "id": str(uuid.uuid4()), "record_id": record_ids[blocked["source_row"]],
                 "source_row": blocked["source_row"], "field": "formula",
-                "code": "formula_not_allowed", "blocking": True, "resolution": "pending",
+                "code": "formula_fee_reference_ignored" if ignored_fee_reference else "formula_not_allowed",
+                "blocking": not ignored_fee_reference, "resolution": "pending",
+                **({"classification": "unconfirmed_fee_reference_omitted"} if ignored_fee_reference else {}),
             })
     return records, duplicates, incidents

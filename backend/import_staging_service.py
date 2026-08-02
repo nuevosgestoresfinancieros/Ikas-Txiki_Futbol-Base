@@ -283,7 +283,7 @@ def draft_summary(draft: Mapping[str, Any]) -> dict:
     # contact and family suggestions are follow-up work, not import blockers.
     if historical:
         blocking_incidents = [item for item in blocking_incidents if item.get("field") not in {
-            "equipo", "modalidad", "email_formulario", "progenitor1_email", "progenitor2_email",
+            "equipo", "modalidad", "fecha_nacimiento", "email_formulario", "progenitor1_email", "progenitor2_email",
         }]
         blockers = unresolved_duplicates + pending_fuzzy + len(blocking_incidents)
     else:
