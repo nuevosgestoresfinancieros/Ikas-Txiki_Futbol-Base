@@ -7,6 +7,7 @@ from passlib.context import CryptContext
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+import asyncio
 import io
 import base64
 import html as html_lib
@@ -3629,6 +3630,234 @@ class Training(BaseModel):
     callup_id: Optional[str] = None
 
 
+# Evaluaciones individuales: las escalas son ordinales y deliberadamente
+# limitadas a 1--5. No representan mediciones clínicas ni predicciones.
+EVALUATION_SCORE_FIELDS = (
+    "participacion", "actitud", "esfuerzo", "comprension_tactica", "tecnica", "condicion_fisica",
+)
+EVALUATION_STATUSES = {"draft", "completed", "closed"}
+
+
+class TrainingEvaluationPayload(BaseModel):
+    training_id: str
+    player_id: str
+    asistencia: Optional[str] = None
+    participacion: Optional[int] = Field(default=None, ge=1, le=5)
+    actitud: Optional[int] = Field(default=None, ge=1, le=5)
+    esfuerzo: Optional[int] = Field(default=None, ge=1, le=5)
+    comprension_tactica: Optional[int] = Field(default=None, ge=1, le=5)
+    tecnica: Optional[int] = Field(default=None, ge=1, le=5)
+    condicion_fisica: Optional[int] = Field(default=None, ge=1, le=5)
+    observaciones: Optional[str] = Field(default=None, max_length=2000)
+    incidencias: Optional[str] = Field(default=None, max_length=2000)
+    estado: str = "draft"
+    fecha_evaluacion: Optional[str] = None
+
+    @field_validator("asistencia")
+    @classmethod
+    def validate_attendance(cls, value: Optional[str]):
+        if value is not None and value not in ATTENDANCE_STATES:
+            raise ValueError("Estado de asistencia no válido")
+        return value
+
+    @field_validator("training_id", "player_id")
+    @classmethod
+    def validate_reference_ids(cls, value: str):
+        value = value.strip()
+        if not value:
+            raise ValueError("La evaluación requiere referencias válidas")
+        return value
+
+    @field_validator("estado")
+    @classmethod
+    def validate_evaluation_status(cls, value: str):
+        if value not in EVALUATION_STATUSES:
+            raise ValueError("Estado de evaluación no válido")
+        return value
+
+    @field_validator("observaciones", "incidencias")
+    @classmethod
+    def normalize_evaluation_text(cls, value: Optional[str]):
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+    @field_validator("fecha_evaluacion")
+    @classmethod
+    def validate_evaluation_date(cls, value: Optional[str]):
+        if value:
+            try:
+                datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise ValueError("Fecha de evaluación no válida") from exc
+        return value
+
+
+class TrainingEvaluationBulkPayload(BaseModel):
+    training_id: str
+    evaluations: List[TrainingEvaluationPayload] = Field(min_length=1, max_length=500)
+
+
+_training_evaluation_write_lock = asyncio.Lock()
+
+
+async def ensure_training_evaluation_indexes() -> None:
+    """Inicialización idempotente del índice de integridad de evaluaciones.
+
+    No transforma datos ni ejecuta migraciones: solo garantiza que la nueva
+    colección no pueda aceptar dos evaluaciones activas para el mismo jugador
+    y entrenamiento. La documentación de la colección describe su rollback.
+    """
+    await db.training_evaluations.create_index(
+        [("training_id", 1), ("player_id", 1)],
+        unique=True,
+        name="training_player_unique",
+    )
+    await db.training_evaluations.create_index(
+        [("player_id", 1), ("fecha_evaluacion", -1)],
+        name="player_evaluation_history",
+    )
+
+
+async def _evaluation_training_context(training_id: str, player_id: Optional[str] = None) -> dict:
+    """Resuelve entrenamiento, equipo, jugador y asistencia dentro del ámbito."""
+    actor = current_user_context.get() or {}
+    training = await get_doc("trainings", training_id)
+    team_id = training.get("equipo_id")
+    if not team_id:
+        raise HTTPException(status_code=422, detail="El entrenamiento no tiene equipo asociado")
+    team = await db.teams.find_one({"id": team_id}, {"_id": 0})
+    if not team:
+        raise HTTPException(status_code=422, detail="El equipo del entrenamiento no existe")
+    if actor.get("role") != "admin" and team_id not in set(ids(actor.get("assigned_team_ids") or [])):
+        raise HTTPException(status_code=403, detail="El entrenamiento queda fuera de tu ámbito")
+    player = None
+    attendance = None
+    if player_id:
+        player = await db.players.find_one({"id": player_id}, {"_id": 0})
+        if not player:
+            raise HTTPException(status_code=404, detail="El jugador no existe")
+        if player.get("equipo_id") != team_id:
+            raise HTTPException(status_code=422, detail="El jugador no pertenece al equipo del entrenamiento")
+        attendance = next((row for row in training.get("asistencia") or [] if row.get("player_id") == player_id), None)
+        if attendance is None:
+            raise HTTPException(status_code=422, detail="El jugador no tiene asistencia registrada en este entrenamiento")
+    return {"actor": actor, "training": training, "team": team, "player": player, "attendance": attendance}
+
+
+def _validate_evaluation_values(data: dict, attendance_state: str, *, require_complete: bool = False) -> None:
+    """Valida la relación entre asistencia, escala y estado sin inventar datos."""
+    if attendance_state not in ATTENDANCE_STATES:
+        raise HTTPException(status_code=422, detail="La asistencia del jugador no es válida")
+    scores = [data.get(field) for field in EVALUATION_SCORE_FIELDS]
+    if attendance_state != "presente" and any(value is not None for value in scores):
+        raise HTTPException(
+            status_code=422,
+            detail="No se pueden registrar puntuaciones para un jugador ausente; revisa primero la asistencia",
+        )
+    if require_complete and attendance_state == "presente" and any(value is None for value in scores):
+        raise HTTPException(
+            status_code=422,
+            detail="La evaluación está incompleta: completa todos los criterios antes de cerrarla",
+        )
+
+
+def _evaluation_document(payload: TrainingEvaluationPayload, context: dict, actor: dict, *, status: Optional[str] = None) -> dict:
+    data = payload.model_dump()
+    attendance_state = context["attendance"].get("estado")
+    requested_attendance = data.get("asistencia")
+    if requested_attendance and requested_attendance != attendance_state:
+        raise HTTPException(status_code=409, detail="La evaluación debe reutilizar la asistencia registrada")
+    data["asistencia"] = attendance_state
+    data["equipo_id"] = context["team"]["id"]
+    data["temporada"] = context["team"].get("temporada") or context["training"].get("temporada")
+    if not data["temporada"]:
+        raise HTTPException(status_code=422, detail="No se ha podido determinar la temporada del entrenamiento")
+    data["categoria"] = context["team"].get("categoria")
+    data["evaluador_id"] = actor.get("id")
+    data["evaluador_role"] = actor.get("role")
+    data["fecha_evaluacion"] = data.get("fecha_evaluacion") or now_iso()
+    data["estado"] = status or data.get("estado") or "draft"
+    _validate_evaluation_values(data, attendance_state, require_complete=data["estado"] in {"completed", "closed"})
+    if data["estado"] == "closed" and status != "closed":
+        raise HTTPException(status_code=422, detail="El cierre debe confirmarse con el endpoint de cierre")
+    return data
+
+
+async def record_training_evaluation_audit(action: str, evaluation: dict, *, previous: Optional[dict] = None) -> None:
+    actor = current_user_context.get() or {}
+    changed = []
+    if previous:
+        changed = sorted(
+            key for key in evaluation.keys()
+            if key not in {"updated_at", "created_at"} and previous.get(key) != evaluation.get(key)
+        )
+    await db.internal_events.insert_one({
+        "id": new_id(),
+        "type": f"training_evaluation.{action}",
+        "actor_user_id": actor.get("id"),
+        "actor_role": actor.get("role"),
+        "training_id": evaluation.get("training_id"),
+        "player_id": evaluation.get("player_id"),
+        "equipo_id": evaluation.get("equipo_id"),
+        "evaluation_id": evaluation.get("id"),
+        "status": evaluation.get("estado"),
+        "detail": {"changed_fields": changed},
+        "created_at": now_iso(),
+        "result": "success",
+    })
+
+
+def _evaluation_public(document: dict, players_by_id: Optional[dict] = None) -> dict:
+    row = dict(document)
+    row.pop("_id", None)
+    if players_by_id is not None:
+        player = players_by_id.get(row.get("player_id"), {})
+        row["player_name"] = f"{player.get('nombre', '')} {player.get('apellidos', '')}".strip() or "—"
+    return row
+
+
+async def _training_evaluation_listing(training_id: str, status: Optional[str] = None) -> dict:
+    context = await _evaluation_training_context(training_id)
+    team_id = context["team"]["id"]
+    players = await list_docs("players", {"equipo_id": team_id})
+    players_by_id = {player.get("id"): player for player in players}
+    attendance_by_player = {row.get("player_id"): row for row in context["training"].get("asistencia") or []}
+    evaluations = await db.training_evaluations.find({"training_id": training_id}, {"_id": 0}).sort("updated_at", -1).to_list(5000)
+    evaluations_by_player = {}
+    for evaluation in evaluations:
+        evaluations_by_player.setdefault(evaluation.get("player_id"), evaluation)
+    rows = []
+    for player in players:
+        player_id = player.get("id")
+        evaluation = evaluations_by_player.get(player_id)
+        attendance = attendance_by_player.get(player_id)
+        row = {
+            "player_id": player_id,
+            "player_name": f"{player.get('nombre', '')} {player.get('apellidos', '')}".strip() or "—",
+            "asistencia": attendance.get("estado") if attendance else None,
+            "motivo_asistencia": attendance.get("motivo") if attendance else None,
+            "evaluation": _evaluation_public(evaluation, players_by_id) if evaluation else None,
+        }
+        row["evaluation_status"] = (evaluation or {}).get("estado") if evaluation else "pending"
+        if status and row["evaluation_status"] != status:
+            continue
+        rows.append(row)
+    evaluated = [row for row in rows if row["evaluation"]]
+    incomplete = [row for row in evaluated if row["evaluation_status"] == "draft"]
+    absent = [row for row in rows if row.get("asistencia") in {"justificada", "injustificada", "lesion"}]
+    return {
+        "training": {"id": training_id, "fecha": context["training"].get("fecha"), "hora": context["training"].get("hora")},
+        "team": {"id": team_id, "nombre": context["team"].get("nombre"), "categoria": context["team"].get("categoria"), "temporada": context["team"].get("temporada")},
+        "players": rows,
+        "summary": {
+            "total": len(rows), "evaluated": len(evaluated), "pending": len(rows) - len(evaluated),
+            "incomplete": len(incomplete), "absent": len(absent),
+        },
+    }
+
+
 async def attendance_data(desde: Optional[str] = None, hasta: Optional[str] = None,
                           equipo_id: Optional[str] = None, player_id: Optional[str] = None):
     """Devuelve datos ya acotados por la identidad autenticada, nunca por el cliente."""
@@ -3851,6 +4080,160 @@ async def duplicate_training(tr_id: str, data: Dict[str, Any]):
     if exercise_ids:
         await db.exercises.update_many({"id": {"$in": exercise_ids}}, {"$inc": {"usage_count": 1}})
     return created
+
+
+# ================= TRAINING EVALUATIONS =================
+@api_router.get("/training-evaluations/training/{training_id}")
+async def list_training_evaluations(training_id: str, status: Optional[str] = None):
+    if status and status not in EVALUATION_STATUSES | {"pending"}:
+        raise HTTPException(status_code=422, detail="Filtro de estado de evaluación no válido")
+    return await _training_evaluation_listing(training_id, status)
+
+
+@api_router.get("/training-evaluations/pending")
+async def list_pending_training_evaluations(training_id: str):
+    return await _training_evaluation_listing(training_id, "pending")
+
+
+@api_router.get("/training-evaluations/player/{player_id}")
+async def list_player_training_evaluations(player_id: str, training_id: Optional[str] = None):
+    player = await get_doc("players", player_id)
+    query = {"player_id": player_id}
+    actor = current_user_context.get() or {}
+    audit_query = {"type": {"$regex": "^training_evaluation\\."}, "player_id": player_id}
+    if actor.get("role") != "admin":
+        allowed_team_ids = ids(actor.get("assigned_team_ids") or [])
+        query["equipo_id"] = {"$in": allowed_team_ids}
+        audit_query["equipo_id"] = {"$in": allowed_team_ids}
+    if training_id:
+        await _evaluation_training_context(training_id, player_id)
+        query["training_id"] = training_id
+    evaluations = await db.training_evaluations.find(query, {"_id": 0}).sort("fecha_evaluacion", -1).to_list(5000)
+    audits = await db.internal_events.find(
+        audit_query,
+        {"_id": 0, "type": 1, "actor_user_id": 1, "actor_role": 1, "training_id": 1,
+         "evaluation_id": 1, "status": 1, "detail": 1, "created_at": 1},
+    ).sort("created_at", -1).to_list(5000)
+    return {
+        "player": {"id": player.get("id"), "nombre": f"{player.get('nombre', '')} {player.get('apellidos', '')}".strip()},
+        "evaluations": [_evaluation_public(row) for row in evaluations],
+        "audit": audits,
+    }
+
+
+@api_router.get("/training-evaluations/{evaluation_id}")
+async def get_training_evaluation(evaluation_id: str):
+    evaluation = await db.training_evaluations.find_one({"id": evaluation_id}, {"_id": 0})
+    if not evaluation:
+        raise HTTPException(status_code=404, detail="Evaluación no encontrada")
+    await _evaluation_training_context(evaluation["training_id"], evaluation["player_id"])
+    audits = await db.internal_events.find(
+        {"type": {"$regex": "^training_evaluation\\."}, "evaluation_id": evaluation_id},
+        {"_id": 0, "type": 1, "actor_user_id": 1, "actor_role": 1, "status": 1, "detail": 1, "created_at": 1},
+    ).sort("created_at", -1).to_list(200)
+    return {"evaluation": _evaluation_public(evaluation), "audit": audits}
+
+
+@api_router.post("/training-evaluations")
+async def create_training_evaluation(payload: TrainingEvaluationPayload):
+    context = await _evaluation_training_context(payload.training_id, payload.player_id)
+    actor = current_user_context.get() or {}
+    data = _evaluation_document(payload, context, actor)
+    if data.get("estado") == "closed":
+        raise HTTPException(status_code=422, detail="El cierre debe confirmarse con el endpoint de cierre")
+    async with _training_evaluation_write_lock:
+        await ensure_training_evaluation_indexes()
+        existing = await db.training_evaluations.find_one(
+            {"training_id": payload.training_id, "player_id": payload.player_id}, {"_id": 0}
+        )
+        if existing:
+            raise HTTPException(status_code=409, detail="Ya existe una evaluación para este jugador y entrenamiento")
+        document = {"id": new_id(), **data, "created_at": now_iso(), "updated_at": now_iso()}
+        try:
+            await db.training_evaluations.insert_one(document)
+        except DuplicateKeyError as exc:
+            raise HTTPException(status_code=409, detail="Ya existe una evaluación para este jugador y entrenamiento") from exc
+    await record_training_evaluation_audit("created", document)
+    return _evaluation_public(document)
+
+
+@api_router.post("/training-evaluations/bulk")
+async def save_training_evaluations_bulk(payload: TrainingEvaluationBulkPayload):
+    actor = current_user_context.get() or {}
+    seen_players = set()
+    contexts = []
+    for item in payload.evaluations:
+        if item.training_id != payload.training_id:
+            raise HTTPException(status_code=422, detail="Todas las evaluaciones deben pertenecer al mismo entrenamiento")
+        if item.player_id in seen_players:
+            raise HTTPException(status_code=422, detail="La petición contiene jugadores duplicados")
+        seen_players.add(item.player_id)
+        context = await _evaluation_training_context(payload.training_id, item.player_id)
+        data = _evaluation_document(item, context, actor)
+        contexts.append((item, context, data))
+
+    async with _training_evaluation_write_lock:
+        await ensure_training_evaluation_indexes()
+        existing_rows = await db.training_evaluations.find(
+            {"training_id": payload.training_id, "player_id": {"$in": list(seen_players)}}, {"_id": 0}
+        ).to_list(500)
+        existing_by_player = {row.get("player_id"): row for row in existing_rows}
+        for item, _context, data in contexts:
+            existing = existing_by_player.get(item.player_id)
+            if existing and existing.get("estado") == "closed":
+                raise HTTPException(status_code=409, detail="No se puede editar una evaluación cerrada")
+            if data.get("estado") == "closed":
+                raise HTTPException(status_code=422, detail="El cierre debe confirmarse con el endpoint de cierre")
+        saved = []
+        now = now_iso()
+        for item, _context, data in contexts:
+            existing = existing_by_player.get(item.player_id)
+            if existing:
+                document = {**existing, **data, "id": existing["id"], "created_at": existing.get("created_at") or now, "updated_at": now}
+                await db.training_evaluations.update_one({"id": existing["id"]}, {"$set": document})
+                await record_training_evaluation_audit("updated", document, previous=existing)
+            else:
+                document = {"id": new_id(), **data, "created_at": now, "updated_at": now}
+                await db.training_evaluations.insert_one(document)
+                await record_training_evaluation_audit("created", document)
+            saved.append(_evaluation_public(document))
+    return {"saved": saved, "count": len(saved)}
+
+
+@api_router.put("/training-evaluations/{evaluation_id}")
+async def update_training_evaluation(evaluation_id: str, payload: TrainingEvaluationPayload):
+    existing = await db.training_evaluations.find_one({"id": evaluation_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Evaluación no encontrada")
+    if existing.get("estado") == "closed":
+        raise HTTPException(status_code=409, detail="No se puede editar una evaluación cerrada")
+    if payload.training_id != existing.get("training_id") or payload.player_id != existing.get("player_id"):
+        raise HTTPException(status_code=409, detail="La evaluación no puede cambiar de jugador ni de entrenamiento")
+    context = await _evaluation_training_context(payload.training_id, payload.player_id)
+    data = _evaluation_document(payload, context, current_user_context.get() or {})
+    if data.get("estado") == "closed":
+        raise HTTPException(status_code=422, detail="El cierre debe confirmarse con el endpoint de cierre")
+    document = {**existing, **data, "id": evaluation_id, "created_at": existing.get("created_at") or now_iso(), "updated_at": now_iso()}
+    async with _training_evaluation_write_lock:
+        await db.training_evaluations.update_one({"id": evaluation_id}, {"$set": document})
+    await record_training_evaluation_audit("updated", document, previous=existing)
+    return _evaluation_public(document)
+
+
+@api_router.post("/training-evaluations/{evaluation_id}/close")
+async def close_training_evaluation(evaluation_id: str):
+    existing = await db.training_evaluations.find_one({"id": evaluation_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Evaluación no encontrada")
+    if existing.get("estado") == "closed":
+        return _evaluation_public(existing)
+    context = await _evaluation_training_context(existing["training_id"], existing["player_id"])
+    _validate_evaluation_values(existing, context["attendance"].get("estado"), require_complete=True)
+    document = {**existing, "estado": "closed", "updated_at": now_iso()}
+    async with _training_evaluation_write_lock:
+        await db.training_evaluations.update_one({"id": evaluation_id}, {"$set": document})
+    await record_training_evaluation_audit("closed", document, previous=existing)
+    return _evaluation_public(document)
 
 
 # ================= INTEGRAL STATISTICS =================
@@ -5124,7 +5507,7 @@ async def root():
 
 # ================= DEMO SEED / CLEAR =================
 ALL_COLLECTIONS = ["players", "families", "teams", "matches", "callups", "payments",
-                   "authorizations", "inscriptions", "trainings", "stats", "communications"]
+                   "authorizations", "inscriptions", "trainings", "training_evaluations", "stats", "communications"]
 
 
 @api_router.post("/clear-all")
@@ -5766,6 +6149,11 @@ app.add_middleware(
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+
+@app.on_event("startup")
+async def initialize_training_evaluation_indexes():
+    await ensure_training_evaluation_indexes()
 
 
 @app.on_event("shutdown")

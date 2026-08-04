@@ -14,7 +14,7 @@ RESOURCES = (
     "matches", "callups", "attendance", "payments", "authorizations",
     "inscriptions", "communications", "reports", "stats", "search",
     "equipment", "settings", "modalities", "data", "calendar", "portal", "notifications", "assistant",
-    "exercises",
+    "exercises", "training-evaluations",
 )
 
 
@@ -45,6 +45,7 @@ ROLE_PERMISSIONS: Dict[str, Dict[str, Set[str]]] = {
         "modalities": _actions("read"),
         "assistant": _actions("read", "create", "edit"),
         "exercises": _actions("read", "create", "edit", "delete", "export"),
+        "training-evaluations": _actions("read", "create", "edit"),
     },
     "coach": {
         "dashboard": _actions("read"),
@@ -64,6 +65,7 @@ ROLE_PERMISSIONS: Dict[str, Dict[str, Set[str]]] = {
         "modalities": _actions("read"),
         "assistant": _actions("read", "create", "edit"),
         "exercises": _actions("read", "create", "edit", "delete", "export"),
+        "training-evaluations": _actions("read", "create", "edit"),
     },
     "family": {
         "dashboard": _actions("read"),
@@ -117,6 +119,7 @@ PATH_RESOURCES = {
     "users": "users", "categories": "teams", "compute-category": "players", "calendar": "calendar", "portal": "portal", "notifications": "notifications", "modalities": "modalities",
     "inscription-imports": "data", "assistant": "assistant",
     "exercises": "exercises", "training-templates": "exercises", "statistics": "stats",
+    "training-evaluations": "training-evaluations",
     "export-excel": "data", "import-excel": "data", "clear-all": "data",
     "seed-demo": "data",
 }
@@ -186,6 +189,8 @@ def route_permission(request: Request) -> tuple[str, str]:
         return "assistant", "create" if method == "POST" else "read"
     if first in {"exercises", "training-templates"} and any(part in {"archive", "restore"} for part in parts):
         return "exercises", "edit"
+    if first == "training-evaluations" and "close" in parts:
+        return "training-evaluations", "edit"
     if first == "exercises" and "duplicate" in parts:
         return "exercises", "create"
     if first in {"clear-all", "seed-demo", "import-excel", "inscription-imports"}:

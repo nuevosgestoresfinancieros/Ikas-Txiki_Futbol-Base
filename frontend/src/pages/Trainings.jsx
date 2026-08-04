@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Dumbbell, Plus, Pencil, Trash2, Check, Download, AlertTriangle, FileText, Library, Copy } from "lucide-react";
+import { Dumbbell, Plus, Pencil, Trash2, Check, Download, AlertTriangle, FileText, Library, Copy, ClipboardCheck } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
 import { PermissionGate, usePermission } from "@/auth";
@@ -14,6 +14,7 @@ import { PageHeader, EmptyState, initials } from "@/components/shared";
 import { Field, Area, SelectField } from "@/components/form";
 import ExerciseLibrary from "@/components/ExerciseLibrary";
 import TrainingExercisePlanner from "@/components/TrainingExercisePlanner";
+import TrainingEvaluations from "@/components/TrainingEvaluations";
 import GoogleMapsLinks from "@/components/GoogleMapsLinks";
 import { historicalExerciseLabel, validateEvaluation } from "./trainingExerciseView";
 
@@ -21,6 +22,7 @@ const ATT_STATES = ["presente", "justificada", "injustificada", "lesion"];
 
 const Trainings = () => {
   const canCreate = usePermission("trainings", "create");
+  const canEvaluate = usePermission("training-evaluations", "read");
   const canReadExercises = usePermission("exercises", "read");
   const { t, lang } = useI18n();
   const [params, setParams] = useSearchParams();
@@ -37,6 +39,7 @@ const Trainings = () => {
   const [templates, setTemplates] = useState([]);
   const [libraryCreateRequested, setLibraryCreateRequested] = useState(false);
   const [returnToTrainingAfterExercise, setReturnToTrainingAfterExercise] = useState(false);
+  const [evaluationTraining, setEvaluationTraining] = useState(null);
 
   const load = async () => {
     try {
@@ -147,6 +150,7 @@ const Trainings = () => {
               </div>
               <div className="flex items-center gap-3">
                 <span className="inline-flex items-center gap-1.5 text-sm text-green-600"><Check className="h-4 w-4" />{i.presentes}/{i.total_asistencia} {t("present_short").toLowerCase()}</span>
+                {canEvaluate && <Button variant="ghost" size="icon" aria-label={`${t("openTrainingEvaluations")} ${i.fecha || t("trainings")}`} data-testid={`evaluate-training-${i.id}`} onClick={() => setEvaluationTraining(i)}><ClipboardCheck className="h-4 w-4" /></Button>}
                 <PermissionGate resource="trainings" action="edit"><Button variant="ghost" size="icon" aria-label={`${t("edit")} ${i.fecha || t("trainings")}`} data-testid={`edit-training-${i.id}`} onClick={() => openEdit(i)}><Pencil className="h-4 w-4" /></Button></PermissionGate>
                 <PermissionGate resource="trainings" action="create"><Button variant="ghost" size="icon" aria-label={`${t("duplicate")} ${i.fecha || t("trainings")}`} onClick={() => duplicate(i)}><Copy className="h-4 w-4" /></Button></PermissionGate>
                 <PermissionGate resource="trainings" action="delete"><Button variant="ghost" size="icon" aria-label={`${t("delete")} ${i.fecha || t("trainings")}`} data-testid={`delete-training-${i.id}`} onClick={() => remove(i)} className="text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button></PermissionGate>
@@ -207,6 +211,7 @@ const Trainings = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {evaluationTraining && <TrainingEvaluations training={evaluationTraining} open={Boolean(evaluationTraining)} onOpenChange={(open) => { if (!open) setEvaluationTraining(null); }} />}
     </div>
   );
 };
