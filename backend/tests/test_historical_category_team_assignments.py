@@ -25,10 +25,18 @@ def draft(category="", team="", team_id=None):
     }
 
 
+def ordinary_draft(category="Alevín", modality="F7", team=""):
+    value = draft(category=category, team=team)
+    value.pop("source_format")
+    value["id"] = "ordinary-draft"
+    value["records"][0]["modalidad"] = modality
+    return value
+
+
 def fake_database(update=None, team=None):
     return SimpleNamespace(
         teams=SimpleNamespace(find_one=AsyncMock(return_value=team)),
-        import_staging=SimpleNamespace(update_one=update or AsyncMock()),
+        import_staging=SimpleNamespace(update_one=update or AsyncMock(), update_many=AsyncMock()),
     )
 
 
@@ -61,6 +69,7 @@ def test_historical_category_requires_confirmation_and_audits_selected_record(mo
     with pytest.raises(HTTPException) as error:
         run(server.bulk_update_staging("historical-draft", request("categoria", "Alevín", False)))
     assert error.value.status_code == 422
+    assert error.value.detail == "La asignación requiere confirmación administrativa expresa"
     staging_doc.side_effect = [before, after]
 
     token = current_user_context.set({"id": "admin-safe", "role": "admin", "active": True})
@@ -92,6 +101,7 @@ def test_historical_team_rejects_missing_or_inactive_identifier(monkeypatch, tea
     with pytest.raises(HTTPException) as error:
         run(server.bulk_update_staging("historical-draft", request("equipo", "team-a")))
     assert error.value.status_code == 422
+    assert error.value.detail == "El equipo no existe o está inactivo"
     update.assert_not_awaited()
 
 
@@ -104,7 +114,74 @@ def test_historical_team_rejects_incompatible_category(monkeypatch):
     with pytest.raises(HTTPException) as error:
         run(server.bulk_update_staging("historical-draft", request("equipo", "team-a")))
     assert error.value.status_code == 422
+    assert error.value.detail == "El equipo no pertenece a la categoría de todos los registros seleccionados"
     update.assert_not_awaited()
+
+
+def test_historical_team_rejects_incompatible_modality_without_partial_write(monkeypatch):
+    team = {"id": "team-a", "nombre": "Equipo A", "categoria": "Alevín",
+            "modalidad": "F11", "estado": "activo"}
+    update = AsyncMock()
+    monkeypatch.setattr(server, "_staging_doc", AsyncMock(return_value={**draft(category="Alevín"),
+        "records": [{**draft(category="Alevín")["records"][0], "modalidad": "F7"}]}))
+    monkeypatch.setattr(server, "db", fake_database(update=update, team=team))
+
+    with pytest.raises(HTTPException) as error:
+        run(server.bulk_update_staging("historical-draft", request("equipo", "team-a")))
+    assert error.value.status_code == 422
+    assert error.value.detail == "El equipo no pertenece a la modalidad de todos los registros seleccionados"
+    update.assert_not_awaited()
+
+
+def test_ordinary_bulk_team_proposal_does_not_require_resolved_team(monkeypatch):
+    before = ordinary_draft()
+    after = ordinary_draft(team="Equipo Propuesto")
+    update = AsyncMock()
+    monkeypatch.setattr(server, "_staging_doc", AsyncMock(side_effect=[before, after]))
+    monkeypatch.setattr(server, "db", fake_database(update=update))
+
+    result = run(server.bulk_update_staging(
+        "ordinary-draft", request("equipo", "Equipo Propuesto", False),
+    ))
+
+    assert result["summary"]["missing_team"] == 0
+    operation = update.await_args.args[1]
+    assert operation["$set"]["records.$[row].equipo"] == "Equipo Propuesto"
+    assert "records.$[row].equipo_id" not in operation["$set"]
+    assert operation["$push"]["audit"]["detail"]["changes"] == [{
+        "record_id": "record-1", "previous_value": None, "new_value": "Equipo Propuesto",
+    }]
+
+
+def test_ordinary_bulk_team_rejects_empty_proposal_without_partial_write(monkeypatch):
+    update = AsyncMock()
+    monkeypatch.setattr(server, "_staging_doc", AsyncMock(return_value=ordinary_draft()))
+    monkeypatch.setattr(server, "db", fake_database(update=update))
+
+    with pytest.raises(HTTPException) as error:
+        run(server.bulk_update_staging("ordinary-draft", request("equipo", "", False)))
+    assert error.value.status_code == 422
+    assert error.value.detail == "El valor de asignación es obligatorio"
+    update.assert_not_awaited()
+
+
+def test_ordinary_individual_team_edit_keeps_its_existing_contract(monkeypatch):
+    before = ordinary_draft()
+    after = ordinary_draft(team="Equipo Individual")
+    update = AsyncMock(return_value=SimpleNamespace(modified_count=1))
+    database = fake_database(update=update)
+    monkeypatch.setattr(server, "_staging_doc", AsyncMock(side_effect=[before, after]))
+    monkeypatch.setattr(server, "db", database)
+
+    result = run(server.update_staging_record(
+        "ordinary-draft", "record-1",
+        server.StagingRecordUpdate(field="equipo", value="Equipo Individual"),
+    ))
+
+    assert result["summary"]["missing_team"] == 0
+    operation = update.await_args.args[1]
+    assert operation["$set"]["records.$.equipo"] == "Equipo Individual"
+    assert "records.$.equipo_id" not in operation["$set"]
 
 
 def test_historical_team_resolves_real_id_updates_counter_and_audits(monkeypatch):

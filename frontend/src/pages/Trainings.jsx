@@ -1,22 +1,26 @@
 import React, { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Dumbbell, Plus, Pencil, Trash2, Check, Download, AlertTriangle, FileText } from "lucide-react";
+import { Dumbbell, Plus, Pencil, Trash2, Check, Download, AlertTriangle, FileText, Library, Copy } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
 import { PermissionGate, usePermission } from "@/auth";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { PageHeader, EmptyState, initials } from "@/components/shared";
 import { Field, Area, SelectField } from "@/components/form";
+import ExerciseLibrary from "@/components/ExerciseLibrary";
+import TrainingExercisePlanner from "@/components/TrainingExercisePlanner";
+import { historicalExerciseLabel, validateEvaluation } from "./trainingExerciseView";
 
 const ATT_STATES = ["presente", "justificada", "injustificada", "lesion"];
 
 const Trainings = () => {
   const canCreate = usePermission("trainings", "create");
+  const canReadExercises = usePermission("exercises", "read");
   const { t, lang } = useI18n();
   const [params, setParams] = useSearchParams();
   const [items, setItems] = useState([]);
@@ -27,6 +31,11 @@ const Trainings = () => {
   const [summary, setSummary] = useState(null);
   const [summaryError, setSummaryError] = useState(false);
   const [teamFilter, setTeamFilter] = useState("all");
+  const [view, setView] = useState("sessions");
+  const [exercises, setExercises] = useState([]);
+  const [templates, setTemplates] = useState([]);
+  const [libraryCreateRequested, setLibraryCreateRequested] = useState(false);
+  const [returnToTrainingAfterExercise, setReturnToTrainingAfterExercise] = useState(false);
 
   const load = async () => {
     try {
@@ -39,7 +48,12 @@ const Trainings = () => {
   };
   useEffect(() => {
     load();
-    Promise.all([api.get("/teams"), api.get("/players")]).then(([tm, p]) => { setTeams(tm.data); setPlayers(p.data); });
+    Promise.all([api.get("/teams"), api.get("/players")])
+      .then(([tm, p]) => { setTeams(tm.data); setPlayers(p.data); });
+    if (canReadExercises) {
+      Promise.all([api.get("/exercises", { params: { status: "active", page_size: 100 } }), api.get("/training-templates")])
+        .then(([ex, tpl]) => { setExercises(ex.data.items || []); setTemplates(tpl.data || []); });
+    }
     if (params.get("new") && canCreate) { openNew(); params.delete("new"); setParams(params); }
     // eslint-disable-next-line
   }, []);
@@ -47,8 +61,8 @@ const Trainings = () => {
   useEffect(() => { if (teams.length || teamFilter === "all") load(); /* eslint-disable-line react-hooks/exhaustive-deps */ }, [teamFilter]);
 
   const set = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
-  const openNew = () => { setForm({ asistencia: [], equipo_id: "" }); setDialog(true); };
-  const openEdit = (i) => { setForm({ ...i, asistencia: i.asistencia || [] }); setDialog(true); };
+  const openNew = () => { setForm({ asistencia: [], equipo_id: "", planned_exercises: [] }); setDialog(true); };
+  const openEdit = (i) => { setForm({ ...i, asistencia: i.asistencia || [], planned_exercises: i.planned_exercises || [] }); setDialog(true); };
 
   const teamPlayers = players.filter((p) => p.equipo_id === form.equipo_id);
   const onTeamChange = (id) => {
@@ -58,9 +72,17 @@ const Trainings = () => {
   const setAtt = (pid, estado) => setForm((f) => ({ ...f, asistencia: f.asistencia.map((a) => a.player_id === pid ? { ...a, estado } : a) }));
 
   const save = async () => {
+    const evaluation = validateEvaluation(form.planned_exercises);
+    if (!evaluation.valid) { toast.error(t("notCompletedReasonRequired")); return; }
     if (form.id) await api.put(`/trainings/${form.id}`, form);
     else await api.post("/trainings", form);
     toast.success(t("saved")); setDialog(false); load();
+  };
+  const duplicate = async (item) => {
+    const fecha = window.prompt(t("duplicateTrainingDate"), "");
+    if (!fecha) return;
+    try { await api.post(`/trainings/${item.id}/duplicate`, { fecha }); toast.success(t("trainingDuplicated")); load(); }
+    catch { toast.error(t("saveError")); }
   };
   const remove = async (i) => { if (!window.confirm(t("confirmDelete"))) return; await api.delete(`/trainings/${i.id}`); toast.success(t("deleted")); load(); };
   const download = async (type) => {
@@ -78,6 +100,21 @@ const Trainings = () => {
     <div data-testid="trainings-page">
       <PageHeader title={t("trainings")} icon={Dumbbell}
         action={canCreate ? <Button data-testid="add-training-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("add")}</Button> : null} />
+      <div className="mb-5 flex gap-2 rounded-xl bg-slate-100 p-1" role="tablist" aria-label={t("trainings")}>
+        <button type="button" role="tab" aria-selected={view === "sessions"} onClick={() => setView("sessions")}
+          className={`flex min-h-10 flex-1 items-center justify-center gap-2 rounded-lg px-3 text-sm font-semibold ${view === "sessions" ? "bg-white text-primary shadow-sm" : "text-slate-600"}`}><Dumbbell className="h-4 w-4" />{t("trainingSessions")}</button>
+        {canReadExercises && <button type="button" role="tab" aria-selected={view === "library"} onClick={() => setView("library")}
+          className={`flex min-h-10 flex-1 items-center justify-center gap-2 rounded-lg px-3 text-sm font-semibold ${view === "library" ? "bg-white text-primary shadow-sm" : "text-slate-600"}`}><Library className="h-4 w-4" />{t("exerciseLibrary")}</button>
+        }
+      </div>
+
+      {view === "library" ? <ExerciseLibrary teams={teams} canManage={canCreate} onCatalogChange={setExercises}
+        createRequested={libraryCreateRequested} onCreateRequestHandled={() => setLibraryCreateRequested(false)}
+        onExerciseSaved={() => {
+          if (returnToTrainingAfterExercise) {
+            setReturnToTrainingAfterExercise(false); setView("sessions"); setDialog(true);
+          }
+        }} /> : <>
 
       <section className="surface-card mb-5 p-4" aria-label={t("attendance")}>
         <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -109,16 +146,19 @@ const Trainings = () => {
               <div className="flex items-center gap-3">
                 <span className="inline-flex items-center gap-1.5 text-sm text-green-600"><Check className="h-4 w-4" />{i.presentes}/{i.total_asistencia} {t("present_short").toLowerCase()}</span>
                 <PermissionGate resource="trainings" action="edit"><Button variant="ghost" size="icon" aria-label={`${t("edit")} ${i.fecha || t("trainings")}`} data-testid={`edit-training-${i.id}`} onClick={() => openEdit(i)}><Pencil className="h-4 w-4" /></Button></PermissionGate>
+                <PermissionGate resource="trainings" action="create"><Button variant="ghost" size="icon" aria-label={`${t("duplicate")} ${i.fecha || t("trainings")}`} onClick={() => duplicate(i)}><Copy className="h-4 w-4" /></Button></PermissionGate>
                 <PermissionGate resource="trainings" action="delete"><Button variant="ghost" size="icon" aria-label={`${t("delete")} ${i.fecha || t("trainings")}`} data-testid={`delete-training-${i.id}`} onClick={() => remove(i)} className="text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button></PermissionGate>
               </div>
             </div>
           ))}
         </div>
       )}
+      </>}
 
       <Dialog open={dialog} onOpenChange={setDialog}>
         <DialogContent className="max-w-2xl max-h-[92vh] overflow-y-auto">
-          <DialogHeader><DialogTitle className="font-heading">{form.id ? t("manageAttendance") : t("trainings")}</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle className="font-heading">{form.id ? t("manageAttendance") : t("trainings")}</DialogTitle>
+            <DialogDescription>{t("trainingFormDescription")}</DialogDescription></DialogHeader>
           <div className="space-y-4 pt-2">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <SelectField label={t("team")} value={form.equipo_id} onChange={onTeamChange} options={teamOptions} testid="training-equipo" />
@@ -146,7 +186,16 @@ const Trainings = () => {
                   ))}
                 </div>}
             </div>
-            <Area label={t("exercises")} value={form.ejercicios} onChange={set("ejercicios")} testid="training-ejercicios" />
+            {historicalExerciseLabel(form) && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4" data-testid="historical-exercises">
+              <p className="text-xs font-bold uppercase tracking-wide text-amber-800">{t("historicalExerciseRecord")}</p>
+              <p className="mt-1 whitespace-pre-wrap text-sm text-amber-950">{historicalExerciseLabel(form)}</p>
+            </div>}
+            <TrainingExercisePlanner planned={form.planned_exercises || []} onChange={set("planned_exercises")} exercises={exercises}
+              templates={templates} previousTrainings={items.filter((item) => item.id !== form.id)} canManage={canCreate}
+              onCreateExercise={() => {
+                setDialog(false); setReturnToTrainingAfterExercise(true);
+                setLibraryCreateRequested(true); setView("library");
+              }} onTemplatesChange={setTemplates} />
             <Area label={t("coachNotes")} value={form.observaciones} onChange={set("observaciones")} testid="training-obs" />
           </div>
           <DialogFooter>

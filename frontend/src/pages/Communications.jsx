@@ -6,7 +6,7 @@ import api from "@/api";
 import { PermissionGate, usePermission } from "@/auth";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { PageHeader, EmptyState } from "@/components/shared";
 import { Field, Area, SelectField } from "@/components/form";
 
@@ -21,6 +21,8 @@ const Communications = () => {
   const [categories, setCategories] = useState([]);
   const [players, setPlayers] = useState([]);
   const [providers, setProviders] = useState({});
+  const [recipientPreview, setRecipientPreview] = useState(null);
+  const [previewError, setPreviewError] = useState("");
   const [dialog, setDialog] = useState(false);
   const [form, setForm] = useState(empty);
 
@@ -33,8 +35,18 @@ const Communications = () => {
   }, []);
 
   const set = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
-  const openNew = () => { setForm(empty); setDialog(true); };
-  const openEdit = (i) => { setForm(i); setDialog(true); };
+  const openNew = () => { setForm(empty); setRecipientPreview(null); setPreviewError(""); setDialog(true); };
+  const openEdit = (i) => { setForm(i); setRecipientPreview(null); setPreviewError(""); setDialog(true); };
+  const previewRecipients = async () => {
+    setPreviewError("");
+    try {
+      const response = await api.post("/communications/recipients/preview", { ...form, enviado: false });
+      setRecipientPreview(response.data);
+    } catch (error) {
+      setRecipientPreview(null);
+      setPreviewError(error.response?.data?.detail || t("recipientPreviewError"));
+    }
+  };
   const save = async () => {
     let nombre = "";
     if (form.destinatario_tipo === "equipo") nombre = teams.find(x=>x.id===form.destinatario_id)?.nombre || "";
@@ -69,7 +81,7 @@ const Communications = () => {
                   </div>
                   <div>
                     <p className="font-semibold text-slate-800">{i.asunto || "(sin asunto)"}</p>
-                    <p className="text-xs text-slate-500">{t(i.destinatario_tipo === "equipo" ? "byTeam" : i.destinatario_tipo === "categoria" ? "byCategory" : "individual")}: {i.destinatario_nombre || "—"}</p>
+                    <p className="text-xs text-slate-500">{t(i.destinatario_tipo === "equipo" ? "byTeam" : i.destinatario_tipo === "categoria" ? "byCategory" : "individual")}: {i.destinatario_nombre_resuelto || i.destinatario_nombre || t("unresolvedRecipient")}</p>
                     <p className="text-sm text-slate-600 mt-1 line-clamp-2">{i.mensaje}</p>
                   </div>
                 </div>
@@ -86,7 +98,7 @@ const Communications = () => {
 
       <Dialog open={dialog} onOpenChange={setDialog}>
         <DialogContent className="max-w-2xl max-h-[92vh] overflow-y-auto">
-          <DialogHeader><DialogTitle className="font-heading">{t("communications")}</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle className="font-heading">{t("communications")}</DialogTitle><DialogDescription>{t("communicationDialogDescription")}</DialogDescription></DialogHeader>
           <div className="space-y-4 pt-2">
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <SelectField label={t("recipientType")} value={form.destinatario_tipo} onChange={(v)=>{set("destinatario_tipo")(v);set("destinatario_id")("");}}
@@ -98,6 +110,11 @@ const Communications = () => {
             <Field label={t("subject")} value={form.asunto} onChange={set("asunto")} testid="comm-asunto" />
             <Area label={t("message")} value={form.mensaje} onChange={set("mensaje")} testid="comm-mensaje" rows={5} />
             {!providers[form.canal]?.configured && <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">{t("providerNotConfiguredPending")}</p>}
+            <div className="rounded-xl border border-slate-200 p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="font-semibold text-slate-900">{t("recipientPreview")}</p><p className="text-sm text-slate-500">{t("recipientPreviewHelp")}</p></div><Button type="button" variant="outline" onClick={previewRecipients} disabled={!form.destinatario_id}>{t("preview")}</Button></div>
+              {previewError && <p className="mt-3 text-sm font-semibold text-red-700" role="alert">{previewError}</p>}
+              {recipientPreview && <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3" aria-live="polite">{[["teams", "teams"], ["players", "players"], ["families", "families"], ["activeAccounts", "active_accounts"], ["availableEmails", "available_emails"]].map(([label, key]) => <div key={key} className="rounded-xl bg-slate-50 p-3"><p className="text-xl font-bold">{recipientPreview.summary[key]}</p><p className="text-xs text-slate-500">{t(label)}</p></div>)}<div className="col-span-2 rounded-xl bg-amber-50 p-3 sm:col-span-1"><p className="text-xl font-bold">{recipientPreview.summary.excluded.reduce((sum, item) => sum + item.count, 0)}</p><p className="text-xs text-amber-800">{t("excludedRecipients")}</p></div></div>}
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialog(false)}>{t("cancel")}</Button>
