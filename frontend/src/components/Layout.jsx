@@ -40,7 +40,7 @@ const navGroups = [
       { to: "/partidos", key: "matches", icon: CalendarDays, testid: "matches" },
       { to: "/calendario", key: "calendar", icon: CalendarDays, testid: "calendar" },
       { to: "/convocatorias", key: "callups", icon: ClipboardList, testid: "callups" },
-      { to: "/estadisticas", key: "stats", icon: BarChart3, testid: "stats" },
+      { to: "/estadisticas", key: "stats", icon: BarChart3, testid: "stats", roles: ["admin", "coordinator", "coach"] },
     ],
   },
   {

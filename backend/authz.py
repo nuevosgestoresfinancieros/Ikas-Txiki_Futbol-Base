@@ -116,7 +116,7 @@ PATH_RESOURCES = {
     "equipment": "equipment", "settings": "settings", "dashboard": "dashboard",
     "users": "users", "categories": "teams", "compute-category": "players", "calendar": "calendar", "portal": "portal", "notifications": "notifications", "modalities": "modalities",
     "inscription-imports": "data", "assistant": "assistant",
-    "exercises": "exercises", "training-templates": "exercises",
+    "exercises": "exercises", "training-templates": "exercises", "statistics": "stats",
     "export-excel": "data", "import-excel": "data", "clear-all": "data",
     "seed-demo": "data",
 }

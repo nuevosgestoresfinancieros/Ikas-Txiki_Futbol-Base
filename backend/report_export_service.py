@@ -48,9 +48,10 @@ REPORT_LABELS = {
         "shirt_size": "Talla camiseta", "shorts_size": "Talla pantalón",
         "tracksuit_size": "Talla chándal", "delivery_date": "Fecha de entrega",
         "contact_name": "Contacto", "phone": "Teléfono", "email": "Correo",
-        "matches_called": "Convocatorias", "matches_played": "Partidos jugados",
+        "matches_called": "Convocatorias",
         "minutes": "Minutos", "goals": "Goles", "assists": "Asistencias",
         "yellow_cards": "Amarillas", "red_cards": "Rojas", "rating": "Valoración",
+        "matches_played": "Partidos disputados", "wins": "Victorias", "draws": "Empates", "losses": "Derrotas",
         "concept": "Concepto", "expected": "Previsto", "paid": "Cobrado",
         "pending": "Pendiente", "payment_method": "Forma de pago", "payment_date": "Fecha de pago",
         "contact_type": "Tipo de contacto", "delivery": "Entrega", "movement_filter": "Movimiento",
@@ -83,9 +84,10 @@ REPORT_LABELS = {
         "shirt_size": "Kamiseta-taila", "shorts_size": "Praka-taila",
         "tracksuit_size": "Txandal-taila", "delivery_date": "Entrega-data",
         "contact_name": "Kontaktua", "phone": "Telefonoa", "email": "Posta elektronikoa",
-        "matches_called": "Deialdiak", "matches_played": "Jokatutako partidak",
+        "matches_called": "Deialdiak",
         "minutes": "Minutuak", "goals": "Golak", "assists": "Asistentziak",
         "yellow_cards": "Txartel horiak", "red_cards": "Txartel gorriak", "rating": "Balorazioa",
+        "matches_played": "Jokatutako partidak", "wins": "Garaipenak", "draws": "Berdinketak", "losses": "Porrotak",
         "concept": "Kontzeptua", "expected": "Aurreikusita", "paid": "Kobratuta",
         "pending": "Zain", "payment_method": "Ordainketa modua", "payment_date": "Ordainketa-data",
         "contact_type": "Kontaktu mota", "delivery": "Entrega", "movement_filter": "Mugimendua",
@@ -168,8 +170,9 @@ def generate_pdf(report: Mapping[str, Any], rows: list[dict], totals: Mapping[st
     header = Table([[logo or "", Paragraph(f"<b>{escape(club)}</b>", title_style)]], colWidths=[20 * mm, 245 * mm])
     header.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE"), ("LEFTPADDING", (0, 0), (-1, -1), 0),
                                      ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
+    generated_by = safe_text(report.get("generated_by"), "—")
     story.extend([header, Spacer(1, 3 * mm), Paragraph(escape(title), title_style),
-                  Paragraph(f"{labels['generated']}: {generated_at.astimezone(timezone.utc):%Y-%m-%d %H:%M UTC}", small),
+                  Paragraph(f"{labels['generated']}: {generated_at.astimezone(timezone.utc):%Y-%m-%d %H:%M UTC} · Usuario: {escape(generated_by)}", small),
                   Spacer(1, 3 * mm)])
     filter_rows = human_filters(filters, options, lang)
     filter_text = " · ".join(f"<b>{escape(name)}:</b> {escape(value)}" for name, value in filter_rows) or labels["all"]
@@ -251,6 +254,8 @@ def generate_xlsx(report: Mapping[str, Any], rows: list[dict], totals: Mapping[s
     sheet["A2"] = labels["generated"]
     sheet["B2"] = generated_at.astimezone(timezone.utc).replace(tzinfo=None)
     sheet["B2"].number_format = "yyyy-mm-dd hh:mm"
+    sheet["C2"] = "Usuario"
+    sheet["D2"] = excel_safe(safe_text(report.get("generated_by")))
     current = 4
     sheet[f"A{current}"] = labels["filters"]
     sheet[f"A{current}"].font = Font(bold=True, color="0F172A")

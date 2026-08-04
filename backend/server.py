@@ -78,6 +78,7 @@ from report_service import (
     enforce_export_limit, paginate, validate_report_filters,
 )
 from report_export_service import generate_pdf as generate_report_pdf, generate_xlsx as generate_report_xlsx, safe_filename
+from statistics_service import calculate_statistics, paginate_player_rows
 from assistant_knowledge import KNOWLEDGE_VERSION, available_modules
 from assistant_service import (
     ACTION_DEFINITIONS, ExternalAssistantProvider, ProposalStore, answer_help,
@@ -3852,7 +3853,210 @@ async def duplicate_training(tr_id: str, data: Dict[str, Any]):
     return created
 
 
-# ================= STATS =================
+# ================= INTEGRAL STATISTICS =================
+STATISTICS_STAFF_ROLES = {"admin", "coordinator", "coach"}
+
+
+def _statistics_actor() -> dict:
+    return current_user_context.get() or {}
+
+
+def _statistics_filters(*, temporada: Optional[str] = None, categoria: Optional[str] = None,
+                        equipo_id: Optional[str] = None, player_id: Optional[str] = None,
+                        modalidad: Optional[str] = None, desde: Optional[str] = None,
+                        hasta: Optional[str] = None, periodo: str = "weekly",
+                        estado: Optional[str] = None, activo: Optional[bool] = None,
+                        estado_partido: Optional[str] = None,
+                        estado_entrenamiento: Optional[str] = None,
+                        estado_convocatoria: Optional[str] = None) -> dict:
+    for value, label in ((desde, "desde"), (hasta, "hasta")):
+        if value:
+            try:
+                date.fromisoformat(str(value))
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=f"Fecha {label} no válida") from exc
+    if desde and hasta and desde > hasta:
+        raise HTTPException(status_code=422, detail="El intervalo estadístico no es válido")
+    if periodo not in {"weekly", "monthly"}:
+        raise HTTPException(status_code=422, detail="El periodo debe ser weekly o monthly")
+    if modalidad:
+        modalidad = str(modalidad).upper()
+        if modalidad not in {"F7", "F11"}:
+            raise HTTPException(status_code=422, detail="Modalidad no válida")
+    if activo is not None:
+        estado = "activo" if activo else "inactivo"
+    return {key: value for key, value in {
+        "temporada": temporada, "categoria": categoria, "equipo_id": equipo_id,
+        "player_id": player_id, "modalidad": modalidad, "desde": desde, "hasta": hasta,
+        "period": periodo, "estado": estado, "estado_partido": estado_partido,
+        "estado_entrenamiento": estado_entrenamiento, "estado_convocatoria": estado_convocatoria,
+    }.items() if value not in (None, "", "all")}
+
+
+async def _statistics_data(filters: dict) -> tuple[dict, dict]:
+    actor = _statistics_actor()
+    if actor.get("role") not in STATISTICS_STAFF_ROLES:
+        raise HTTPException(status_code=403, detail="Las estadísticas internas están restringidas al personal autorizado")
+    teams = await list_docs("teams")
+    players = await list_docs("players")
+    allowed_team_ids = {str(team.get("id")) for team in teams if team.get("id")}
+    allowed_player_ids = {str(player.get("id")) for player in players if player.get("id")}
+    if filters.get("equipo_id") and filters["equipo_id"] not in allowed_team_ids:
+        raise HTTPException(status_code=403, detail="El equipo solicitado no pertenece a tu ámbito")
+    if filters.get("player_id") and filters["player_id"] not in allowed_player_ids:
+        raise HTTPException(status_code=403, detail="El jugador solicitado no pertenece a tu ámbito")
+    available_categories = {str(team.get("categoria")) for team in teams if team.get("categoria")}
+    available_seasons = {str(team.get("temporada")) for team in teams if team.get("temporada")}
+    if filters.get("categoria") and actor.get("role") != "admin" and filters["categoria"] not in available_categories:
+        raise HTTPException(status_code=403, detail="La categoría solicitada no pertenece a tu ámbito")
+    if filters.get("temporada") and actor.get("role") != "admin" and available_seasons and filters["temporada"] not in available_seasons:
+        raise HTTPException(status_code=403, detail="La temporada solicitada no pertenece a tu ámbito")
+    manual_stats = await list_docs("stats")
+    player_names = {
+        player.get("id"): f"{player.get('nombre') or ''} {player.get('apellidos') or ''}".strip()
+        for player in players
+    }
+    for record in manual_stats:
+        record["player_nombre"] = player_names.get(record.get("player_id"), "—")
+    context = {
+        "players": players, "teams": teams, "matches": await list_docs("matches"),
+        "trainings": await list_docs("trainings"), "callups": await list_docs("callups"),
+        "manual_stats": manual_stats,
+    }
+    options = {
+        "seasons": sorted(available_seasons), "categories": sorted(available_categories),
+        "teams": sorted([{"id": team.get("id"), "name": team.get("nombre"),
+                           "category": team.get("categoria"), "season": team.get("temporada"),
+                           "modality": team.get("modalidad")} for team in teams if team.get("id")],
+                        key=lambda row: (row.get("name") or "").casefold()),
+        "players": sorted([{"id": player.get("id"),
+                             "name": f"{player.get('nombre') or ''} {player.get('apellidos') or ''}".strip(),
+                             "team_id": player.get("equipo_id"), "category": player.get("categoria")}
+                            for player in players if player.get("id")],
+                           key=lambda row: row["name"].casefold()),
+        "modalities": ["F7", "F11"],
+    }
+    return context, options
+
+
+async def _build_statistics(filters: dict, *, paginated: bool = True, page: int = 1,
+                            page_size: int = 25) -> tuple[dict, dict]:
+    context, options = await _statistics_data(filters)
+    result = calculate_statistics(**context, filters=filters)
+    result["filter_options"] = options
+    if paginated:
+        result = paginate_player_rows(result, page, page_size)
+    return result, options
+
+
+def _statistics_export_rows(result: dict) -> list[dict]:
+    return list(result.get("team_rows") or [])
+
+
+def _statistics_export_totals(result: dict) -> dict:
+    summary = result.get("summary") or {}
+    attendance = result.get("attendance") or {}
+    def value(key: str):
+        item = summary.get(key, {})
+        return item.get("value") if isinstance(item, dict) else item
+    rate_item = attendance.get("porcentaje_presencia") or {}
+    return {
+        "players": value("active_players"), "teams": value("teams"),
+        "sessions": value("training_sessions"), "present": attendance.get("presente"),
+        "justified": attendance.get("justificada"), "unjustified": attendance.get("injustificada"),
+        "injury": attendance.get("lesion"), "percentage": rate_item.get("value"),
+        "matches_played": value("matches_played"), "wins": value("wins"),
+        "draws": value("draws"), "losses": value("losses"),
+    }
+
+
+async def _export_statistics(format_name: str, filters: dict, lang: str):
+    actor = _statistics_actor()
+    result, options = await _build_statistics(filters, paginated=False)
+    report = {
+        "id": "statistics_integral",
+        "name": {"es": "Estadísticas integrales", "eu": "Estatistika integralak"},
+        "columns": ["team", "category", "modality", "players", "sessions", "present",
+                     "justified", "unjustified", "injury", "percentage"],
+        "generated_by": actor.get("username") or actor.get("id") or "—",
+    }
+    branding = await report_branding()
+    renderer = generate_report_pdf if format_name == "pdf" else generate_report_xlsx
+    content = renderer(report, _statistics_export_rows(result), _statistics_export_totals(result),
+                       filters, options, branding, "eu" if lang == "eu" else "es")
+    await db.internal_events.insert_one({
+        "id": new_id(), "type": "statistics.exported", "actor_user_id": actor.get("id"),
+        "actor_role": actor.get("role"), "format": format_name,
+        "filter_keys": sorted(filters), "row_count": len(_statistics_export_rows(result)),
+        "created_at": now_iso(), "result": "success",
+    })
+    media_type = "application/pdf" if format_name == "pdf" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    return StreamingResponse(io.BytesIO(content), media_type=media_type, headers={
+        "Content-Disposition": f'attachment; filename="estadisticas-integrales.{format_name if format_name == "pdf" else "xlsx"}"',
+        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+    })
+
+
+@api_router.get("/statistics/options")
+async def statistics_options():
+    _, options = await _statistics_data({})
+    return options
+
+
+@api_router.get("/statistics/summary")
+async def statistics_summary(temporada: Optional[str] = None, categoria: Optional[str] = None,
+                             equipo_id: Optional[str] = None, player_id: Optional[str] = None,
+                             modalidad: Optional[str] = None, desde: Optional[str] = None,
+                             hasta: Optional[str] = None, periodo: str = "weekly",
+                             estado: Optional[str] = None, activo: Optional[bool] = None,
+                             estado_partido: Optional[str] = None,
+                             estado_entrenamiento: Optional[str] = None,
+                             estado_convocatoria: Optional[str] = None, page: int = 1,
+                             page_size: int = 25):
+    filters = _statistics_filters(temporada=temporada, categoria=categoria, equipo_id=equipo_id,
+                                  player_id=player_id, modalidad=modalidad, desde=desde, hasta=hasta,
+                                  periodo=periodo, estado=estado, activo=activo,
+                                  estado_partido=estado_partido, estado_entrenamiento=estado_entrenamiento,
+                                  estado_convocatoria=estado_convocatoria)
+    result, _ = await _build_statistics(filters, page=page, page_size=page_size)
+    return result
+
+
+@api_router.get("/statistics/export.pdf")
+async def statistics_export_pdf(temporada: Optional[str] = None, categoria: Optional[str] = None,
+                                equipo_id: Optional[str] = None, player_id: Optional[str] = None,
+                                modalidad: Optional[str] = None, desde: Optional[str] = None,
+                                hasta: Optional[str] = None, periodo: str = "weekly",
+                                estado: Optional[str] = None, activo: Optional[bool] = None,
+                                estado_partido: Optional[str] = None,
+                                estado_entrenamiento: Optional[str] = None,
+                                estado_convocatoria: Optional[str] = None, lang: str = "es"):
+    filters = _statistics_filters(temporada=temporada, categoria=categoria, equipo_id=equipo_id,
+                                  player_id=player_id, modalidad=modalidad, desde=desde, hasta=hasta,
+                                  periodo=periodo, estado=estado, activo=activo,
+                                  estado_partido=estado_partido, estado_entrenamiento=estado_entrenamiento,
+                                  estado_convocatoria=estado_convocatoria)
+    return await _export_statistics("pdf", filters, lang)
+
+
+@api_router.get("/statistics/export.xlsx")
+async def statistics_export_xlsx(temporada: Optional[str] = None, categoria: Optional[str] = None,
+                                 equipo_id: Optional[str] = None, player_id: Optional[str] = None,
+                                 modalidad: Optional[str] = None, desde: Optional[str] = None,
+                                 hasta: Optional[str] = None, periodo: str = "weekly",
+                                 estado: Optional[str] = None, activo: Optional[bool] = None,
+                                 estado_partido: Optional[str] = None,
+                                 estado_entrenamiento: Optional[str] = None,
+                                 estado_convocatoria: Optional[str] = None, lang: str = "es"):
+    filters = _statistics_filters(temporada=temporada, categoria=categoria, equipo_id=equipo_id,
+                                  player_id=player_id, modalidad=modalidad, desde=desde, hasta=hasta,
+                                  periodo=periodo, estado=estado, activo=activo,
+                                  estado_partido=estado_partido, estado_entrenamiento=estado_entrenamiento,
+                                  estado_convocatoria=estado_convocatoria)
+    return await _export_statistics("xlsx", filters, lang)
+
+
+# ================= STATS (manual compatibility) =================
 class PlayerStats(BaseModel):
     player_id: str
     temporada: Optional[str] = None
