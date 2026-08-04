@@ -7,6 +7,8 @@ import sys
 import pytest
 from openpyxl import Workbook
 
+from historical_import_adapter import EXPECTED_TOTAL_COLUMNS, HISTORICAL_COLUMN_MAPPING
+
 
 MONGO_URL = os.environ.get("PHASE9_MONGO_URL")
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -25,6 +27,19 @@ def fictitious_workbook() -> bytes:
             external_id, f"Persona{index}", "Ficticia", "01/01/2015", "renovacion", "600000000",
             "" if index < 3 else "Equipo Temporal", "Alevín", "", "Jugador;Portero" if index < 11 else "Jugador", "",
         ])
+    buffer = io.BytesIO(); workbook.save(buffer); return buffer.getvalue()
+
+
+def fictitious_historical_assignment_workbook() -> bytes:
+    workbook = Workbook(); sheet = workbook.active; sheet.title = "BBDD"
+    sheet.append([header for _, header, _ in HISTORICAL_COLUMN_MAPPING] + [f"AUX {n}" for n in range(80, 130)])
+    for index in range(2):
+        row = [None] * EXPECTED_TOTAL_COLUMNS
+        row[:5] = [f"Histórica{index}", "Ficticia", "01/01/2015", "2015", "Alevín"]
+        row[6:14] = ["Tutor Uno", 600000000, "Tutor Dos", 611111111, "Calle Ficticia",
+                     "uno@example.invalid", "dos@example.invalid", "NO"]
+        row[53:56] = ["Equipo Histórico", "Equipo Actual" if index else "", "Alevín"]
+        sheet.append(row)
     buffer = io.BytesIO(); workbook.save(buffer); return buffer.getvalue()
 
 
@@ -82,16 +97,64 @@ def test_staging_admin_flow_permissions_isolation_and_delete(monkeypatch, reques
         assert duplicate_response.status_code == 200
         refreshed = client.get(f"/api/inscription-imports/staging/{draft_id}").json()
         record_ids = [row["id"] for row in refreshed["records"] if row["active"]]
+        temp_db.teams.insert_one({
+            "id": "team-phase9", "nombre": "Equipo Temporal", "categoria": "Alevín",
+            "modalidad": "F7", "estado": "activo", "temporada": "2026-2027",
+        })
         assert client.post(f"/api/inscription-imports/staging/{draft_id}/bulk", json={
             "record_ids": record_ids, "field": "modalidad", "value": "F7", "confirm_suggestion": False,
         }).status_code == 422
         assert client.post(f"/api/inscription-imports/staging/{draft_id}/bulk", json={
             "record_ids": record_ids, "field": "modalidad", "value": "F7", "confirm_suggestion": True,
         }).status_code == 200
-        missing_ids = [row["id"] for row in refreshed["records"] if not row.get("equipo")]
-        assert client.post(f"/api/inscription-imports/staging/{draft_id}/bulk", json={
-            "record_ids": missing_ids, "field": "equipo", "value": "Equipo Temporal", "confirm_suggestion": False,
+        missing_ids = [row["id"] for row in refreshed["records"] if row["active"] and not row.get("equipo")]
+        # La confirmación reforzada se exige únicamente a las asignaciones
+        # históricas; la edición individual ordinaria conserva su contrato.
+        for record_id in missing_ids:
+            assert client.patch(f"/api/inscription-imports/staging/{draft_id}/records/{record_id}", json={
+                "field": "equipo", "value": "Equipo Temporal", "confirm_suggestion": False,
+            }).status_code == 200
+
+        historical = client.post(
+            "/api/inscription-imports/staging", data={"season": "2026-2027"},
+            files={"file": ("historico-ficticio.xlsx", fictitious_historical_assignment_workbook(), XLSX_MIME)},
+        )
+        assert historical.status_code == 200
+        historical_draft = historical.json(); historical_id = historical_draft["id"]
+        historical_ids = [row["id"] for row in historical_draft["records"] if row["active"] and not row.get("equipo")]
+        assert historical_ids
+        before_rejection = client.get(f"/api/inscription-imports/staging/{historical_id}").json()
+        rejected = client.post(f"/api/inscription-imports/staging/{historical_id}/bulk", json={
+            "record_ids": historical_ids, "field": "equipo", "value": "team-phase9", "confirm_suggestion": False,
+        })
+        assert rejected.status_code == 422
+        assert rejected.json()["detail"] == "La asignación requiere confirmación administrativa expresa"
+        after_rejection = client.get(f"/api/inscription-imports/staging/{historical_id}").json()
+        before_rows = {row["id"]: (row.get("equipo"), row.get("equipo_id")) for row in before_rejection["records"]}
+        after_rows = {row["id"]: (row.get("equipo"), row.get("equipo_id")) for row in after_rejection["records"]}
+        assert after_rows == before_rows
+
+        temp_db.users.insert_one({
+            "id": "coach-phase9", "username": "phase9_coach", "role": "coach", "active": True,
+            "assigned_team_ids": [], "password_hash": server.pwd_context.hash("phase9-coach-local-password"),
+        })
+        client.post("/api/auth/logout")
+        coach_login = {"username": "phase9_coach", "password": "phase9-coach-local-password"}
+        assert client.post("/api/auth/login", json=coach_login).status_code == 200
+        assert client.post(f"/api/inscription-imports/staging/{historical_id}/bulk", json={
+            "record_ids": historical_ids, "field": "equipo", "value": "team-phase9", "confirm_suggestion": True,
+        }).status_code == 403
+        assert client.get("/api/inscription-imports/staging").status_code == 403
+        client.post("/api/auth/logout")
+        assert client.post("/api/auth/login", json=admin_login).status_code == 200
+        assert client.post(f"/api/inscription-imports/staging/{historical_id}/bulk", json={
+            "record_ids": historical_ids, "field": "equipo", "value": "team-phase9", "confirm_suggestion": True,
         }).status_code == 200
+        assigned = client.get(f"/api/inscription-imports/staging/{historical_id}").json()
+        assigned_rows = {row["id"]: row for row in assigned["records"]}
+        assert all(assigned_rows[record_id]["equipo"] == "Equipo Temporal" for record_id in historical_ids)
+        assert all(assigned_rows[record_id]["equipo_id"] == "team-phase9" for record_id in historical_ids)
+        assert client.delete(f"/api/inscription-imports/staging/{historical_id}").status_code == 200
         october_response = client.post(
             f"/api/inscription-imports/staging/{draft_id}/october", json={"record_ids": record_ids[:54]},
         )
@@ -108,12 +171,7 @@ def test_staging_admin_flow_permissions_isolation_and_delete(monkeypatch, reques
         assert client.post(f"/api/inscription-imports/{job_id}/undo").status_code == 200
         assert temp_db.players.count_documents({"import_job_id": job_id}) == 0
 
-        temp_db.users.insert_one({
-            "id": "coach-phase9", "username": "phase9_coach", "role": "coach", "active": True,
-            "assigned_team_ids": [], "password_hash": server.pwd_context.hash("phase9-coach-local-password"),
-        })
         client.post("/api/auth/logout")
-        coach_login = {"username": "phase9_coach", "password": "phase9-coach-local-password"}
         assert client.post("/api/auth/login", json=coach_login).status_code == 200
         assert client.get("/api/inscription-imports/staging").status_code == 403
         temp_db.users.insert_one({
