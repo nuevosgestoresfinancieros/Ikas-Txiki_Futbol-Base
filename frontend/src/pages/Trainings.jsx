@@ -148,9 +148,9 @@ const Trainings = () => {
                   <GoogleMapsLinks sources={i} className="mt-2" />
                 </div>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-2 sm:gap-3">
                 <span className="inline-flex items-center gap-1.5 text-sm text-green-600"><Check className="h-4 w-4" />{i.presentes}/{i.total_asistencia} {t("present_short").toLowerCase()}</span>
-                {canEvaluate && <Button variant="ghost" size="icon" aria-label={`${t("openTrainingEvaluations")} ${i.fecha || t("trainings")}`} data-testid={`evaluate-training-${i.id}`} onClick={() => setEvaluationTraining(i)}><ClipboardCheck className="h-4 w-4" /></Button>}
+                {canEvaluate && <Button variant="outline" size="sm" aria-label={`${t("openTrainingEvaluations")} ${i.fecha || t("trainings")}`} data-testid={`evaluate-training-${i.id}`} onClick={() => setEvaluationTraining(i)}><ClipboardCheck className="h-4 w-4" />{t("openTrainingEvaluations")}</Button>}
                 <PermissionGate resource="trainings" action="edit"><Button variant="ghost" size="icon" aria-label={`${t("edit")} ${i.fecha || t("trainings")}`} data-testid={`edit-training-${i.id}`} onClick={() => openEdit(i)}><Pencil className="h-4 w-4" /></Button></PermissionGate>
                 <PermissionGate resource="trainings" action="create"><Button variant="ghost" size="icon" aria-label={`${t("duplicate")} ${i.fecha || t("trainings")}`} onClick={() => duplicate(i)}><Copy className="h-4 w-4" /></Button></PermissionGate>
                 <PermissionGate resource="trainings" action="delete"><Button variant="ghost" size="icon" aria-label={`${t("delete")} ${i.fecha || t("trainings")}`} data-testid={`delete-training-${i.id}`} onClick={() => remove(i)} className="text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button></PermissionGate>
