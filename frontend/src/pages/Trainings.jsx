@@ -20,6 +20,7 @@ const ATT_STATES = ["presente", "justificada", "injustificada", "lesion"];
 
 const Trainings = () => {
   const canCreate = usePermission("trainings", "create");
+  const canReadExercises = usePermission("exercises", "read");
   const { t, lang } = useI18n();
   const [params, setParams] = useSearchParams();
   const [items, setItems] = useState([]);
@@ -47,8 +48,12 @@ const Trainings = () => {
   };
   useEffect(() => {
     load();
-    Promise.all([api.get("/teams"), api.get("/players"), api.get("/exercises", { params: { status: "active", page_size: 100 } }), api.get("/training-templates")])
-      .then(([tm, p, ex, tpl]) => { setTeams(tm.data); setPlayers(p.data); setExercises(ex.data.items || []); setTemplates(tpl.data || []); });
+    Promise.all([api.get("/teams"), api.get("/players")])
+      .then(([tm, p]) => { setTeams(tm.data); setPlayers(p.data); });
+    if (canReadExercises) {
+      Promise.all([api.get("/exercises", { params: { status: "active", page_size: 100 } }), api.get("/training-templates")])
+        .then(([ex, tpl]) => { setExercises(ex.data.items || []); setTemplates(tpl.data || []); });
+    }
     if (params.get("new") && canCreate) { openNew(); params.delete("new"); setParams(params); }
     // eslint-disable-next-line
   }, []);
@@ -98,8 +103,9 @@ const Trainings = () => {
       <div className="mb-5 flex gap-2 rounded-xl bg-slate-100 p-1" role="tablist" aria-label={t("trainings")}>
         <button type="button" role="tab" aria-selected={view === "sessions"} onClick={() => setView("sessions")}
           className={`flex min-h-10 flex-1 items-center justify-center gap-2 rounded-lg px-3 text-sm font-semibold ${view === "sessions" ? "bg-white text-primary shadow-sm" : "text-slate-600"}`}><Dumbbell className="h-4 w-4" />{t("trainingSessions")}</button>
-        <button type="button" role="tab" aria-selected={view === "library"} onClick={() => setView("library")}
+        {canReadExercises && <button type="button" role="tab" aria-selected={view === "library"} onClick={() => setView("library")}
           className={`flex min-h-10 flex-1 items-center justify-center gap-2 rounded-lg px-3 text-sm font-semibold ${view === "library" ? "bg-white text-primary shadow-sm" : "text-slate-600"}`}><Library className="h-4 w-4" />{t("exerciseLibrary")}</button>
+        }
       </div>
 
       {view === "library" ? <ExerciseLibrary teams={teams} canManage={canCreate} onCatalogChange={setExercises}
