@@ -2880,6 +2880,14 @@ def _team_category_matches(team_category: Any, official_category: Any) -> bool:
     return team_key == official_key or team_key.startswith(official_key)
 
 
+def _team_modality_matches(team_modality: Any, record_modality: Any) -> bool:
+    """Accept legacy teams without modality; otherwise require the same official code."""
+    team_value = normalize_key(team_modality)
+    if not team_value:
+        return True
+    return bool(normalize_key(record_modality)) and team_value == normalize_key(record_modality)
+
+
 def _team_is_usable(team: Mapping[str, Any]) -> bool:
     """Legacy teams without a status are usable; explicit non-active states are not."""
     return normalize_key(team.get("estado")) in {"", "activo", "active"}
@@ -2987,6 +2995,8 @@ async def bulk_update_staging(draft_id: str, request: StagingBulkUpdate):
     if request.field not in {"equipo", "categoria", "modalidad"}:
         raise HTTPException(status_code=422, detail="Asignación masiva no permitida para este campo")
     value = request.value.strip()
+    if not value:
+        raise HTTPException(status_code=422, detail="El valor de asignación es obligatorio")
     draft = await _staging_doc(draft_id)
     historical = draft.get("source_format") == HISTORICAL_FORMAT
     selected_team = None
@@ -3026,6 +3036,8 @@ async def bulk_update_staging(draft_id: str, request: StagingBulkUpdate):
     if historical and request.field == "equipo":
         if any(not _team_category_matches(selected_team.get("categoria"), row.get("categoria")) for row in selected_rows):
             raise HTTPException(status_code=422, detail="El equipo no pertenece a la categoría de todos los registros seleccionados")
+        if any(not _team_modality_matches(selected_team.get("modalidad"), row.get("modalidad")) for row in selected_rows):
+            raise HTTPException(status_code=422, detail="El equipo no pertenece a la modalidad de todos los registros seleccionados")
     now = datetime.now(timezone.utc)
     assignment_changes = []
     if request.field in {"modalidad", "categoria", "equipo"}:
@@ -3034,7 +3046,7 @@ async def bulk_update_staging(draft_id: str, request: StagingBulkUpdate):
                 "record_id": row["id"], "previous_value": row.get(request.field) or None,
                 "new_value": value,
                 **({"previous_id": row.get("equipo_id"), "new_id": selected_team["id"]}
-                   if request.field == "equipo" else {}),
+                   if request.field == "equipo" and selected_team else {}),
             }
             for row in selected_rows
         ]
