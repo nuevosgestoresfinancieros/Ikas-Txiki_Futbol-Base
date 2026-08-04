@@ -30,6 +30,15 @@ def test_aggregates_existing_sources_without_duplication():
     assert {event["source"] for event in events} == {"match", "training", "club_event"}
 
 
+def test_calendar_preserves_the_best_existing_match_location():
+    matches = [{**MATCHES[0], "campo": "Campo A", "direccion_campo": "Calle Mayor 1",
+                "latitud": 43.257, "longitud": -2.923}]
+    event = aggregate_calendar_events(matches, [], [], TEAMS)[0]
+    assert event["lugar"] == "Calle Mayor 1"
+    assert event["latitude"] == 43.257
+    assert event["longitude"] == -2.923
+
+
 def test_filters_period_team_category_season_and_type():
     events = aggregate_calendar_events(MATCHES, TRAININGS, CLUB_EVENTS, TEAMS, start="2026-07-19", end="2026-07-20", team_id="team-a", category="Alevín", season="2026-2027")
     assert [event["tipo"] for event in events] == ["training", "match"]

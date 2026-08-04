@@ -14,6 +14,7 @@ import { PageHeader, EmptyState, initials } from "@/components/shared";
 import { Field, Area, SelectField } from "@/components/form";
 import ExerciseLibrary from "@/components/ExerciseLibrary";
 import TrainingExercisePlanner from "@/components/TrainingExercisePlanner";
+import GoogleMapsLinks from "@/components/GoogleMapsLinks";
 import { historicalExerciseLabel, validateEvaluation } from "./trainingExerciseView";
 
 const ATT_STATES = ["presente", "justificada", "injustificada", "lesion"];
@@ -141,6 +142,7 @@ const Trainings = () => {
                 <div>
                   <p className="font-semibold text-slate-800">{i.equipo_nombre}</p>
                   <p className="text-xs text-slate-500">{i.fecha} · {i.hora || "--:--"} · {i.campo || "—"}</p>
+                  <GoogleMapsLinks sources={i} className="mt-2" />
                 </div>
               </div>
               <div className="flex items-center gap-3">
@@ -163,6 +165,7 @@ const Trainings = () => {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <SelectField label={t("team")} value={form.equipo_id} onChange={onTeamChange} options={teamOptions} testid="training-equipo" />
               <Field label={t("field")} value={form.campo} onChange={set("campo")} testid="training-campo" />
+              <div className="sm:col-span-2"><GoogleMapsLinks preview sources={form} /></div>
               <Field label={t("date")} type="date" value={form.fecha} onChange={set("fecha")} testid="training-fecha" />
               <Field label={t("time")} type="time" value={form.hora} onChange={set("hora")} testid="training-hora" />
             </div>

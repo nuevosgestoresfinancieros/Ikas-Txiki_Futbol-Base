@@ -22,7 +22,7 @@ def _event(source: str, item: dict, teams: dict[str, dict]) -> Optional[dict]:
     team = teams.get(item.get("equipo_id"), {})
     if source == "match":
         title = item.get("rival") or "Partido"
-        location = item.get("campo") or item.get("direccion_campo")
+        location = item.get("direccion_campo") or item.get("campo")
         detail_path = f"/partidos?event={item.get('id')}"
     elif source == "training":
         title = item.get("ejercicios") or "Entrenamiento"
@@ -42,6 +42,8 @@ def _event(source: str, item: dict, teams: dict[str, dict]) -> Optional[dict]:
         "temporada": team.get("temporada") or item.get("temporada"),
         "lugar": location, "descripcion": item.get("descripcion") or item.get("observaciones"),
         "estado": item.get("estado"), "detail_path": detail_path,
+        "latitude": item.get("latitude", item.get("latitud", item.get("lat"))),
+        "longitude": item.get("longitude", item.get("longitud", item.get("lng", item.get("lon")))),
     }
 
 

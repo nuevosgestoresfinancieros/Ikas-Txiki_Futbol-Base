@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { PageHeader, StatusBadge, EmptyState } from "@/components/shared";
 import { Field, Area, SelectField } from "@/components/form";
+import GoogleMapsLinks from "@/components/GoogleMapsLinks";
 
 const empty = { condicion: "local", tipo: "liga", estado: "programado" };
 
@@ -117,11 +118,12 @@ const Matches = () => {
                         {m.tipo} · {t(m.condicion === "local" ? "home" : "away")}
                         {m.jornada ? ` · J${m.jornada}` : ""}
                       </p>
-                      {m.campo && (
-                        <p className="text-xs text-slate-400 flex items-center gap-1">
-                          <MapPin className="h-3 w-3" />{m.campo}
+                      {(m.direccion_campo || m.campo) && <div className="mt-1">
+                        <p className="flex items-center gap-1 text-xs text-slate-500">
+                          <MapPin className="h-3 w-3" aria-hidden="true" />{m.direccion_campo || m.campo}
                         </p>
-                      )}
+                      </div>}
+                      <GoogleMapsLinks sources={m} className="mt-2" />
                     </div>
                   </div>
 
@@ -216,6 +218,7 @@ const Matches = () => {
             <SelectField label={t("matchType")} value={form.tipo} onChange={set("tipo")} options={["liga","copa","amistoso","torneo"].map(s=>({value:s,label:s}))} testid="match-tipo" />
             <Field label={t("field")} value={form.campo} onChange={set("campo")} testid="match-campo" />
             <Field label={t("fieldAddress")} value={form.direccion_campo} onChange={set("direccion_campo")} testid="match-direccion" />
+            <div className="sm:col-span-2"><GoogleMapsLinks preview sources={form} /></div>
             <SelectField label={t("status")} value={form.estado} onChange={set("estado")} options={["programado","jugado","aplazado","suspendido","cancelado"].map(s=>({value:s,label:s}))} testid="match-estado" />
             <div />
             <Field label={t("ownResult")} type="number" value={form.resultado_propio} onChange={set("resultado_propio")} testid="match-res-propio" />
