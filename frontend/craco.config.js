@@ -79,6 +79,17 @@ let webpackConfig = {
       },
     },
   },
+  // Keep Jest resolution aligned with the @/* alias used by the application.
+  // This is test-only configuration; the production webpack alias remains unchanged.
+  jest: {
+    configure: (jestConfig) => ({
+      ...jestConfig,
+      moduleNameMapper: {
+        ...(jestConfig.moduleNameMapper || {}),
+        "^@/(.*)$": "<rootDir>/src/$1",
+      },
+    }),
+  },
   webpack: {
     alias: {
       '@': path.resolve(__dirname, 'src'),

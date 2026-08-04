@@ -10,9 +10,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Field, SelectField } from "@/components/form";
 import { EmptyState, PageHeader } from "@/components/shared";
 
+const ALL_FILTER = "all";
+
 const EMPTY_FILTERS = {
-  temporada: "", categoria: "", equipo_id: "", modalidad: "", player_id: "",
-  desde: "", hasta: "", periodo: "weekly", activo: "",
+  temporada: ALL_FILTER, categoria: ALL_FILTER, equipo_id: ALL_FILTER, modalidad: ALL_FILTER, player_id: ALL_FILTER,
+  desde: "", hasta: "", periodo: "weekly", activo: ALL_FILTER,
 };
 
 const MANUAL_EMPTY = {
@@ -22,6 +24,19 @@ const MANUAL_EMPTY = {
 };
 
 const metricValue = (item) => item?.value ?? "—";
+
+const hasSelectValue = (value) => value !== null && value !== undefined && String(value) !== "";
+
+const toSelectOption = (value, label = value) => ({
+  value: hasSelectValue(value) ? String(value) : ALL_FILTER,
+  label: hasSelectValue(label) ? String(label) : "—",
+});
+
+const scalarOptions = (values) => (Array.isArray(values) ? values : [])
+  .filter(hasSelectValue)
+  .map((value) => toSelectOption(value));
+
+const withAllOption = (label, values) => [toSelectOption(ALL_FILTER, label), ...scalarOptions(values)];
 
 const Card = ({ label, metric, tone = "slate" }) => (
   <div className={`rounded-2xl border p-4 ${tone === "blue" ? "border-[#CFE9FA] bg-[#F4FAFE]" : "border-slate-200 bg-white"}`}>
@@ -55,7 +70,14 @@ const Stats = () => {
 
   const loadOptions = useCallback(async () => {
     const response = await api.get("/statistics/options");
-    setOptions(response.data);
+    const data = response.data || {};
+    setOptions({
+      seasons: Array.isArray(data.seasons) ? data.seasons : [],
+      categories: Array.isArray(data.categories) ? data.categories : [],
+      teams: Array.isArray(data.teams) ? data.teams : [],
+      players: Array.isArray(data.players) ? data.players : [],
+      modalities: Array.isArray(data.modalities) ? data.modalities : [],
+    });
   }, []);
 
   const queryParams = useMemo(() => Object.fromEntries(
@@ -78,8 +100,12 @@ const Stats = () => {
   useEffect(() => { load(); }, [load]);
 
   const setFilter = (key) => (value) => setFilters((current) => ({ ...current, [key]: value }));
-  const teamOptions = options.teams.map((team) => ({ value: team.id, label: team.name }));
-  const playerOptions = options.players.map((player) => ({ value: player.id, label: player.name }));
+  const teamOptions = options.teams
+    .filter((team) => hasSelectValue(team?.id))
+    .map((team) => toSelectOption(team.id, team.name));
+  const playerOptions = options.players
+    .filter((player) => hasSelectValue(player?.id))
+    .map((player) => toSelectOption(player.id, player.name));
   const activeFilter = filters.activo === "true" ? true : filters.activo === "false" ? false : undefined;
   const summary = result?.summary || {};
   const attendance = result?.attendance || {};
@@ -124,12 +150,12 @@ const Stats = () => {
       <section className="surface-card mb-5 p-4" aria-labelledby="statistics-filters-title">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2"><h2 id="statistics-filters-title" className="font-heading text-lg font-bold text-[#0E3554]">{t("statisticsFilters")}</h2><Button variant="ghost" size="sm" onClick={reset}>{t("clearFilters")}</Button></div>
         <div className="grid min-w-0 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <SelectField label={t("season")} value={filters.temporada} onChange={setFilter("temporada")} options={[{ value: "", label: t("all") }, ...options.seasons.map((value) => ({ value, label: value }))]} testid="statistics-season" />
-          <SelectField label={t("category")} value={filters.categoria} onChange={setFilter("categoria")} options={[{ value: "", label: t("all") }, ...options.categories.map((value) => ({ value, label: value }))]} testid="statistics-category" />
-          <SelectField label={t("team")} value={filters.equipo_id} onChange={setFilter("equipo_id")} options={[{ value: "", label: t("allTeams") }, ...teamOptions]} testid="statistics-team" />
-          <SelectField label={t("modality")} value={filters.modalidad} onChange={setFilter("modalidad")} options={[{ value: "", label: t("allModalities") }, ...options.modalities.map((value) => ({ value, label: value }))]} testid="statistics-modality" />
-          <SelectField label={t("name")} value={filters.player_id} onChange={setFilter("player_id")} options={[{ value: "", label: t("allPlayers") }, ...playerOptions]} testid="statistics-player" />
-          <SelectField label={t("status")} value={filters.activo} onChange={setFilter("activo")} options={[{ value: "", label: t("allStatuses") }, { value: "true", label: t("activeOnly") }, { value: "false", label: t("inactiveOnly") }]} testid="statistics-active" />
+          <SelectField label={t("season")} value={filters.temporada} onChange={setFilter("temporada")} options={withAllOption(t("all"), options.seasons)} testid="statistics-season" />
+          <SelectField label={t("category")} value={filters.categoria} onChange={setFilter("categoria")} options={withAllOption(t("all"), options.categories)} testid="statistics-category" />
+          <SelectField label={t("team")} value={filters.equipo_id} onChange={setFilter("equipo_id")} options={[toSelectOption(ALL_FILTER, t("allTeams")), ...teamOptions]} testid="statistics-team" />
+          <SelectField label={t("modality")} value={filters.modalidad} onChange={setFilter("modalidad")} options={withAllOption(t("allModalities"), options.modalities)} testid="statistics-modality" />
+          <SelectField label={t("name")} value={filters.player_id} onChange={setFilter("player_id")} options={[toSelectOption(ALL_FILTER, t("allPlayers")), ...playerOptions]} testid="statistics-player" />
+          <SelectField label={t("status")} value={filters.activo} onChange={setFilter("activo")} options={[toSelectOption(ALL_FILTER, t("allStatuses")), { value: "true", label: t("activeOnly") }, { value: "false", label: t("inactiveOnly") }]} testid="statistics-active" />
           <Field label={t("reportDateFrom")} type="date" value={filters.desde} onChange={setFilter("desde")} testid="statistics-date-from" />
           <Field label={t("reportDateTo")} type="date" value={filters.hasta} onChange={setFilter("hasta")} testid="statistics-date-to" />
           <SelectField label={t("reportPeriod")} value={filters.periodo} onChange={setFilter("periodo")} options={[{ value: "weekly", label: t("reportWeekly") }, { value: "monthly", label: t("reportMonthly") }]} testid="statistics-period" />
