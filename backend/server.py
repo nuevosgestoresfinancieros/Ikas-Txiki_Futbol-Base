@@ -1799,6 +1799,11 @@ def _secure_match_report_participants(payloads: list[dict], existing: dict, cont
         player = allowed_players.get(row["player_id"]) or {}
         row["player_name"] = previous.get("player_name") or f"{player.get('nombre', '')} {player.get('apellidos', '')}".strip() or None
         row["callup_response_original"] = previous.get("callup_response_original", row["callup_response"])
+        # La procedencia es metadato del servidor, no un campo editable. Esto
+        # evita que una edición ordinaria suplante datos importados o inyecte
+        # estructuras arbitrarias en ``original_value``.
+        row["origin"] = previous.get("origin") or "manual"
+        row["original_value"] = previous.get("original_value")
         row.update({
             "created_at": previous.get("created_at") or now,
             "created_by": previous.get("created_by") or actor.get("id"),
@@ -2269,9 +2274,10 @@ async def export_match_report_pdf(match_id: str, lang: str = "es"):
     event = _match_report_history_event(
         "exported", context["actor"], report.get("version", 1), detail={"format": "pdf", "lang": lang},
     )
+    rendered_pdf = _match_report_pdf(report, context, lang)
     await _record_match_report_audit(report, event)
     return StreamingResponse(
-        _match_report_pdf(report, context, lang), media_type="application/pdf",
+        rendered_pdf, media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="acta_{match_id}.pdf"'},
     )
 

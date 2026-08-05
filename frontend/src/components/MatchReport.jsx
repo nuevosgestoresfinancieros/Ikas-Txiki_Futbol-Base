@@ -117,6 +117,18 @@ const MatchReport = ({ match, open, onOpenChange }) => {
     setValidation(null); setDirty(true);
   };
 
+  const updateGoalKind = (index, value) => {
+    setData((current) => ({
+      ...current,
+      goal_events: (current.goal_events || []).map((row, position) => (
+        position === index
+          ? { ...row, kind: value, scorer_player_id: value === "player" ? row.scorer_player_id : null }
+          : row
+      )),
+    }));
+    setValidation(null); setDirty(true);
+  };
+
   const initialize = async () => {
     if (busyRef.current) return;
     busyRef.current = true;
@@ -145,9 +157,11 @@ const MatchReport = ({ match, open, onOpenChange }) => {
       });
       setData(response.data); setValidation(response.data.validation || null); setDirty(false);
       toast.success(t("matchReportSaved"));
+      return response.data;
     } catch (requestError) {
       setError(requestError.response?.data?.detail?.message || requestError.response?.data?.detail || t("matchReportSaveError"));
       if (requestError.response?.data?.detail?.errors) setValidation(requestError.response.data.detail);
+      return null;
     } finally { busyRef.current = false; setSaving(false); }
   };
 
@@ -167,6 +181,11 @@ const MatchReport = ({ match, open, onOpenChange }) => {
 
   const closeReport = async () => {
     if (busyRef.current) return;
+    let currentData = data;
+    if (dirty) {
+      currentData = await save();
+      if (!currentData) return;
+    }
     const result = await validate();
     const scoreOnly = result?.errors?.length && result.errors.every((message) => message.includes("marcador oficial"));
     if (!result || (result.errors?.length && !(canReopen && scoreOnly && scoreReason.trim().length >= 3))) return;
@@ -177,7 +196,7 @@ const MatchReport = ({ match, open, onOpenChange }) => {
     setSaving(true); setError("");
     try {
       const response = await api.post(`/match-reports/match/${match.id}/close`, {
-        version: data.version, confirm_warnings: confirmWarnings,
+        version: currentData.version, confirm_warnings: confirmWarnings,
         confirm_score_discrepancy: Boolean(canReopen && scoreReason.trim()),
         score_discrepancy_reason: canReopen ? scoreReason.trim() || null : null,
       });
@@ -304,7 +323,7 @@ const MatchReport = ({ match, open, onOpenChange }) => {
             <section className="rounded-2xl border border-slate-200 p-4" aria-label={t("matchReportGoalEvents")}>
               <div className="flex flex-wrap items-center justify-between gap-2"><div><h3 className="font-semibold text-slate-800">{t("matchReportGoalEvents")}</h3><p className="text-xs text-slate-500">{(data.goal_events || []).length} / {data.header?.result?.own ?? "—"}</p></div>{!closed && <Button type="button" variant="outline" size="sm" onClick={addGoal}><Plus className="h-4 w-4" />{t("matchReportAddGoal")}</Button>}</div>
               {!(data.goal_events || []).length ? <p className="mt-2 text-sm text-slate-500">{t("matchReportNoGoals")}</p> : <div className="mt-3 space-y-3">{(data.goal_events || []).map((goal,index) => <div key={goal.id || `goal-${index}`} className="grid gap-2 rounded-xl bg-slate-50 p-3 sm:grid-cols-2 lg:grid-cols-[150px_1fr_120px_100px_1fr_auto]">
-                <label className="text-xs font-semibold">{t("matchReportGoalType")}<select value={goal.kind || "player"} disabled={closed} onChange={(event)=>updateGoal(index,"kind",event.target.value)} className="mt-1 h-10 w-full rounded-lg border px-2"><option value="player">{t("matchReportGoalPlayer")}</option><option value="opponent_own_goal">{t("matchReportOpponentOwnGoal")}</option><option value="unidentified">{t("matchReportUnidentifiedGoal")}</option></select></label>
+                <label className="text-xs font-semibold">{t("matchReportGoalType")}<select value={goal.kind || "player"} disabled={closed} onChange={(event)=>updateGoalKind(index,event.target.value)} className="mt-1 h-10 w-full rounded-lg border px-2"><option value="player">{t("matchReportGoalPlayer")}</option><option value="opponent_own_goal">{t("matchReportOpponentOwnGoal")}</option><option value="unidentified">{t("matchReportUnidentifiedGoal")}</option></select></label>
                 <label className="text-xs font-semibold">{t("matchReportScorer")}<select value={goal.scorer_player_id || "none"} disabled={closed || goal.kind !== "player"} onChange={(event)=>updateGoal(index,"scorer_player_id",event.target.value === "none" ? null : event.target.value)} className="mt-1 h-10 w-full min-w-0 rounded-lg border px-2"><option value="none">—</option>{participants.map((row)=><option key={row.player_id} value={row.player_id}>{participantName(data,row.player_id)}</option>)}</select></label>
                 <label className="text-xs font-semibold">{t("matchReportPeriods")}<select value={goal.period_id || "none"} disabled={closed} onChange={(event)=>updateGoal(index,"period_id",event.target.value)} className="mt-1 h-10 w-full rounded-lg border px-2"><option value="none">—</option>{data.configuration?.periods?.map((period)=><option key={period.id} value={period.id}>{period.id}</option>)}</select></label>
                 <label className="text-xs font-semibold">{t("matchReportMinute")}<input type="number" min="0" max={data.configuration?.total_minutes || 1000} value={goal.minute ?? 0} disabled={closed} onChange={(event)=>updateGoal(index,"minute",numberValue(event.target.value))} className="mt-1 h-10 w-full rounded-lg border px-2" /></label>

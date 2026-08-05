@@ -346,6 +346,11 @@ def normalize_goal_event(raw: Mapping[str, Any]) -> dict:
     scorer_id = str(raw.get("scorer_player_id") or "").strip() or None
     if kind == "player" and not scorer_id:
         raise MatchReportValidationError("El gol de jugador requiere un goleador")
+    if kind != "player":
+        # El selector puede conservar un valor anterior al cambiar el tipo de
+        # gol. Los eventos sin autor no deben guardar ni mostrar un goleador
+        # residual, aunque el cliente lo envíe por error.
+        scorer_id = None
     return {
         "id": str(raw.get("id") or "").strip() or None,
         "kind": kind,

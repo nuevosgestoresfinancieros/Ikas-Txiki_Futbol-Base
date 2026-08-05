@@ -167,6 +167,48 @@ test("hides the internal match report action from family users", async () => {
   container.remove();
 });
 
+test("saves dirty changes before validation and closes the persisted version", async () => {
+  api.get.mockImplementation((url) => {
+    if (url === "/matches") return Promise.resolve({ data: [match] });
+    if (url === "/players" || url === "/teams" || url === "/callups") return Promise.resolve({ data: [] });
+    if (url === "/match-reports/match/match-1") return Promise.resolve({ data: createdReport });
+    return Promise.resolve({ data: [] });
+  });
+  const savedReport = { ...createdReport, version: 2, internal_notes: "Cambio pendiente", validation: { errors: [], warnings: [] } };
+  api.put.mockResolvedValue({ data: savedReport });
+  api.post.mockImplementation((url, payload) => {
+    if (url.endsWith("/validate")) return Promise.resolve({ data: { errors: [], warnings: [] } });
+    if (url.endsWith("/close")) return Promise.resolve({ data: { ...savedReport, status: "closed", version: 3 } });
+    return Promise.resolve({ data: createdReport });
+  });
+
+  const { container, root } = await renderMatches(admin);
+  await act(async () => container.querySelector('[data-testid="match-report-match-1"]').click());
+  await flush();
+  const notes = document.querySelector('[data-testid="match-report-general-notes"]');
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value").set.call(notes, "Cambio pendiente");
+    notes.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const close = [...document.querySelectorAll("button")].find((button) => button.textContent.includes("Cerrar acta"));
+  await act(async () => close.click());
+  await flush();
+
+  expect(api.put).toHaveBeenCalledWith("/match-reports/match/match-1", expect.objectContaining({
+    version: 1,
+    internal_notes: "Cambio pendiente",
+  }));
+  expect(api.post).toHaveBeenCalledWith("/match-reports/match/match-1/close", expect.objectContaining({ version: 2 }));
+  const saveOrder = api.put.mock.invocationCallOrder[0];
+  const validateOrder = api.post.mock.invocationCallOrder.find((_, index) => api.post.mock.calls[index][0].endsWith("/validate"));
+  const closeOrder = api.post.mock.invocationCallOrder.find((_, index) => api.post.mock.calls[index][0].endsWith("/close"));
+  expect(saveOrder).toBeLessThan(validateOrder);
+  expect(validateOrder).toBeLessThan(closeOrder);
+
+  await act(async () => root.unmount());
+  container.remove();
+});
+
 test("prevents duplicate draft creation even when the action is activated twice", async () => {
   let resolveCreate;
   const pendingCreate = new Promise((resolve) => { resolveCreate = resolve; });

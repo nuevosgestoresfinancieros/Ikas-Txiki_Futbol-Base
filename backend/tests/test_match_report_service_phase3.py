@@ -4,6 +4,7 @@ from match_report_service import (
     MatchReportValidationError,
     build_objective_statistics,
     dry_run_historical_rows,
+    normalize_goal_event,
     period_configuration,
     validate_goal_events,
     validate_participants,
@@ -145,6 +146,17 @@ def test_goal_events_block_close_when_score_differs_unless_admin_discrepancy_is_
     )
     assert justified["errors"] == []
     assert justified["warnings"]
+
+
+@pytest.mark.parametrize("kind", ["opponent_own_goal", "unidentified"])
+def test_non_player_goal_never_keeps_a_residual_scorer(kind):
+    normalized = normalize_goal_event({
+        "kind": kind,
+        "scorer_player_id": "player-selected-before-kind-change",
+        "period_id": "T1",
+        "minute": 5,
+    })
+    assert normalized["scorer_player_id"] is None
 
 
 def test_declined_or_exceptional_participation_requires_explicit_reason_and_confirmation():
