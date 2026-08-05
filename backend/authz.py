@@ -14,7 +14,7 @@ RESOURCES = (
     "matches", "callups", "attendance", "payments", "authorizations",
     "inscriptions", "communications", "reports", "stats", "search",
     "equipment", "settings", "modalities", "data", "calendar", "portal", "notifications", "assistant",
-    "exercises", "training-evaluations",
+    "exercises", "training-evaluations", "match-reports",
 )
 
 
@@ -46,6 +46,7 @@ ROLE_PERMISSIONS: Dict[str, Dict[str, Set[str]]] = {
         "assistant": _actions("read", "create", "edit"),
         "exercises": _actions("read", "create", "edit", "delete", "export"),
         "training-evaluations": _actions("read", "create", "edit"),
+        "match-reports": _actions("read", "create", "edit", "export"),
     },
     "coach": {
         "dashboard": _actions("read"),
@@ -66,6 +67,7 @@ ROLE_PERMISSIONS: Dict[str, Dict[str, Set[str]]] = {
         "assistant": _actions("read", "create", "edit"),
         "exercises": _actions("read", "create", "edit", "delete", "export"),
         "training-evaluations": _actions("read", "create", "edit"),
+        "match-reports": _actions("read", "create", "edit", "export"),
     },
     "family": {
         "dashboard": _actions("read"),
@@ -120,6 +122,7 @@ PATH_RESOURCES = {
     "inscription-imports": "data", "assistant": "assistant",
     "exercises": "exercises", "training-templates": "exercises", "statistics": "stats",
     "training-evaluations": "training-evaluations",
+    "match-reports": "match-reports",
     "export-excel": "data", "import-excel": "data", "clear-all": "data",
     "seed-demo": "data",
 }
@@ -191,6 +194,12 @@ def route_permission(request: Request) -> tuple[str, str]:
         return "exercises", "edit"
     if first == "training-evaluations" and "close" in parts:
         return "training-evaluations", "edit"
+    if first == "match-reports" and any(part in {"reopen", "dry-run"} for part in parts):
+        return "match-reports", "administer"
+    if first == "match-reports" and "validate" in parts:
+        return "match-reports", "read"
+    if first == "match-reports" and "close" in parts:
+        return "match-reports", "edit"
     if first == "exercises" and "duplicate" in parts:
         return "exercises", "create"
     if first in {"clear-all", "seed-demo", "import-excel", "inscription-imports"}:
