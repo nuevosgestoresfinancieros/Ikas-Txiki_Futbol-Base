@@ -550,7 +550,11 @@ def dry_run_historical_rows(
         candidate = {
             **row,
             "player_id": player_id,
-            "role": row.get("role") or "did_not_play",
+            # Un histórico compacto puede contener minutos sin detallar si el
+            # jugador fue titular o suplente. Para el dry-run se adopta la
+            # opción conservadora (suplente) en vez de crear la contradicción
+            # ``did_not_play + played``; no se escribe ni se infiere titularidad.
+            "role": row.get("role") or ("substitute" if row.get("minutes") else "did_not_play"),
             "played": bool(row.get("played", bool(row.get("minutes")))),
             "period_ids": row.get("period_ids") or row.get("periods") or [],
             "goals": row.get("goals", 0),

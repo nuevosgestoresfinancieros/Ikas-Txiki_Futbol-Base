@@ -201,6 +201,20 @@ def test_historical_dry_run_never_writes_and_reports_ambiguous_or_duplicate_rows
     assert all("status" in row for row in result["rows"])
 
 
+def test_historical_dry_run_accepts_compact_played_row_without_inventing_a_start():
+    result = dry_run_historical_rows(
+        [{"match_id": "m1", "player_id": "p1", "minutes": 20, "period_ids": ["T1"]}],
+        known_match_ids={"m1"},
+        known_player_ids={"p1"},
+        match_contexts={"m1": {"team_id": "team-1", "modality": "F7"}},
+        player_contexts={"p1": {"team_id": "team-1"}},
+    )
+
+    assert result["can_import"] is True
+    assert result["summary"]["errors"] == 0
+    assert result["rows"][0]["status"] in {"valid", "warning"}
+
+
 def test_historical_dry_run_validates_modality_periods_minutes_and_team_membership():
     result = dry_run_historical_rows(
         [{
