@@ -80,6 +80,11 @@ from report_service import (
 )
 from report_export_service import generate_pdf as generate_report_pdf, generate_xlsx as generate_report_xlsx, safe_filename
 from statistics_service import calculate_statistics, paginate_player_rows
+from match_report_service import (
+    MatchReportValidationError, build_objective_statistics, dry_run_historical_rows,
+    normalize_goal_event, normalize_participant, normalize_substitution, period_configuration,
+    validate_goal_events, validate_participants, validate_substitutions,
+)
 from assistant_knowledge import KNOWLEDGE_VERSION, available_modules
 from assistant_service import (
     ACTION_DEFINITIONS, ExternalAssistantProvider, ProposalStore, answer_help,
@@ -1480,6 +1485,887 @@ async def edit_match(match_id: str, match: Match):
 @api_router.delete("/matches/{match_id}")
 async def remove_match(match_id: str):
     return await delete_doc("matches", match_id)
+
+
+# ================= MATCH REPORTS / PERFORMANCE =================
+MATCH_REPORT_STATUSES = {"draft", "closed", "reopened"}
+
+
+class MatchReportParticipantPayload(BaseModel):
+    player_id: str
+    player_name: Optional[str] = Field(default=None, max_length=300)
+    called_up: bool = False
+    callup_response: Optional[str] = None
+    callup_response_original: Optional[str] = None
+    role: str = "did_not_play"
+    played: bool = False
+    shirt_number: Optional[str] = Field(default=None, max_length=20)
+    initial_position: Optional[str] = Field(default=None, max_length=120)
+    minutes: int = Field(default=0, ge=0, le=1000)
+    initial_period: Optional[str] = None
+    final_period: Optional[str] = None
+    period_ids: List[str] = Field(default_factory=list)
+    entries: int = Field(default=0, ge=0, le=100)
+    exits: int = Field(default=0, ge=0, le=100)
+    changes: List[Dict[str, Any]] = Field(default_factory=list)
+    goals: int = Field(default=0, ge=0, le=100)
+    own_goals: int = Field(default=0, ge=0, le=100)
+    incidents: List[str] = Field(default_factory=list)
+    non_participation_reason: Optional[str] = Field(default=None, max_length=1000)
+    exceptional_reason: Optional[str] = Field(default=None, max_length=1000)
+    availability_override_reason: Optional[str] = Field(default=None, max_length=1000)
+    minutes_override_reason: Optional[str] = Field(default=None, max_length=1000)
+    internal_notes: Optional[str] = Field(default=None, max_length=4000)
+    origin: str = "manual"
+    original_value: Optional[Any] = None
+    warning_confirmed: bool = False
+
+    @field_validator("player_id", "role", "origin")
+    @classmethod
+    def required_match_report_text(cls, value: str):
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("El participante contiene un campo obligatorio vacío")
+        return normalized
+
+    @field_validator(
+        "internal_notes", "shirt_number", "initial_position", "non_participation_reason",
+        "exceptional_reason", "availability_override_reason", "minutes_override_reason",
+    )
+    @classmethod
+    def normalize_match_report_notes(cls, value: Optional[str]):
+        normalized = str(value or "").strip()
+        return normalized or None
+
+
+class MatchReportSubstitutionPayload(BaseModel):
+    id: Optional[str] = None
+    incoming_player_id: str
+    outgoing_player_id: str
+    period_id: str
+    minute: int = Field(ge=0, le=1000)
+    notes: Optional[str] = Field(default=None, max_length=1000)
+
+
+class MatchReportGoalPayload(BaseModel):
+    id: Optional[str] = None
+    kind: str = "player"
+    scorer_player_id: Optional[str] = None
+    period_id: str
+    minute: int = Field(ge=0, le=1000)
+    notes: Optional[str] = Field(default=None, max_length=1000)
+
+
+class MatchReportSavePayload(BaseModel):
+    version: int = Field(ge=1)
+    participants: List[MatchReportParticipantPayload] = Field(default_factory=list, max_length=500)
+    internal_notes: Optional[str] = Field(default=None, max_length=6000)
+    period_configuration: Optional[Dict[str, Any]] = None
+    substitutions: List[MatchReportSubstitutionPayload] = Field(default_factory=list, max_length=500)
+    goal_events: List[MatchReportGoalPayload] = Field(default_factory=list, max_length=500)
+
+
+class MatchReportParticipantSavePayload(BaseModel):
+    version: int = Field(ge=1)
+    participant: MatchReportParticipantPayload
+
+
+class MatchReportClosePayload(BaseModel):
+    version: int = Field(ge=1)
+    confirm_warnings: bool = False
+    confirm_score_discrepancy: bool = False
+    score_discrepancy_reason: Optional[str] = Field(default=None, max_length=1000)
+
+
+class MatchReportReopenPayload(BaseModel):
+    version: int = Field(ge=1)
+    reason: str = Field(min_length=3, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def normalize_reopen_reason(cls, value: str):
+        return value.strip()
+
+
+class MatchReportImportDryRunPayload(BaseModel):
+    rows: List[Dict[str, Any]] = Field(min_length=1, max_length=5000)
+
+
+_match_report_write_lock = asyncio.Lock()
+
+
+async def ensure_match_report_indexes() -> None:
+    """Índices idempotentes; se invocan solo al escribir una acta.
+
+    La colección usa participantes embebidos para que el acta completa se
+    modifique de forma atómica. La combinación ``match_id + player_id`` queda
+    protegida por la unicidad del acta y la validación previa de duplicados.
+    """
+    await db.match_reports.create_index([("match_id", 1)], unique=True, name="match_report_match_unique")
+    await db.match_reports.create_index(
+        [("team_id", 1), ("status", 1), ("updated_at", -1)], name="match_report_scope_status"
+    )
+    await db.match_reports.create_index(
+        [("participants.player_id", 1), ("status", 1)], name="match_report_player_statistics"
+    )
+
+
+async def _match_report_context(match_id: str) -> dict:
+    actor = current_user_context.get() or {}
+    match = await get_doc("matches", match_id)
+    team_id = match.get("equipo_id")
+    if not team_id:
+        raise HTTPException(status_code=422, detail="El partido no tiene equipo asociado")
+    team = await db.teams.find_one({"id": team_id}, {"_id": 0})
+    if not team:
+        raise HTTPException(status_code=422, detail="El equipo del partido no existe")
+    if actor.get("role") != "admin" and team_id not in set(ids(actor.get("assigned_team_ids") or [])):
+        raise HTTPException(status_code=403, detail="El partido queda fuera de tu ámbito")
+    catalog = await _load_modality_catalog()
+    normalized_modality = normalize_modality(match.get("modalidad") or team.get("modalidad"), catalog)
+    if normalized_modality.status != "recognized" or not normalized_modality.active:
+        raise HTTPException(status_code=422, detail="El partido no tiene una modalidad F7 o F11 activa")
+    try:
+        periods = period_configuration(normalized_modality.code)
+    except MatchReportValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    callup_scope = await scope_for_collection("callups", actor)
+    callup = await db.callups.find_one(
+        merge_query({"match_id": match_id, "equipo_id": team_id}, callup_scope), {"_id": 0}
+    )
+    player_scope = await scope_for_collection("players", actor)
+    players = await db.players.find(
+        merge_query({"equipo_id": team_id, "estado": {"$ne": "baja"}}, player_scope), {"_id": 0}
+    ).sort([("apellidos", 1), ("nombre", 1)]).to_list(500)
+    return {
+        "actor": actor, "match": match, "team": team, "callup": callup,
+        "players": players, "players_by_id": {row["id"]: row for row in players},
+        "modality": normalized_modality.code, "period_configuration": periods,
+    }
+
+
+def _match_report_header(context: dict) -> dict:
+    match = context["match"]
+    team = context["team"]
+    return {
+        "match_id": match.get("id"),
+        "temporada": match.get("temporada") or team.get("temporada"),
+        "categoria": match.get("categoria") or team.get("categoria"),
+        "team_id": team.get("id"),
+        "team_name": team.get("nombre"),
+        "rival": match.get("rival"),
+        "condition": match.get("condicion"),
+        "fecha": match.get("fecha"),
+        "hora": match.get("hora"),
+        "campo": match.get("campo"),
+        "modalidad": context["modality"],
+        "jornada": match.get("jornada"),
+        "competicion": match.get("tipo"),
+        "match_status": match.get("estado"),
+        "result": {
+            "own": match.get("resultado_propio"),
+            "rival": match.get("resultado_rival"),
+        },
+    }
+
+
+def _match_report_callup(context: dict) -> dict:
+    callup = context.get("callup") or {}
+    rows = callup.get("convocados") or []
+    return {
+        "exists": bool(callup), "id": callup.get("id"), "count": len(rows),
+        "responses": response_counts(rows) if rows else {"confirmed": 0, "declined": 0, "pending": 0},
+    }
+
+
+def _initial_match_report_participants(context: dict) -> list[dict]:
+    actor = context["actor"]
+    now = now_iso()
+    callup_items = {
+        row.get("player_id"): row for row in (context.get("callup") or {}).get("convocados", [])
+        if row.get("player_id")
+    }
+    participants = []
+    for player in context["players"]:
+        called = callup_items.get(player["id"])
+        participants.append({
+            "player_id": player["id"], "called_up": bool(called),
+            "player_name": f"{player.get('nombre', '')} {player.get('apellidos', '')}".strip(),
+            "callup_response": normalize_status(called.get("estado")) if called else None,
+            "callup_response_original": normalize_status(called.get("estado")) if called else None,
+            "role": "did_not_play" if called else "not_called", "played": False,
+            "shirt_number": player.get("dorsal"), "initial_position": player.get("posicion"),
+            "minutes": 0, "initial_period": None, "final_period": None, "period_ids": [],
+            "entries": 0, "exits": 0, "changes": [], "goals": 0, "own_goals": 0,
+            "incidents": [], "non_participation_reason": None, "exceptional_reason": None,
+            "availability_override_reason": None, "minutes_override_reason": None,
+            "internal_notes": None, "origin": "manual", "original_value": None,
+            "warning_confirmed": False, "created_at": now, "created_by": actor.get("id"),
+            "updated_at": now, "updated_by": actor.get("id"),
+        })
+    return participants
+
+
+def _match_report_history_event(action: str, actor: dict, version: int, *, detail: Optional[dict] = None) -> dict:
+    return {
+        "id": new_id(), "action": action, "actor_user_id": actor.get("id"),
+        "actor_role": actor.get("role"), "created_at": now_iso(), "version": version,
+        "detail": detail or {},
+    }
+
+
+def _match_report_player_changes(previous: list[dict], current: list[dict]) -> list[dict]:
+    """Devuelve un diff deportivo acotado para el historial inmutable del acta."""
+    tracked_fields = (
+        "called_up", "callup_response", "callup_response_original", "role", "played", "shirt_number", "initial_position",
+        "minutes", "initial_period",
+        "final_period", "period_ids", "entries", "exits", "changes", "goals",
+        "own_goals", "incidents", "non_participation_reason", "exceptional_reason",
+        "availability_override_reason", "minutes_override_reason", "internal_notes",
+        "origin", "original_value",
+    )
+    before_by_id = {row.get("player_id"): row for row in previous}
+    changes = []
+    for row in current:
+        player_id = row.get("player_id")
+        before = before_by_id.get(player_id, {})
+        fields = {
+            field: {"previous": before.get(field), "new": row.get(field)}
+            for field in tracked_fields if before.get(field) != row.get(field)
+        }
+        if fields:
+            changes.append({"player_id": player_id, "fields": fields})
+    return changes
+
+
+async def _record_match_report_audit(report: dict, event: dict) -> None:
+    await db.internal_events.insert_one({
+        "id": new_id(), "type": f"match_report.{event['action']}",
+        "actor_user_id": event.get("actor_user_id"), "actor_role": event.get("actor_role"),
+        "match_id": report.get("match_id"), "team_id": report.get("team_id"),
+        "report_id": report.get("id"), "status": report.get("status"),
+        "version": event.get("version"), "detail": event.get("detail") or {},
+        "created_at": event.get("created_at"), "result": "success",
+    })
+
+
+def _public_match_report(report: Optional[dict], context: dict) -> dict:
+    header = _match_report_header(context)
+    candidates = [{
+        "id": row.get("id"), "name": f"{row.get('nombre', '')} {row.get('apellidos', '')}".strip(),
+        "shirt_number": row.get("dorsal"),
+    } for row in context["players"]]
+    candidate_ids = {row["id"] for row in candidates}
+    candidates.extend({
+        "id": row.get("player_id"), "name": row.get("player_name") or "—", "shirt_number": row.get("shirt_number"),
+    } for row in (report or {}).get("participants") or [] if row.get("player_id") not in candidate_ids)
+    warning = None if context.get("callup") else "El partido no tiene convocatoria; determina manualmente la participación real"
+    public = dict(report or {})
+    public.pop("_id", None)
+    public["header"] = header
+    public["callup"] = _match_report_callup(context)
+    public["candidates"] = candidates
+    public["configuration"] = (report or {}).get("period_configuration") or context["period_configuration"]
+    public["setup_warning"] = warning
+    public["report"] = bool(report)
+    return public
+
+
+def _secure_match_report_participants(payloads: list[dict], existing: dict, context: dict) -> list[dict]:
+    allowed_players = context["players_by_id"]
+    previous_by_id = {row.get("player_id"): row for row in existing.get("participants") or []}
+    allowed_player_ids = set(allowed_players) | set(previous_by_id)
+    submitted_ids = {row.get("player_id") for row in payloads}
+    if not submitted_ids.issubset(allowed_player_ids):
+        raise HTTPException(status_code=422, detail="El acta contiene jugadores ajenos al equipo del partido")
+    callup_items = {
+        row.get("player_id"): row for row in (context.get("callup") or {}).get("convocados", [])
+        if row.get("player_id")
+    }
+    now = now_iso()
+    actor = context["actor"]
+    secured = []
+    for payload in payloads:
+        try:
+            row = normalize_participant(payload)
+        except MatchReportValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        callup_row = callup_items.get(row["player_id"])
+        row["called_up"] = bool(callup_row)
+        row["callup_response"] = normalize_status(callup_row.get("estado")) if callup_row else None
+        if row["minutes_override_reason"] and actor.get("role") != "admin":
+            raise HTTPException(status_code=403, detail="Solo administración puede autorizar minutos excepcionales")
+        previous = previous_by_id.get(row["player_id"]) or {}
+        player = allowed_players.get(row["player_id"]) or {}
+        row["player_name"] = previous.get("player_name") or f"{player.get('nombre', '')} {player.get('apellidos', '')}".strip() or None
+        row["callup_response_original"] = previous.get("callup_response_original", row["callup_response"])
+        row.update({
+            "created_at": previous.get("created_at") or now,
+            "created_by": previous.get("created_by") or actor.get("id"),
+            "updated_at": now, "updated_by": actor.get("id"),
+        })
+        secured.append(row)
+    return secured
+
+
+def _secure_match_report_events(
+    payloads: list[dict], existing: dict, context: dict, *, kind: str,
+) -> list[dict]:
+    actor = context["actor"]
+    now = now_iso()
+    existing_rows = {row.get("id"): row for row in existing.get(kind) or [] if row.get("id")}
+    allowed_players = set(context["players_by_id"]) | {
+        row.get("player_id") for row in existing.get("participants") or [] if row.get("player_id")
+    }
+    secured = []
+    for payload in payloads:
+        try:
+            row = normalize_substitution(payload) if kind == "substitutions" else normalize_goal_event(payload)
+        except MatchReportValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        related = (
+            {row["incoming_player_id"], row["outgoing_player_id"]}
+            if kind == "substitutions" else ({row["scorer_player_id"]} if row.get("scorer_player_id") else set())
+        )
+        if not related.issubset(allowed_players):
+            raise HTTPException(status_code=422, detail="El movimiento contiene jugadores ajenos al equipo")
+        previous = existing_rows.get(row.get("id")) or {}
+        row.update({
+            "id": row.get("id") or new_id(),
+            "created_at": previous.get("created_at") or now,
+            "created_by": previous.get("created_by") or actor.get("id"),
+            "updated_at": now,
+            "updated_by": actor.get("id"),
+        })
+        secured.append(row)
+    return secured
+
+
+def _derive_match_report_participant_events(
+    participants: list[dict], substitutions: list[dict], goal_events: list[dict],
+) -> list[dict]:
+    by_player = {row["player_id"]: dict(row) for row in participants}
+    for row in by_player.values():
+        row.update({"entries": 0, "exits": 0, "changes": [], "goals": 0})
+    for movement in substitutions:
+        incoming = by_player.get(movement.get("incoming_player_id"))
+        outgoing = by_player.get(movement.get("outgoing_player_id"))
+        change = {"period_id": movement.get("period_id"), "minute": movement.get("minute")}
+        if incoming is not None:
+            incoming["entries"] += 1
+            incoming["changes"].append({**change, "kind": "entry"})
+        if outgoing is not None:
+            outgoing["exits"] += 1
+            outgoing["changes"].append({**change, "kind": "exit"})
+    for goal in goal_events:
+        scorer = by_player.get(goal.get("scorer_player_id"))
+        if goal.get("kind") == "player" and scorer is not None:
+            scorer["goals"] += 1
+    return list(by_player.values())
+
+
+def _match_report_validation(report: dict, context: dict, *, strict: bool) -> dict:
+    config = report.get("period_configuration") or context["period_configuration"]
+    try:
+        normalized_config = period_configuration(context["modality"], config)
+        result = validate_participants(
+            report.get("participants") or [], normalized_config,
+            official_own_goals=None, strict=strict,
+        )
+        substitutions = validate_substitutions(
+            result["participants"], report.get("substitutions") or [], normalized_config,
+        )
+        goals = validate_goal_events(
+            result["participants"], report.get("goal_events") or [], normalized_config,
+            official_own_goals=context["match"].get("resultado_propio"), strict=strict,
+            discrepancy_confirmed=bool(report.get("score_discrepancy_confirmed")),
+            discrepancy_reason=report.get("score_discrepancy_reason"),
+        )
+        result["errors"].extend(substitutions["errors"])
+        result["errors"].extend(goals["errors"])
+        result["warnings"].extend(goals["warnings"])
+        result["substitutions"] = substitutions["substitutions"]
+        result["goal_events"] = goals["goal_events"]
+    except MatchReportValidationError as exc:
+        return {"errors": [str(exc)], "warnings": [], "participants": [], "strict": strict}
+    result["configuration"] = normalized_config
+    result["can_close"] = not result["errors"]
+    return result
+
+
+async def _match_report_find(match_id: str, context: dict) -> Optional[dict]:
+    query: Dict[str, Any] = {"match_id": match_id, "team_id": context["team"]["id"]}
+    return await db.match_reports.find_one(query, {"_id": 0})
+
+
+async def _atomic_match_report_update(match_id: str, version: int, values: dict, event: dict, context: dict) -> dict:
+    query = {
+        "match_id": match_id, "team_id": context["team"]["id"], "version": version,
+        "status": {"$in": ["draft", "reopened"]},
+    }
+    updated = await db.match_reports.find_one_and_update(
+        query,
+        {"$set": {**values, "updated_at": now_iso(), "updated_by": context["actor"].get("id")},
+         "$inc": {"version": 1}, "$push": {"history": event}},
+        return_document=ReturnDocument.AFTER, projection={"_id": 0},
+    )
+    if not updated:
+        current = await _match_report_find(match_id, context)
+        if current and current.get("status") == "closed":
+            raise HTTPException(status_code=409, detail="El acta está cerrada y no admite edición ordinaria")
+        if current:
+            raise HTTPException(status_code=409, detail="El acta cambió en otra sesión; vuelve a cargarla antes de guardar")
+        raise HTTPException(status_code=404, detail="El acta no existe")
+    await _record_match_report_audit(updated, event)
+    return updated
+
+
+@api_router.get("/match-reports/match/{match_id}")
+async def get_match_report(match_id: str):
+    context = await _match_report_context(match_id)
+    report = await _match_report_find(match_id, context)
+    return _public_match_report(report, context)
+
+
+@api_router.post("/match-reports/match/{match_id}")
+async def initialize_match_report(match_id: str):
+    context = await _match_report_context(match_id)
+    actor = context["actor"]
+    await ensure_match_report_indexes()
+    now = now_iso()
+    event = _match_report_history_event("created", actor, 1, detail={"source": "manual"})
+    document = {
+        "id": new_id(), "match_id": match_id, "team_id": context["team"]["id"],
+        "status": "draft", "origin": "manual", "version": 1,
+        "period_configuration": context["period_configuration"],
+        "participants": _initial_match_report_participants(context), "internal_notes": None,
+        "substitutions": [], "goal_events": [],
+        "score_discrepancy_reason": None, "score_discrepancy_confirmed": False,
+        "created_at": now, "created_by": actor.get("id"), "updated_at": now, "updated_by": actor.get("id"),
+        "closed_at": None, "closed_by": None, "reopened_at": None, "reopened_by": None,
+        "reopen_reason": None, "history": [event],
+    }
+    async with _match_report_write_lock:
+        try:
+            await db.match_reports.insert_one(dict(document))
+        except DuplicateKeyError as exc:
+            raise HTTPException(status_code=409, detail="Ya existe un acta para este partido") from exc
+    await _record_match_report_audit(document, event)
+    return _public_match_report(document, context)
+
+
+@api_router.put("/match-reports/match/{match_id}")
+async def save_match_report(match_id: str, payload: MatchReportSavePayload):
+    context = await _match_report_context(match_id)
+    existing = await _match_report_find(match_id, context)
+    if not existing:
+        raise HTTPException(status_code=404, detail="El acta no existe")
+    participants = _secure_match_report_participants(
+        [row.model_dump() for row in payload.participants], existing, context
+    )
+    substitutions = _secure_match_report_events(
+        [row.model_dump() for row in payload.substitutions], existing, context, kind="substitutions",
+    )
+    goal_events = _secure_match_report_events(
+        [row.model_dump() for row in payload.goal_events], existing, context, kind="goal_events",
+    )
+    participants = _derive_match_report_participant_events(participants, substitutions, goal_events)
+    try:
+        config = period_configuration(
+            context["modality"], payload.period_configuration or existing.get("period_configuration")
+        )
+    except MatchReportValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    existing_config = period_configuration(context["modality"], existing.get("period_configuration"))
+    if config != existing_config and context["actor"].get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Solo administración puede cambiar la configuración del partido")
+    candidate = {
+        **existing, "participants": participants, "period_configuration": config,
+        "substitutions": substitutions, "goal_events": goal_events,
+        "score_discrepancy_reason": None, "score_discrepancy_confirmed": False,
+    }
+    validation = _match_report_validation(candidate, context, strict=False)
+    if validation["errors"]:
+        raise HTTPException(status_code=422, detail={"message": "El acta contiene datos incompatibles", **validation})
+    player_changes = _match_report_player_changes(existing.get("participants") or [], participants)
+    event = _match_report_history_event(
+        "updated", context["actor"], payload.version + 1,
+        detail={
+            "player_changes": player_changes,
+            "internal_notes": {
+                "previous": existing.get("internal_notes"),
+                "new": str(payload.internal_notes or "").strip() or None,
+            } if existing.get("internal_notes") != (str(payload.internal_notes or "").strip() or None) else None,
+            "substitutions": {"previous": existing.get("substitutions") or [], "new": substitutions}
+            if (existing.get("substitutions") or []) != substitutions else None,
+            "goal_events": {"previous": existing.get("goal_events") or [], "new": goal_events}
+            if (existing.get("goal_events") or []) != goal_events else None,
+            "warnings": validation["warnings"],
+        },
+    )
+    updated = await _atomic_match_report_update(
+        match_id, payload.version,
+        {"participants": participants, "period_configuration": config,
+         "substitutions": substitutions, "goal_events": goal_events,
+         "score_discrepancy_reason": None, "score_discrepancy_confirmed": False,
+         "internal_notes": str(payload.internal_notes or "").strip() or None},
+        event, context,
+    )
+    return {**_public_match_report(updated, context), "validation": validation}
+
+
+@api_router.put("/match-reports/match/{match_id}/participants/{player_id}")
+async def save_match_report_participant(match_id: str, player_id: str, payload: MatchReportParticipantSavePayload):
+    if payload.participant.player_id != player_id:
+        raise HTTPException(status_code=409, detail="El jugador de la ruta y del contenido no coincide")
+    context = await _match_report_context(match_id)
+    existing = await _match_report_find(match_id, context)
+    if not existing:
+        raise HTTPException(status_code=404, detail="El acta no existe")
+    by_player = {row.get("player_id"): row for row in existing.get("participants") or []}
+    by_player[player_id] = payload.participant.model_dump()
+    participants = _secure_match_report_participants(list(by_player.values()), existing, context)
+    participants = _derive_match_report_participant_events(
+        participants, existing.get("substitutions") or [], existing.get("goal_events") or [],
+    )
+    validation = _match_report_validation({**existing, "participants": participants}, context, strict=False)
+    if validation["errors"]:
+        raise HTTPException(status_code=422, detail={"message": "El participante contiene datos incompatibles", **validation})
+    event = _match_report_history_event(
+        "participant_updated", context["actor"], payload.version + 1,
+        detail={
+            "player_id": player_id,
+            "player_changes": _match_report_player_changes(existing.get("participants") or [], participants),
+            "warnings": validation["warnings"],
+        },
+    )
+    updated = await _atomic_match_report_update(
+        match_id, payload.version, {"participants": participants}, event, context
+    )
+    return {**_public_match_report(updated, context), "validation": validation}
+
+
+@api_router.post("/match-reports/match/{match_id}/validate")
+async def validate_match_report(match_id: str):
+    context = await _match_report_context(match_id)
+    report = await _match_report_find(match_id, context)
+    if not report:
+        raise HTTPException(status_code=404, detail="El acta no existe")
+    return _match_report_validation(report, context, strict=True)
+
+
+@api_router.post("/match-reports/match/{match_id}/close")
+async def close_match_report(match_id: str, payload: MatchReportClosePayload):
+    context = await _match_report_context(match_id)
+    report = await _match_report_find(match_id, context)
+    if not report:
+        raise HTTPException(status_code=404, detail="El acta no existe")
+    if report.get("status") == "closed":
+        return _public_match_report(report, context)
+    discrepancy_reason = str(payload.score_discrepancy_reason or "").strip() or None
+    discrepancy_confirmed = bool(payload.confirm_score_discrepancy)
+    if discrepancy_confirmed and context["actor"].get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Solo administración puede justificar una discrepancia de marcador")
+    candidate = {
+        **report,
+        "score_discrepancy_reason": discrepancy_reason,
+        "score_discrepancy_confirmed": discrepancy_confirmed,
+    }
+    validation = _match_report_validation(candidate, context, strict=True)
+    if validation["errors"]:
+        raise HTTPException(status_code=422, detail={"message": "El acta no puede cerrarse", **validation})
+    if validation["warnings"] and not payload.confirm_warnings:
+        raise HTTPException(status_code=409, detail={
+            "message": "El acta contiene advertencias que requieren confirmación", **validation,
+        })
+    now = now_iso()
+    event = _match_report_history_event(
+        "closed", context["actor"], payload.version + 1,
+        detail={
+            "status": {"previous": report.get("status"), "new": "closed"},
+            "score_discrepancy_reason": discrepancy_reason,
+            "warnings_confirmed": bool(validation["warnings"]), "warnings": validation["warnings"],
+        },
+    )
+    updated = await db.match_reports.find_one_and_update(
+        {"match_id": match_id, "team_id": context["team"]["id"], "version": payload.version,
+         "status": {"$in": ["draft", "reopened"]}},
+        {"$set": {"status": "closed", "closed_at": now, "closed_by": context["actor"].get("id"),
+                  "score_discrepancy_reason": discrepancy_reason,
+                  "score_discrepancy_confirmed": discrepancy_confirmed,
+                  "updated_at": now, "updated_by": context["actor"].get("id")},
+         "$inc": {"version": 1}, "$push": {"history": event}},
+        return_document=ReturnDocument.AFTER, projection={"_id": 0},
+    )
+    if not updated:
+        raise HTTPException(status_code=409, detail="El acta cambió en otra sesión; vuelve a cargarla antes de cerrar")
+    await _record_match_report_audit(updated, event)
+    return {**_public_match_report(updated, context), "validation": validation}
+
+
+@api_router.post("/match-reports/match/{match_id}/reopen")
+async def reopen_match_report(match_id: str, payload: MatchReportReopenPayload):
+    context = await _match_report_context(match_id)
+    actor = context["actor"]
+    if actor.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Solo un administrador puede reabrir un acta cerrada")
+    now = now_iso()
+    event = _match_report_history_event(
+        "reopened", actor, payload.version + 1,
+        detail={"status": {"previous": "closed", "new": "reopened"}, "reason": payload.reason},
+    )
+    updated = await db.match_reports.find_one_and_update(
+        {"match_id": match_id, "team_id": context["team"]["id"], "version": payload.version,
+         "status": "closed"},
+        {"$set": {"status": "reopened", "reopened_at": now, "reopened_by": actor.get("id"),
+                  "reopen_reason": payload.reason, "updated_at": now, "updated_by": actor.get("id")},
+         "$inc": {"version": 1}, "$push": {"history": event}},
+        return_document=ReturnDocument.AFTER, projection={"_id": 0},
+    )
+    if not updated:
+        current = await _match_report_find(match_id, context)
+        if not current:
+            raise HTTPException(status_code=404, detail="El acta no existe")
+        if current.get("status") != "closed":
+            raise HTTPException(status_code=409, detail="Solo se puede reabrir un acta cerrada")
+        raise HTTPException(status_code=409, detail="El acta cambió en otra sesión; vuelve a cargarla")
+    await _record_match_report_audit(updated, event)
+    return _public_match_report(updated, context)
+
+
+@api_router.get("/match-reports/match/{match_id}/history")
+async def get_match_report_history(match_id: str):
+    context = await _match_report_context(match_id)
+    report = await _match_report_find(match_id, context)
+    if not report:
+        raise HTTPException(status_code=404, detail="El acta no existe")
+    return {"match_id": match_id, "version": report.get("version"), "history": report.get("history") or []}
+
+
+def _match_report_pdf(report: dict, context: dict, lang: str) -> io.BytesIO:
+    language = "eu" if lang == "eu" else "es"
+    settings = context.get("settings") or {}
+    header = _match_report_header(context)
+    players = {
+        row["id"]: f"{row.get('nombre', '')} {row.get('apellidos', '')}".strip()
+        for row in context["players"]
+    }
+    for row in report.get("participants") or []:
+        players.setdefault(row.get("player_id"), row.get("player_name") or "—")
+    labels = {
+        "es": {
+            "title": "ACTA Y RENDIMIENTO / AKTA ETA ERRENDIMENDUA",
+            "match": "Partido / Partida", "date": "Fecha / Data", "field": "Campo / Zelaia",
+            "result": "Resultado / Emaitza", "player": "Jugador / Jokalaria",
+            "role": "Situación / Egoera", "minutes": "Minutos / Minutuak", "goals": "Goles / Golak",
+            "incidents": "Incidencias / Intzidentziak", "changes": "Cambios / Aldaketak",
+            "closed": "Cierre / Itxiera",
+        },
+        "eu": {
+            "title": "AKTA ETA ERRENDIMENDUA / ACTA Y RENDIMIENTO",
+            "match": "Partida / Partido", "date": "Data / Fecha", "field": "Zelaia / Campo",
+            "result": "Emaitza / Resultado", "player": "Jokalaria / Jugador",
+            "role": "Egoera / Situación", "minutes": "Minutuak / Minutos", "goals": "Golak / Goles",
+            "incidents": "Intzidentziak / Incidencias", "changes": "Aldaketak / Cambios",
+            "closed": "Itxiera / Cierre",
+        },
+    }[language]
+    buffer = io.BytesIO()
+    document = SimpleDocTemplate(
+        buffer, pagesize=A4, leftMargin=14 * mm, rightMargin=14 * mm,
+        topMargin=14 * mm, bottomMargin=14 * mm,
+    )
+    styles = getSampleStyleSheet()
+    title = ParagraphStyle("MatchReportTitle", parent=styles["Title"], fontSize=15, leading=18, alignment=TA_CENTER)
+    story = [
+        Table(
+            [[pdf_logo(settings.get("club_logo"), 15), Paragraph(labels["title"], title)]],
+            colWidths=[19 * mm, 158 * mm],
+            style=TableStyle([("VALIGN", (0, 0), (-1, -1), "MIDDLE")]),
+        ),
+        Spacer(1, 5 * mm),
+        Paragraph(
+            f"<b>{labels['match']}:</b> {html_lib.escape(str(header.get('team_name') or '—'))} · "
+            f"{html_lib.escape(str(header.get('rival') or '—'))}", styles["BodyText"],
+        ),
+        Paragraph(f"<b>{labels['date']}:</b> {header.get('fecha') or '—'} {header.get('hora') or ''}", styles["BodyText"]),
+        Paragraph(f"<b>{labels['field']}:</b> {html_lib.escape(str(header.get('campo') or '—'))}", styles["BodyText"]),
+        Paragraph(
+            f"<b>{labels['result']}:</b> {header.get('result', {}).get('own') if header.get('result', {}).get('own') is not None else '—'} - "
+            f"{header.get('result', {}).get('rival') if header.get('result', {}).get('rival') is not None else '—'} · "
+            f"{header.get('modalidad') or '—'}",
+            styles["BodyText"],
+        ),
+        Spacer(1, 5 * mm),
+    ]
+    role_labels = {
+        "starter": "Titular / Hasierakoa", "substitute": "Suplente / Ordezkoa",
+        "did_not_play": "No participa / Ez du parte hartzen", "absent": "Ausencia / Absentzia",
+        "late_withdrawal": "Baja / Baja", "not_called": "No convocado / Deitu gabe",
+    }
+    participant_rows = [[labels["player"], labels["role"], labels["minutes"], labels["goals"], labels["incidents"]]]
+    for row in report.get("participants") or []:
+        participant_rows.append([
+            html_lib.escape(players.get(row.get("player_id"), "—")),
+            role_labels.get(row.get("role"), str(row.get("role") or "—")),
+            str(row.get("minutes") or 0), str(row.get("goals") or 0),
+            html_lib.escape(", ".join(row.get("incidents") or []) or "—"),
+        ])
+    table = Table(participant_rows, colWidths=[48 * mm, 42 * mm, 23 * mm, 18 * mm, 47 * mm], repeatRows=1)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor(BRAND_TEAL)),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("GRID", (0, 0), (-1, -1), .35, colors.HexColor("#CBD5E1")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"), ("FONTSIZE", (0, 0), (-1, -1), 7),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
+    ]))
+    story.extend([table, Spacer(1, 5 * mm), Paragraph(f"<b>{labels['changes']}:</b>", styles["Heading3"])])
+    if report.get("substitutions"):
+        for movement in report["substitutions"]:
+            story.append(Paragraph(
+                f"{movement.get('period_id') or '—'} · {movement.get('minute', 0)}' · "
+                f"{html_lib.escape(players.get(movement.get('incoming_player_id'), '—'))} ↔ "
+                f"{html_lib.escape(players.get(movement.get('outgoing_player_id'), '—'))}",
+                styles["BodyText"],
+            ))
+    else:
+        story.append(Paragraph("—", styles["BodyText"]))
+    story.extend([Spacer(1, 4 * mm), Paragraph(f"<b>{labels['goals']}:</b>", styles["Heading3"])])
+    if report.get("goal_events"):
+        goal_kind = {
+            "opponent_own_goal": "Autogol rival / Aurkariaren autogola",
+            "unidentified": "Sin autor / Egilerik gabe",
+        }
+        for goal in report["goal_events"]:
+            scorer = players.get(goal.get("scorer_player_id")) or goal_kind.get(goal.get("kind"), "—")
+            story.append(Paragraph(
+                f"{goal.get('period_id') or '—'} · {goal.get('minute', 0)}' · {html_lib.escape(str(scorer))}",
+                styles["BodyText"],
+            ))
+    else:
+        story.append(Paragraph("—", styles["BodyText"]))
+    story.extend([
+        Spacer(1, 4 * mm),
+        Paragraph(
+            f"<b>{labels['closed']}:</b> {report.get('closed_at') or '—'} · {html_lib.escape(str(report.get('closed_by') or '—'))}",
+            styles["BodyText"],
+        ),
+    ])
+    document.build(story)
+    buffer.seek(0)
+    return buffer
+
+
+@api_router.get("/match-reports/match/{match_id}/export.pdf")
+async def export_match_report_pdf(match_id: str, lang: str = "es"):
+    context = await _match_report_context(match_id)
+    report = await _match_report_find(match_id, context)
+    if not report:
+        raise HTTPException(status_code=404, detail="El acta no existe")
+    if report.get("status") != "closed":
+        raise HTTPException(status_code=409, detail="Solo se puede exportar un acta cerrada")
+    context["settings"] = await db.settings.find_one({"id": "global"}, {"_id": 0}) or {}
+    event = _match_report_history_event(
+        "exported", context["actor"], report.get("version", 1), detail={"format": "pdf", "lang": lang},
+    )
+    await _record_match_report_audit(report, event)
+    return StreamingResponse(
+        _match_report_pdf(report, context, lang), media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="acta_{match_id}.pdf"'},
+    )
+
+
+@api_router.get("/match-reports/statistics/objective")
+async def get_match_report_statistics(
+    temporada: Optional[str] = None, categoria: Optional[str] = None, equipo_id: Optional[str] = None,
+    player_id: Optional[str] = None, modalidad: Optional[str] = None, competicion: Optional[str] = None,
+    desde: Optional[str] = None, hasta: Optional[str] = None,
+):
+    actor = current_user_context.get() or {}
+    team_ids = set(ids(actor.get("assigned_team_ids") or []))
+    if actor.get("role") != "admin" and equipo_id and equipo_id not in team_ids:
+        raise HTTPException(status_code=403, detail="El equipo no pertenece a tu ámbito")
+    report_query: Dict[str, Any] = {"status": "closed"}
+    if actor.get("role") != "admin":
+        report_query["team_id"] = {"$in": list(team_ids)}
+    if equipo_id:
+        report_query["team_id"] = equipo_id
+    reports = await db.match_reports.find(report_query, {"_id": 0}).to_list(5000)
+    match_ids = ids(row.get("match_id") for row in reports)
+    matches = {row["id"]: row for row in await db.matches.find(
+        {"id": {"$in": match_ids}}, {"_id": 0}
+    ).to_list(5000)}
+    team_rows = {row["id"]: row for row in await db.teams.find({}, {"_id": 0}).to_list(1000)}
+    synchronized = []
+    for report in reports:
+        match = matches.get(report.get("match_id"), {})
+        team = team_rows.get(report.get("team_id"), {})
+        synchronized.append({
+            **report, "temporada": match.get("temporada") or team.get("temporada"),
+            "categoria": match.get("categoria") or team.get("categoria"),
+            "equipo_id": report.get("team_id"), "modalidad": match.get("modalidad") or team.get("modalidad"),
+            "competicion": match.get("tipo"), "fecha": match.get("fecha"),
+        })
+    filters = {key: value for key, value in {
+        "temporada": temporada, "categoria": categoria, "equipo_id": equipo_id,
+        "player_id": player_id, "modalidad": modalidad, "competicion": competicion,
+        "desde": desde, "hasta": hasta,
+    }.items() if value}
+    result = build_objective_statistics(synchronized, filters)
+    player_ids = ids(row.get("player_id") for row in result["players"])
+    players = {
+        row["id"]: row
+        for row in await db.players.find(
+            {"id": {"$in": player_ids}},
+            {"_id": 0, "id": 1, "nombre": 1, "apellidos": 1},
+        ).to_list(5000)
+    }
+    for row in result["players"]:
+        player = players.get(row["player_id"], {})
+        row["player_name"] = f"{player.get('nombre', '')} {player.get('apellidos', '')}".strip() or row.get("player_name") or "—"
+    for row in result.get("teams", []):
+        row["team_name"] = (team_rows.get(row["team_id"]) or {}).get("nombre") or "—"
+    return result
+
+
+@api_router.post("/match-reports/import/dry-run")
+async def dry_run_match_report_import(payload: MatchReportImportDryRunPayload):
+    match_ids = {str(row.get("match_id") or "").strip() for row in payload.rows}
+    player_ids = {str(row.get("player_id") or "").strip() for row in payload.rows}
+    match_rows = await db.matches.find(
+        {"id": {"$in": list(match_ids)}},
+        {"_id": 0, "id": 1, "equipo_id": 1, "modalidad": 1},
+    ).to_list(5000)
+    player_rows = await db.players.find(
+        {"id": {"$in": list(player_ids)}}, {"_id": 0, "id": 1, "equipo_id": 1}
+    ).to_list(5000)
+    team_ids = ids(row.get("equipo_id") for row in match_rows)
+    teams = {row["id"]: row for row in await db.teams.find(
+        {"id": {"$in": team_ids}}, {"_id": 0, "id": 1, "modalidad": 1}
+    ).to_list(5000)}
+    catalog = await _load_modality_catalog()
+    match_contexts = {
+        row["id"]: {
+            "team_id": row.get("equipo_id"),
+            "modality": normalize_modality(
+                row.get("modalidad") or (teams.get(row.get("equipo_id")) or {}).get("modalidad"), catalog
+            ).code,
+        }
+        for row in match_rows
+    }
+    player_contexts = {
+        row["id"]: {"team_id": row.get("equipo_id")} for row in player_rows
+    }
+    known_matches = set(match_contexts)
+    known_players = set(player_contexts)
+    closed_matches = set(await db.match_reports.distinct(
+        "match_id", {"match_id": {"$in": list(match_ids)}, "status": "closed"}
+    ))
+    return dry_run_historical_rows(
+        payload.rows, known_match_ids=known_matches, known_player_ids=known_players,
+        closed_match_ids=closed_matches, match_contexts=match_contexts, player_contexts=player_contexts,
+    )
 
 
 # ================= UNIFIED CALENDAR =================

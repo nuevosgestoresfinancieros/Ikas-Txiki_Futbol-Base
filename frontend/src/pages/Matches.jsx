@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
-import { CalendarDays, Plus, Pencil, Trash2, MapPin, Users, Check, X, Clock, ChevronDown, ChevronUp, ClipboardList } from "lucide-react";
+import { CalendarDays, Plus, Pencil, Trash2, MapPin, Users, Check, X, Clock, ChevronDown, ChevronUp, ClipboardList, ClipboardCheck } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
 import { PermissionGate, usePermission } from "@/auth";
@@ -10,12 +10,14 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { PageHeader, StatusBadge, EmptyState } from "@/components/shared";
 import { Field, Area, SelectField } from "@/components/form";
 import GoogleMapsLinks from "@/components/GoogleMapsLinks";
+import MatchReport from "@/components/MatchReport";
 
 const empty = { condicion: "local", tipo: "liga", estado: "programado" };
 
 const Matches = () => {
   const canCreate = usePermission("matches", "create");
   const canCreateCallup = usePermission("callups", "create");
+  const canReadMatchReport = usePermission("match-reports", "read");
   const { t } = useI18n();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
@@ -26,6 +28,7 @@ const Matches = () => {
   const [dialog, setDialog] = useState(false);
   const [form, setForm] = useState(empty);
   const [expanded, setExpanded] = useState(null); // match_id expandido
+  const [reportMatch, setReportMatch] = useState(null);
 
   const load = async () => {
     const [mRes, cRes, pRes, tRes] = await Promise.all([
@@ -156,6 +159,13 @@ const Matches = () => {
                       {callup ? "Ver convocatoria" : "Crear convocatoria"}
                     </Button>}
 
+                    {canReadMatchReport && <Button variant="outline" size="sm"
+                      aria-label={`${t("matchReportAction")} ${m.rival || t("matches")}`}
+                      data-testid={`match-report-${m.id}`} onClick={() => setReportMatch(m)}
+                      className="h-8 px-3 text-xs gap-1.5 border-primary/30 text-primary hover:bg-primary/5">
+                      <ClipboardCheck className="h-3.5 w-3.5" />{t("matchReportAction")}
+                    </Button>}
+
                     {/* Expandir jugadores */}
                     {convocados.length > 0 && (
                       <Button variant="ghost" size="icon" aria-label={isExpanded ? "Ocultar jugadores convocados" : "Mostrar jugadores convocados"}
@@ -231,6 +241,7 @@ const Matches = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {reportMatch && <MatchReport match={reportMatch} open={Boolean(reportMatch)} onOpenChange={(nextOpen) => { if (!nextOpen) setReportMatch(null); }} />}
     </div>
   );
 };
