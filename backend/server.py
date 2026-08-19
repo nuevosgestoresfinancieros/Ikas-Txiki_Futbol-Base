@@ -85,6 +85,7 @@ from match_report_service import (
     normalize_goal_event, normalize_participant, normalize_substitution, period_configuration,
     validate_goal_events, validate_participants, validate_substitutions,
 )
+from health_service import deployment_version
 from assistant_knowledge import KNOWLEDGE_VERSION, available_modules
 from assistant_service import (
     ACTION_DEFINITIONS, ExternalAssistantProvider, ProposalStore, answer_help,
@@ -117,6 +118,9 @@ load_dotenv(ROOT_DIR / '.env')
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
+PROCESS_STARTED_MONOTONIC = time.monotonic()
+DEPLOYMENT_VERSION = deployment_version(ROOT_DIR.parent)
+APP_ENVIRONMENT = str(os.environ.get("APP_ENVIRONMENT") or "production").strip()
 
 # ── Auth config ──────────────────────────────────────────────
 JWT_SECRET = os.environ.get("JWT_SECRET")
@@ -209,6 +213,28 @@ async def get_current_user(request: Request):
         raise HTTPException(status_code=401, detail="Sesión expirada")
 
 app = FastAPI(title="Ikas-Txiki Manager API")
+
+
+@app.get("/api/health")
+async def health():
+    """Comprobación pública, rápida y de solo lectura para monitorización."""
+    try:
+        await asyncio.wait_for(db.command({"ping": 1, "maxTimeMS": 100}), timeout=0.2)
+    except Exception:
+        raise HTTPException(status_code=503, detail={
+            "status": "error", "version": DEPLOYMENT_VERSION,
+            "environment": APP_ENVIRONMENT, "mongodb": "error",
+            "uptime_seconds": max(0, int(time.monotonic() - PROCESS_STARTED_MONOTONIC)),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+    return {
+        "status": "ok",
+        "version": DEPLOYMENT_VERSION,
+        "environment": APP_ENVIRONMENT,
+        "mongodb": "ok",
+        "uptime_seconds": max(0, int(time.monotonic() - PROCESS_STARTED_MONOTONIC)),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
 
 # ── Auth endpoints ────────────────────────────────────────────
 @app.post("/api/auth/login")
