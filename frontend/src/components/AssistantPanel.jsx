@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, ExternalLink, HelpCircle, Loader2, Send, ShieldCheck, X } from "lucide-react";
+import { Bot, Compass, ExternalLink, HelpCircle, Loader2, Send, ShieldCheck, X } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import api from "@/api";
 import { useI18n } from "@/i18n";
@@ -10,7 +10,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import {
   actionLabelKey, canCreateProposal, normalizeGuidedValue,
-  safeAssistantLinks, suggestedQuestions, bindAssistantTrigger,
+  currentAssistantModule, safeAssistantLinks, safeAssistantModules,
+  suggestedQuestions, bindAssistantTrigger,
 } from "@/components/assistantView";
 
 const AssistantPanel = ({ user }) => {
@@ -34,6 +35,11 @@ const AssistantPanel = ({ user }) => {
     [capabilities, intent],
   );
   const questions = useMemo(() => suggestedQuestions(location.pathname, t), [location.pathname, t]);
+  const modules = useMemo(() => safeAssistantModules(capabilities?.modules), [capabilities]);
+  const currentModule = useMemo(
+    () => currentAssistantModule(location.pathname, modules),
+    [location.pathname, modules],
+  );
 
   useEffect(() => {
     if (!open || capabilities) return;
@@ -154,6 +160,17 @@ const AssistantPanel = ({ user }) => {
           </SheetHeader>
 
           <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+            <section className="mb-5 rounded-xl border bg-primary/5 p-3" aria-labelledby="assistant-context-title">
+              <h3 id="assistant-context-title" className="flex items-center gap-2 text-sm font-semibold">
+                <Compass className="h-4 w-4 text-primary" aria-hidden="true" />
+                {t("assistantCurrentContext")}
+              </h3>
+              <p className="mt-1 text-sm text-slate-600">
+                {currentModule ? t(`assistantModule_${currentModule.id}`) : t("assistantModule_unknown")}
+                {user?.role ? ` · ${t(`role_${user.role}`)}` : ""}
+              </p>
+            </section>
+
             <section aria-labelledby="assistant-help-title">
               <h3 id="assistant-help-title" className="mb-2 flex items-center gap-2 font-semibold">
                 <HelpCircle className="h-4 w-4" aria-hidden="true" />{t("assistantGeneralHelp")}
@@ -193,6 +210,29 @@ const AssistantPanel = ({ user }) => {
                 </Button>
               </form>
             </section>
+
+            {!!modules.length && (
+              <section className="mt-6 border-t pt-5" aria-labelledby="assistant-modules-title">
+                <h3 id="assistant-modules-title" className="mb-1 flex items-center gap-2 font-semibold">
+                  <Compass className="h-4 w-4" aria-hidden="true" />{t("assistantAvailableModules")}
+                </h3>
+                <p className="mb-3 text-xs text-slate-500">{t("assistantAvailableModulesHelp")}</p>
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  {modules.map((module) => (
+                    <Link
+                      key={module.id}
+                      to={module.routes[0]}
+                      onClick={() => handleOpenChange(false)}
+                      aria-current={currentModule?.id === module.id ? "page" : undefined}
+                      className={`flex min-h-11 items-center justify-between rounded-lg border px-3 py-2 text-sm font-medium hover:bg-slate-50 ${currentModule?.id === module.id ? "border-primary bg-primary/5 text-primary" : ""}`}
+                    >
+                      {t(`assistantModule_${module.id}`)}
+                      <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                    </Link>
+                  ))}
+                </div>
+              </section>
+            )}
 
             <section className="mt-6 border-t pt-5" aria-labelledby="assistant-guided-title">
               <h3 id="assistant-guided-title" className="mb-1 flex items-center gap-2 font-semibold">

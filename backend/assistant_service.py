@@ -18,7 +18,7 @@ SAFE_ROUTES = {
     "/", "/jugadores", "/familias", "/equipos", "/inscripciones",
     "/entrenamientos", "/partidos", "/convocatorias", "/pagos",
     "/autorizaciones", "/equipamiento", "/comunicacion", "/calendario",
-    "/informes", "/configuracion", "/usuarios", "/portal",
+    "/informes", "/estadisticas", "/configuracion", "/usuarios", "/portal",
 }
 SENSITIVE_KEYS = {
     "dni", "documento", "iban", "alergias", "enfermedades", "medicacion",

@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 
-KNOWLEDGE_VERSION = "2026.07.25"
+KNOWLEDGE_VERSION = "2026.08.19"
 
 MODULES: dict[str, dict[str, Any]] = {
     "dashboard": {
@@ -24,7 +24,7 @@ MODULES: dict[str, dict[str, Any]] = {
         "eu": "Jokalariak atalak zure esparruko fitxak kontsultatzeko aukera ematen du. Sortzea eta editatzea baimenen araberakoa da.",
     },
     "families": {
-        "routes": ["/familias", "/portal"],
+        "routes": ["/familias"],
         "roles": ["admin", "coordinator", "family"],
         "es": "Familias reúne las relaciones familiares autorizadas; el portal familiar limita la vista a sus hijos.",
         "eu": "Familiak atalak baimendutako familia-harremanak biltzen ditu; familia-atariak seme-alabetara mugatzen du ikuspegia.",
@@ -38,20 +38,20 @@ MODULES: dict[str, dict[str, Any]] = {
     "inscriptions": {
         "routes": ["/inscripciones"],
         "roles": ["admin", "coordinator"],
-        "es": "Inscripciones permite revisar altas y renovaciones. La importación histórica no forma parte del asistente.",
-        "eu": "Inskripzioak atalak altak eta berritzeak berrikusteko aukera ematen du. Inportazio historikoa ez da laguntzailearen parte.",
+        "es": "Inscripciones permite revisar altas, renovaciones y borradores de Excel. El asistente explica cada paso, pero nunca confirma una importación por ti.",
+        "eu": "Inskripzioak atalak altak, berritzeak eta Excel zirriborroak berrikusteko aukera ematen du. Laguntzaileak urratsak azaltzen ditu, baina ez du inoiz inportazioa zure ordez baieztatzen.",
     },
     "trainings": {
         "routes": ["/entrenamientos"],
         "roles": ["admin", "coordinator", "coach", "family", "player"],
-        "es": "Entrenamientos incluye planificación y asistencia; la edición está limitada al personal autorizado.",
-        "eu": "Entrenamenduak atalak plangintza eta asistentzia biltzen ditu; edizioa baimendutako langileetara mugatuta dago.",
+        "es": "Entrenamientos incluye planificación, biblioteca de ejercicios, plantillas, asistencia y evaluaciones; la edición está limitada al personal autorizado.",
+        "eu": "Entrenamenduak atalak plangintza, ariketa-liburutegia, txantiloiak, asistentzia eta ebaluazioak biltzen ditu; edizioa baimendutako langileetara mugatuta dago.",
     },
     "matches": {
         "routes": ["/partidos"],
         "roles": ["admin", "coordinator", "coach", "family", "player"],
-        "es": "Partidos permite consultar calendario, rival, lugar y resultado dentro de tu ámbito.",
-        "eu": "Partidak atalak zure esparruko egutegia, aurkaria, lekua eta emaitza kontsultatzeko aukera ematen du.",
+        "es": "Partidos permite consultar calendario, rival, lugar, convocatorias, acta y rendimiento individual dentro de tu ámbito.",
+        "eu": "Partidak atalak zure esparruko egutegia, aurkaria, lekua, deialdiak, akta eta banakako errendimendua kontsultatzeko aukera ematen du.",
     },
     "callups": {
         "routes": ["/convocatorias"],
@@ -95,11 +95,29 @@ MODULES: dict[str, dict[str, Any]] = {
         "es": "Informes ofrece vista previa y exportaciones PDF y Excel respetando filtros y ámbito.",
         "eu": "Txostenak atalak aurrebista eta PDF/Excel esportazioak eskaintzen ditu, iragazkiak eta esparrua errespetatuz.",
     },
+    "stats": {
+        "routes": ["/estadisticas"],
+        "roles": ["admin", "coordinator", "coach", "family", "player"],
+        "es": "Estadísticas permite combinar temporada, categoría, equipo, jugador, modalidad, estado y periodo. Los resultados y exportaciones respetan tu ámbito.",
+        "eu": "Estatistikak atalak denboraldia, kategoria, taldea, jokalaria, modalitatea, egoera eta aldia konbinatzeko aukera ematen du. Emaitzek eta esportazioek zure esparrua errespetatzen dute.",
+    },
     "settings": {
-        "routes": ["/configuracion", "/usuarios"],
+        "routes": ["/configuracion"],
         "roles": ["admin"],
-        "es": "Configuración y usuarios son funciones administrativas. Solo se muestran a quien tenga permiso.",
-        "eu": "Konfigurazioa eta erabiltzaileak administrazio-funtzioak dira. Baimena duenari soilik erakusten zaizkio.",
+        "es": "Configuración reúne los ajustes administrativos del club y solo se muestra a quien tenga permiso.",
+        "eu": "Konfigurazioak klubaren administrazio-ezarpenak biltzen ditu eta baimena duenari soilik erakusten zaio.",
+    },
+    "users": {
+        "routes": ["/usuarios"],
+        "roles": ["admin"],
+        "es": "Usuarios permite administrar cuentas, roles, ámbitos y seguridad. Cualquier cambio requiere permisos administrativos y confirmación.",
+        "eu": "Erabiltzaileak atalak kontuak, rolak, esparruak eta segurtasuna administratzeko aukera ematen du. Aldaketa guztiek administrazio-baimena eta baieztapena behar dituzte.",
+    },
+    "portal": {
+        "routes": ["/portal"],
+        "roles": ["admin", "family", "player"],
+        "es": "El portal limita cada consulta a la familia o al jugador vinculados y no muestra información interna de otros miembros.",
+        "eu": "Atariak kontsulta bakoitza lotutako familiara edo jokalarira mugatzen du, eta ez du beste kideen barne-informaziorik erakusten.",
     },
 }
 
@@ -109,7 +127,7 @@ ALIASES = {
     "familia": "families", "familias": "families", "familia-ataria": "families",
     "equipo": "teams", "equipos": "teams", "talde": "teams",
     "inscripcion": "inscriptions", "inscripciones": "inscriptions", "inskripzio": "inscriptions",
-    "entrenamiento": "trainings", "asistencia": "trainings", "entrenamendu": "trainings",
+    "entrenamiento": "trainings", "asistencia": "trainings", "ejercicio": "trainings", "plantilla": "trainings", "entrenamendu": "trainings",
     "partido": "matches", "partidos": "matches", "partida": "matches",
     "convocatoria": "callups", "convocatorias": "callups", "deialdi": "callups",
     "pago": "payments", "pagos": "payments", "ordainketa": "payments",
@@ -118,7 +136,10 @@ ALIASES = {
     "comunicacion": "communications", "komunikazio": "communications",
     "calendario": "calendar", "egutegi": "calendar",
     "informe": "reports", "informes": "reports", "txosten": "reports",
-    "configuracion": "settings", "usuarios": "settings", "konfigurazio": "settings",
+    "estadistica": "stats", "estadisticas": "stats", "estatistika": "stats",
+    "configuracion": "settings", "konfigurazio": "settings",
+    "usuario": "users", "usuarios": "users", "erabiltzaile": "users",
+    "portal": "portal", "atari": "portal",
 }
 
 
@@ -138,7 +159,10 @@ def contextual_help(message: str, role: str, lang: str, route: str | None = None
     )
     if not module_id and route:
         module_id = next(
-            (key for key, value in MODULES.items() if route in value["routes"]),
+            (key for key, value in MODULES.items() if any(
+                route == allowed or route.startswith(f"{allowed}/")
+                for allowed in value["routes"]
+            )),
             None,
         )
     module = MODULES.get(module_id or "dashboard", MODULES["dashboard"])
