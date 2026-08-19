@@ -1,6 +1,7 @@
 import {
   SAFE_ASSISTANT_ROUTES, actionLabelKey, canCreateProposal,
-  normalizeGuidedValue, safeAssistantLinks, suggestedQuestions, bindAssistantTrigger,
+  currentAssistantModule, normalizeGuidedValue, safeAssistantLinks,
+  safeAssistantModules, suggestedQuestions, bindAssistantTrigger,
 } from "./assistantView";
 import { translations } from "../i18n";
 import React, { act, useRef, useState } from "react";
@@ -21,14 +22,30 @@ test("contextual questions adapt to the current screen", () => {
     "assistantQuestionPlayer", "assistantQuestionScreen", "assistantQuestionPermissions",
   ]);
   expect(suggestedQuestions("/calendario", t)).toEqual([
-    "assistantQuestionScreen", "assistantQuestionPermissions",
+    "assistantQuestionCalendar", "assistantQuestionScreen", "assistantQuestionPermissions",
   ]);
+  expect(suggestedQuestions("/estadisticas", t)[0]).toBe("assistantQuestionStats");
 });
 
 test("only internal allowlisted routes can be rendered", () => {
   expect(safeAssistantLinks(["/jugadores", "https://evil.test", "javascript:alert(1)", "/informes"]))
     .toEqual(["/jugadores", "/informes"]);
   expect(SAFE_ASSISTANT_ROUTES.has("/usuarios")).toBe(true);
+  expect(SAFE_ASSISTANT_ROUTES.has("/estadisticas")).toBe(true);
+});
+
+test("module catalog keeps only safe role-filtered application routes", () => {
+  const modules = safeAssistantModules([
+    { id: "players", routes: ["/jugadores", "https://evil.test"] },
+    { id: "stats", routes: ["/estadisticas"] },
+    { id: "unsafe", routes: ["javascript:alert(1)"] },
+  ]);
+  expect(modules).toEqual([
+    { id: "players", routes: ["/jugadores"] },
+    { id: "stats", routes: ["/estadisticas"] },
+  ]);
+  expect(currentAssistantModule("/estadisticas", modules).id).toBe("stats");
+  expect(currentAssistantModule("/usuarios", modules)).toBeNull();
 });
 
 test("guided values normalize closed structured fields", () => {
@@ -79,6 +96,8 @@ test("assistant identity and essential labels are complete in ES and EU", () => 
   expect(translations.eu.assistantTitle).toContain("Cibermedida");
   expect(translations.es.assistantPrivacyWarning).toBeTruthy();
   expect(translations.eu.assistantPrivacyWarning).toBeTruthy();
+  expect(translations.es.assistantModule_stats).toBe("Estadísticas");
+  expect(translations.eu.assistantModule_stats).toBe("Estatistikak");
 });
 
 test("component source keeps accessible and explicit confirmation controls", () => {
@@ -92,6 +111,8 @@ test("component source keeps accessible and explicit confirmation controls", () 
   expect(source).toContain("assistantConfirm");
   expect(source).toContain("triggerRef.current?.focus()");
   expect(source).toContain("h-[100dvh] w-screen");
+  expect(source).toContain("assistantAvailableModules");
+  expect(source).toContain("safeAssistantModules");
   expect(source).toContain("<SheetDescription>{t(\"assistantDescription\")}</SheetDescription>");
   expect(source).not.toContain('aria-describedby=\"assistant-description\"');
   expect(source).not.toContain('id=\"assistant-description\"');

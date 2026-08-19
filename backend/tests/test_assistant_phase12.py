@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 import server
-from assistant_knowledge import contextual_help
+from assistant_knowledge import available_modules, contextual_help
 from assistant_service import (
     ExternalAssistantProvider, Proposal, ProposalStore, answer_help, privacy_gate,
     session_fingerprint,
@@ -71,6 +71,26 @@ def test_local_knowledge_obeys_role_route_and_language():
     assert "no está disponible" in denied["text"]
     assert allowed["links"] == ["/informes"]
     assert "Txostenak" in allowed["text"]
+
+
+def test_integral_knowledge_includes_statistics_and_role_filtered_catalog():
+    coach_modules = {module["id"] for module in available_modules("coach")}
+    family_modules = {module["id"] for module in available_modules("family")}
+    assert "stats" in coach_modules
+    assert "stats" in family_modules
+    assert "portal" in family_modules
+    assert "users" not in family_modules
+    stats = contextual_help("¿Qué puedo hacer?", "coach", "es", "/estadisticas")
+    denied = contextual_help("usuarios", "family", "es", "/usuarios")
+    assert stats["links"] == ["/estadisticas"]
+    assert "temporada" in stats["text"].casefold()
+    assert denied["links"] == []
+
+
+def test_contextual_help_understands_nested_module_routes():
+    result = contextual_help("¿Qué puedo hacer?", "coach", "es", "/partidos/report-test")
+    assert result["module"] == "matches"
+    assert result["links"] == ["/partidos"]
 
 
 def test_assistant_routes_have_closed_rbac_mapping():
