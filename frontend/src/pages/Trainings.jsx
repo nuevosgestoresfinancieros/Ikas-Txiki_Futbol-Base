@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Dumbbell, Plus, Pencil, Trash2, Check, Download, AlertTriangle, FileText, Library, Copy, ClipboardCheck } from "lucide-react";
 import { toast } from "sonner";
@@ -19,6 +19,8 @@ import GoogleMapsLinks from "@/components/GoogleMapsLinks";
 import { historicalExerciseLabel, validateEvaluation } from "./trainingExerciseView";
 
 const ATT_STATES = ["presente", "justificada", "injustificada", "lesion"];
+const unique = (values = []) => [...new Set(values.filter(Boolean).map(String))].sort((a, b) => a.localeCompare(b));
+const Datalist = ({ id, values }) => <datalist id={id}>{unique(values).map((value) => <option key={value} value={value} />)}</datalist>;
 
 const Trainings = () => {
   const canCreate = usePermission("trainings", "create");
@@ -28,6 +30,7 @@ const Trainings = () => {
   const [params, setParams] = useSearchParams();
   const [items, setItems] = useState([]);
   const [teams, setTeams] = useState([]);
+  const [settings, setSettings] = useState({ campos: [] });
   const [players, setPlayers] = useState([]);
   const [dialog, setDialog] = useState(false);
   const [form, setForm] = useState({ asistencia: [] });
@@ -52,8 +55,8 @@ const Trainings = () => {
   };
   useEffect(() => {
     load();
-    Promise.all([api.get("/teams"), api.get("/players")])
-      .then(([tm, p]) => { setTeams(tm.data); setPlayers(p.data); });
+    Promise.all([api.get("/teams"), api.get("/players"), api.get("/catalog-options")])
+      .then(([tm, p, cfg]) => { setTeams(tm.data); setPlayers(p.data); setSettings(cfg.data || {}); });
     if (canReadExercises) {
       Promise.all([api.get("/exercises", { params: { status: "active", page_size: 100 } }), api.get("/training-templates")])
         .then(([ex, tpl]) => { setExercises(ex.data.items || []); setTemplates(tpl.data || []); });
@@ -98,6 +101,7 @@ const Trainings = () => {
   };
 
   const teamOptions = teams.map((tm) => ({ value: tm.id, label: tm.nombre }));
+  const fieldOptions = useMemo(() => unique([...(settings.campos || []), ...teams.map((team) => team.campo), ...items.map((item) => item.campo)]), [settings.campos, teams, items]);
   const pName = (pid) => { const p = players.find(x=>x.id===pid); return p ? `${p.nombre} ${p.apellidos||""}`.trim() : "—"; };
 
   return (
@@ -165,10 +169,11 @@ const Trainings = () => {
         <DialogContent className="max-w-2xl max-h-[92vh] overflow-y-auto">
           <DialogHeader><DialogTitle className="font-heading">{form.id ? t("manageAttendance") : t("trainings")}</DialogTitle>
             <DialogDescription>{t("trainingFormDescription")}</DialogDescription></DialogHeader>
+          <Datalist id="training-fields-list" values={fieldOptions} />
           <div className="space-y-4 pt-2">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <SelectField label={t("team")} value={form.equipo_id} onChange={onTeamChange} options={teamOptions} testid="training-equipo" />
-              <Field label={t("field")} value={form.campo} onChange={set("campo")} testid="training-campo" />
+              <Field label={t("field")} value={form.campo} onChange={set("campo")} testid="training-campo" list="training-fields-list" />
               <div className="sm:col-span-2"><GoogleMapsLinks preview sources={form} /></div>
               <Field label={t("date")} type="date" value={form.fecha} onChange={set("fecha")} testid="training-fecha" />
               <Field label={t("time")} type="time" value={form.hora} onChange={set("hora")} testid="training-hora" />

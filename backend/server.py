@@ -5211,6 +5211,7 @@ async def _statistics_data(filters: dict) -> tuple[dict, dict]:
         raise HTTPException(status_code=403, detail="Las estadísticas internas están restringidas al personal autorizado")
     teams = await list_docs("teams")
     players = await list_docs("players")
+    settings = await db.settings.find_one({"id": SETTINGS_ID}, {"_id": 0, "temporadas": 1}) or {}
     allowed_team_ids = {str(team.get("id")) for team in teams if team.get("id")}
     allowed_player_ids = {str(player.get("id")) for player in players if player.get("id")}
     if filters.get("equipo_id") and filters["equipo_id"] not in allowed_team_ids:
@@ -5218,7 +5219,10 @@ async def _statistics_data(filters: dict) -> tuple[dict, dict]:
     if filters.get("player_id") and filters["player_id"] not in allowed_player_ids:
         raise HTTPException(status_code=403, detail="El jugador solicitado no pertenece a tu ámbito")
     available_categories = {str(team.get("categoria")) for team in teams if team.get("categoria")}
-    available_seasons = {str(team.get("temporada")) for team in teams if team.get("temporada")}
+    available_seasons = {
+        *[str(season) for season in settings.get("temporadas", []) if season],
+        *[str(team.get("temporada")) for team in teams if team.get("temporada")],
+    }
     if filters.get("categoria") and actor.get("role") != "admin" and filters["categoria"] not in available_categories:
         raise HTTPException(status_code=403, detail="La categoría solicitada no pertenece a tu ámbito")
     if filters.get("temporada") and actor.get("role") != "admin" and available_seasons and filters["temporada"] not in available_seasons:
@@ -5839,6 +5843,20 @@ async def update_settings(settings: Settings):
     return await get_settings()
 
 
+@api_router.get("/catalog-options")
+async def get_catalog_options():
+    """Catálogos operativos reutilizables sin exponer toda la configuración admin."""
+    doc = await db.settings.find_one(
+        {"id": SETTINGS_ID},
+        {"_id": 0, "temporadas": 1, "campos": 1, "entrenadores": 1},
+    ) or {}
+    return {
+        "temporadas": sorted({str(value) for value in doc.get("temporadas", []) if value}),
+        "campos": sorted({str(value) for value in doc.get("campos", []) if value}),
+        "entrenadores": sorted({str(value) for value in doc.get("entrenadores", []) if value}),
+    }
+
+
 async def _load_modality_catalog() -> list[ModalityDefinition]:
     settings = await db.settings.find_one({"id": SETTINGS_ID}, {"_id": 0, "modalities": 1}) or {}
     return catalog_from_settings(settings)
@@ -6022,6 +6040,7 @@ async def report_context() -> dict:
             "id", "player_id", "temporada", "partidos_convocado", "partidos_jugados",
             "minutos", "goles", "asistencias", "amarillas", "rojas", "valoracion",
         }),
+        "settings": settings,
         "modalities": catalog_from_settings(settings),
     }
 
@@ -6042,7 +6061,10 @@ def report_filter_options(context: dict) -> dict:
     states.update(normalize_status(item.get("estado")) for callup in context.get("callups", [])
                   for item in callup.get("convocados", []) if item.get("estado"))
     return {
-        "seasons": sorted({team.get("temporada") for team in teams if team.get("temporada")}),
+        "seasons": sorted({
+            *[season for season in (context.get("settings") or {}).get("temporadas", []) if season],
+            *[team.get("temporada") for team in teams if team.get("temporada")],
+        }),
         "categories": sorted({value for value in [
             *(team.get("categoria") for team in teams), *(player.get("categoria") for player in players),
         ] if value}),
@@ -6280,7 +6302,7 @@ async def dashboard(
     )[:5]
     attendance = weekly_attendance(trainings, selected_player_ids or None)
     attendance_detail = attendance_summary(trainings, selected_player_ids or None)
-    attendance_settings = await db.settings.find_one({"id": SETTINGS_ID}, {"_id": 0, "attendance_alert_threshold": 1}) or {}
+    attendance_settings = await db.settings.find_one({"id": SETTINGS_ID}, {"_id": 0, "attendance_alert_threshold": 1, "temporadas": 1}) or {}
     attendance_alerts = repeated_absence_alerts(
         trainings, attendance_settings.get("attendance_alert_threshold", 3), selected_player_ids or None,
     )
@@ -6332,7 +6354,10 @@ async def dashboard(
         "scope": {"team_ids": sorted(selected_team_ids), "player_ids": sorted(selected_player_ids)},
         "filters": {"temporada": temporada, "categoria": categoria, "equipo_id": equipo_id},
         "filter_options": {
-            "temporadas": sorted({team.get("temporada") for team in all_teams if team.get("temporada")}),
+            "temporadas": sorted({
+                *[season for season in attendance_settings.get("temporadas", []) if season],
+                *[team.get("temporada") for team in all_teams if team.get("temporada")],
+            }),
             "categorias": sorted({team.get("categoria") for team in all_teams if team.get("categoria")}),
             "equipos": [
                 {"id": team.get("id"), "nombre": team.get("nombre"), "categoria": team.get("categoria"), "temporada": team.get("temporada")}

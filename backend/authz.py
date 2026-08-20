@@ -117,7 +117,7 @@ PATH_RESOURCES = {
     "attendance": "attendance",
     "inscriptions": "inscriptions", "communications": "communications",
     "reports": "reports", "stats": "stats", "search": "search",
-    "equipment": "equipment", "settings": "settings", "dashboard": "dashboard",
+    "equipment": "equipment", "settings": "settings", "catalog-options": "dashboard", "dashboard": "dashboard",
     "users": "users", "categories": "teams", "compute-category": "players", "calendar": "calendar", "portal": "portal", "notifications": "notifications", "modalities": "modalities",
     "inscription-imports": "data", "assistant": "assistant",
     "exercises": "exercises", "training-templates": "exercises", "statistics": "stats",

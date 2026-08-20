@@ -19,6 +19,8 @@ const TYPE_STYLES = {
 };
 
 const EMPTY_FORM = { titulo: "", tipo: "meeting", fecha: "", hora: "", fecha_fin: "", hora_fin: "", equipo_id: "global", lugar: "", descripcion: "" };
+const unique = (values = []) => [...new Set(values.filter(Boolean).map(String))].sort((a, b) => a.localeCompare(b));
+const Datalist = ({ id, values }) => <datalist id={id}>{unique(values).map((value) => <option key={value} value={value} />)}</datalist>;
 
 const CalendarEventButton = ({ event, onOpen }) => (
   <button type="button" onClick={() => onOpen(event)}
@@ -37,6 +39,7 @@ export default function Calendar() {
   const [anchor, setAnchor] = useState(() => new Date());
   const [events, setEvents] = useState([]);
   const [options, setOptions] = useState({ teams: [], categories: [], seasons: [], types: [] });
+  const [settings, setSettings] = useState({ temporadas: [], campos: [] });
   const [filters, setFilters] = useState({ equipo_id: "all", categoria: "all", temporada: "all", tipo: "all" });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -55,8 +58,12 @@ export default function Calendar() {
   const load = useCallback(async () => {
     setLoading(true); setError(false);
     try {
-      const response = await api.get("/calendar/events", { params: requestParams() });
+      const [response, settingsResponse] = await Promise.all([
+        api.get("/calendar/events", { params: requestParams() }),
+        api.get("/catalog-options"),
+      ]);
       setEvents(response.data.events || []); setOptions(response.data.filter_options || {});
+      setSettings(settingsResponse.data || {});
     } catch { setError(true); }
     finally { setLoading(false); }
   }, [requestParams]);
@@ -98,6 +105,8 @@ export default function Calendar() {
   const heading = new Intl.DateTimeFormat(locale, view === "month" ? { month: "long", year: "numeric" } : { dateStyle: "medium" }).format(anchor);
   const typeOptions = ["match", "training", "meeting", "club_event"].map((value) => ({ value, label: t(`calendarType_${value}`) }));
   const filterOptions = (values) => [{ value: "all", label: t("all") }, ...values];
+  const seasonOptions = unique([...(settings.temporadas || []), ...(options.seasons || [])]);
+  const locationOptions = unique([...(settings.campos || []), ...events.flatMap((event) => [event.lugar, event.campo])]);
 
   return (
     <div data-testid="calendar-page">
@@ -105,7 +114,7 @@ export default function Calendar() {
 
       <section className="surface-card mb-4 space-y-4 p-4" aria-label={t("calendarFilters")}>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <SelectField label={t("season")} value={filters.temporada} onChange={(value) => setFilters((current) => ({ ...current, temporada: value }))} options={filterOptions((options.seasons || []).map((value) => ({ value, label: value })))} testid="calendar-season" />
+          <SelectField label={t("season")} value={filters.temporada} onChange={(value) => setFilters((current) => ({ ...current, temporada: value }))} options={filterOptions(seasonOptions.map((value) => ({ value, label: value })))} testid="calendar-season" />
           <SelectField label={t("category")} value={filters.categoria} onChange={(value) => setFilters((current) => ({ ...current, categoria: value }))} options={filterOptions((options.categories || []).map((value) => ({ value, label: value })))} testid="calendar-category" />
           <SelectField label={t("team")} value={filters.equipo_id} onChange={(value) => setFilters((current) => ({ ...current, equipo_id: value }))} options={filterOptions((options.teams || []).map((team) => ({ value: team.id, label: team.name })))} testid="calendar-team" />
           <SelectField label={t("eventType")} value={filters.tipo} onChange={(value) => setFilters((current) => ({ ...current, tipo: value }))} options={filterOptions(typeOptions)} testid="calendar-type" />
@@ -140,6 +149,7 @@ export default function Calendar() {
       </Dialog>
 
       <Dialog open={editorOpen} onOpenChange={setEditorOpen}><DialogContent className="max-h-[92vh] max-w-2xl overflow-y-auto"><DialogHeader><DialogTitle>{form.id ? t("editCalendarEvent") : t("newCalendarEvent")}</DialogTitle><DialogDescription>{t("calendarEditorDescription")}</DialogDescription></DialogHeader>
+        <Datalist id="calendar-locations-list" values={locationOptions} />
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2"><div className="sm:col-span-2"><Field label={t("title")} value={form.titulo} onChange={(value) => setForm((current) => ({ ...current, titulo: value }))} required /></div>
           <SelectField label={t("eventType")} value={form.tipo} onChange={(value) => setForm((current) => ({ ...current, tipo: value }))} options={typeOptions.filter((item) => ["meeting", "club_event"].includes(item.value))} />
           <SelectField label={t("team")} value={form.equipo_id} onChange={(value) => setForm((current) => ({ ...current, equipo_id: value }))} options={[{ value: "global", label: t("wholeClub") }, ...(options.teams || []).map((team) => ({ value: team.id, label: team.name }))]} />
@@ -147,7 +157,7 @@ export default function Calendar() {
           <Field label={t("time")} type="time" value={form.hora} onChange={(value) => setForm((current) => ({ ...current, hora: value }))} />
           <Field label={t("endDate")} type="date" value={form.fecha_fin} onChange={(value) => setForm((current) => ({ ...current, fecha_fin: value }))} />
           <Field label={t("endTime")} type="time" value={form.hora_fin} onChange={(value) => setForm((current) => ({ ...current, hora_fin: value }))} />
-          <div className="sm:col-span-2"><Field label={t("location")} value={form.lugar} onChange={(value) => setForm((current) => ({ ...current, lugar: value }))} /></div>
+          <div className="sm:col-span-2"><Field label={t("location")} value={form.lugar} onChange={(value) => setForm((current) => ({ ...current, lugar: value }))} list="calendar-locations-list" /></div>
           <div className="sm:col-span-2"><GoogleMapsLinks preview sources={form} /></div>
           <div className="sm:col-span-2"><Area label={t("description")} value={form.descripcion} onChange={(value) => setForm((current) => ({ ...current, descripcion: value }))} /></div>
         </div><DialogFooter><Button variant="outline" onClick={() => setEditorOpen(false)}>{t("cancel")}</Button><Button onClick={save}>{t("save")}</Button></DialogFooter></DialogContent></Dialog>
