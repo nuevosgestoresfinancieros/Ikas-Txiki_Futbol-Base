@@ -1427,12 +1427,17 @@ class Team(BaseModel):
 
 @api_router.post("/teams")
 async def create_team(team: Team):
+    if normalized_key(team.nombre) == "no aplica":
+        raise HTTPException(status_code=422, detail="NO APLICA no es un equipo gestionable")
     return await insert_doc("teams", team.model_dump())
 
 
 @api_router.get("/teams")
 async def get_teams():
-    teams = await list_docs("teams")
+    teams = [
+        team for team in await list_docs("teams")
+        if normalized_key(team.get("nombre")) != "no aplica"
+    ]
     players = await list_docs("players")
     for t in teams:
         t["num_jugadores"] = len([p for p in players if p.get("equipo_id") == t["id"]])
@@ -1449,6 +1454,8 @@ async def get_team(team_id: str):
 
 @api_router.put("/teams/{team_id}")
 async def edit_team(team_id: str, team: Team):
+    if normalized_key(team.nombre) == "no aplica":
+        raise HTTPException(status_code=422, detail="NO APLICA no es un equipo gestionable")
     return await update_doc("teams", team_id, team.model_dump())
 
 

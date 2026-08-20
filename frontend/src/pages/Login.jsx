@@ -8,6 +8,7 @@ import api from "@/api";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import ClubLogo from "@/components/ClubLogo";
+import InstallAppCard from "@/components/InstallAppCard";
 
 const featureIcons = [Users, CalendarDays, FileCheck2];
 const featureKeys = ["loginFeaturePlayers", "loginFeatureSchedule", "loginFeatureAdmin"];
@@ -230,6 +231,9 @@ const Login = ({ onLogin }) => {
             <ShieldCheck className="h-4 w-4 text-primary" aria-hidden="true" />
             <span>{t("privacyBody")}</span>
           </div>
+        </div>
+        <div className="mt-5 w-full max-w-md">
+          <InstallAppCard compact />
         </div>
       </section>
     </main>
