@@ -17,6 +17,7 @@ import math
 import re
 import shutil
 import time
+import zipfile
 from collections import defaultdict, deque
 from pathlib import Path
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -62,7 +63,7 @@ from inscription_import_service import (
     SEASON as IMPORT_SEASON, SAFE_PLAYER_FIELDS, ImportValidationError,
     analyze_rows, decode_plan, encode_plan, encrypt_iban, family_key,
     file_sha256, identity_key, masked_iban, merge_nonempty, normalize_key,
-    parse_excel,
+    parse_excel, _fernet,
 )
 from import_staging_service import (
     ALLOWED_RECORD_FIELDS, audit_event, draft_summary, effective_records, expiry, field_is_valid,
@@ -6652,6 +6653,16 @@ def _display_value(value: Any, fallback: str = "") -> str:
     return text if text else fallback
 
 
+def _decrypt_iban(value: Any) -> str:
+    token = _display_value(value)
+    if not token:
+        return ""
+    try:
+        return _fernet(JWT_SECRET).decrypt(token.encode("ascii")).decode("ascii")
+    except Exception:
+        return ""
+
+
 def _status_label(value: Any) -> str:
     text = _display_value(value).lower()
     labels = {
@@ -6740,7 +6751,7 @@ VISUAL_SHEET_META = {
     "Jugadores por equipo": "Listado de plantillas para entregar o revisar con coordinación deportiva.",
     "Contactos familias": "Datos de contacto agrupados para administración y comunicación.",
     "Equipaciones": "Control de tallas, segunda equipación e historial de material.",
-    "Cuentas bancarias": "Referencias bancarias seguras: solo IBAN enmascarado, sin cuenta completa.",
+    "Cuentas bancarias": "Referencias bancarias para administración: IBAN completo y versión enmascarada.",
     "Historial deportivo": "Trayectoria por temporadas, federación, equipos y entrenamientos históricos.",
     "Autorizaciones resumen": "Estado de permisos por jugador para revisión administrativa.",
 }
@@ -6961,9 +6972,11 @@ def _visual_export_rows(data: dict[str, list[dict]]) -> dict[str, tuple[list[dic
             "Email 2": _display_value(player.get("progenitor2_email")),
         })
         for payment in player_bank_rows:
+            full_iban = _decrypt_iban(payment.get("iban_encrypted")) or _display_value(payment.get("iban"))
             bank_rows.append({
                 "Jugador": name,
                 "Titular cuenta": _display_value(payment.get("titular_cuenta")),
+                "IBAN completo": full_iban,
                 "IBAN enmascarado": f"****{_display_value(payment.get('iban_last4'))}" if _display_value(payment.get("iban_last4")) else "",
                 "IBAN validado": _display_value(payment.get("iban_validado")),
                 "Forma pago": _display_value(payment.get("forma_pago")),
@@ -7014,7 +7027,7 @@ def _visual_export_rows(data: dict[str, list[dict]]) -> dict[str, tuple[list[dic
         "Jugadores por equipo": (roster_rows, ["Equipo", "Temporada equipo", "Categoría equipo", "Jugador", "Fecha nacimiento", "Categoría jugador", "Modalidad", "Posición", "Centro escolar", "Estado"], "2F75B5"),
         "Contactos familias": (contact_rows, ["Jugador", "Familia", "Domicilio", "Progenitor 1", "Teléfono 1", "Email 1", "Progenitor 2", "Teléfono 2", "Email 2"], "548235"),
         "Equipaciones": (equipment_rows, ["Jugador", "Categoría", "Talla camiseta", "Talla medias", "Nombre camiseta 2ª", "Dorsal 2ª", "Talla camiseta 2ª", "Talla medias 2ª", "Historial equipación", "Equipación entregada"], "8064A2"),
-        "Cuentas bancarias": (bank_rows, ["Jugador", "Titular cuenta", "IBAN enmascarado", "IBAN validado", "Forma pago", "Concepto", "Estado", "Referencia histórica", "Deuda confirmada", "Referencia cuotas"], "A64D79"),
+        "Cuentas bancarias": (bank_rows, ["Jugador", "Titular cuenta", "IBAN completo", "IBAN enmascarado", "IBAN validado", "Forma pago", "Concepto", "Estado", "Referencia histórica", "Deuda confirmada", "Referencia cuotas"], "A64D79"),
         "Historial deportivo": (sports_rows, ["Jugador", "Equipo actual", "Equipo histórico referencia", "Historial equipos", "Historial federación", "Programa 2025-2026", "Categoría deportiva", "Posición", "Entrenamientos históricos"], "5B9BD5"),
         "Autorizaciones resumen": (authorization_rows, ["Jugador", "General", "Médica", "Imagen", "Protección datos", "Recogida", "Desplazamientos", "Permisos históricos"], "ED7D31"),
     }
@@ -7080,6 +7093,39 @@ async def export_excel():
     return StreamingResponse(
         buffer,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+def _safe_csv_name(value: str) -> str:
+    name = re.sub(r"[^A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ_-]+", "_", value).strip("_")
+    return name or "datos"
+
+
+@api_router.get("/export-csv")
+async def export_csv():
+    export_data = await _excel_export_data()
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for sheet_name, payload in _visual_export_rows(export_data).items():
+            if sheet_name == "Inicio":
+                metrics, warnings = payload
+                rows = [{"Sección": "Resumen", **row} for row in metrics] + [
+                    {"Sección": "Avisos", "Métrica": row["Aviso"], "Valor": row["Cantidad"]} for row in warnings
+                ]
+                df = pd.DataFrame(rows)
+            else:
+                rows, columns, _tab_color = payload
+                df = pd.DataFrame(rows, columns=columns)
+            archive.writestr(f"01_operativo/{_safe_csv_name(sheet_name)}.csv", df.to_csv(index=False))
+        for coll in EXPORT_COLLECTIONS:
+            rows = [_flatten_for_excel(d) for d in export_data.get(coll, [])]
+            archive.writestr(f"02_backup_tecnico/{_safe_csv_name(coll)}.csv", pd.DataFrame(rows).to_csv(index=False))
+    buffer.seek(0)
+    fname = f"ikastxiki_csv_{date.today().isoformat()}.zip"
+    return StreamingResponse(
+        buffer,
+        media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
 
