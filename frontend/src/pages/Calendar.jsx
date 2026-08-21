@@ -70,6 +70,16 @@ export default function Calendar() {
 
   useEffect(() => { load(); }, [load]);
 
+  useEffect(() => {
+    const smallScreen = window.matchMedia("(max-width: 640px)");
+    const applyMobileView = () => {
+      if (smallScreen.matches) setView((current) => current === "agenda" ? current : "agenda");
+    };
+    applyMobileView();
+    smallScreen.addEventListener?.("change", applyMobileView);
+    return () => smallScreen.removeEventListener?.("change", applyMobileView);
+  }, []);
+
   const move = (direction) => setAnchor((current) => {
     const next = new Date(current);
     if (view === "month") next.setMonth(next.getMonth() + direction);

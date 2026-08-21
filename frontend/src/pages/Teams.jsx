@@ -128,17 +128,17 @@ const Teams = () => {
             <EmptyState icon={Users} message="Este equipo todavía no tiene jugadores asignados" />
           ) : (
             <div className="overflow-hidden rounded-xl border border-slate-200">
-              <div className="grid grid-cols-[minmax(0,2fr)_minmax(120px,1fr)_90px_minmax(110px,1fr)] gap-3 bg-slate-50 px-4 py-3 text-xs font-bold uppercase tracking-wider text-slate-500">
+              <div className="hidden grid-cols-[minmax(0,2fr)_minmax(120px,1fr)_90px_minmax(110px,1fr)] gap-3 bg-slate-50 px-4 py-3 text-xs font-bold uppercase tracking-wider text-slate-500 sm:grid">
                 <span>Jugador</span><span>Posición</span><span>Dorsal</span><span>Estado</span>
               </div>
               {selectedTeam.jugadores
                 .slice().sort((a, b) => `${a.nombre} ${a.apellidos || ""}`.localeCompare(`${b.nombre} ${b.apellidos || ""}`))
                 .map((player) => (
-                  <div key={player.id} data-testid={`team-player-${player.id}`} className="grid grid-cols-[minmax(0,2fr)_minmax(120px,1fr)_90px_minmax(110px,1fr)] items-center gap-3 border-t border-slate-100 px-4 py-3 text-sm">
+                  <div key={player.id} data-testid={`team-player-${player.id}`} className="grid grid-cols-2 items-center gap-3 border-t border-slate-100 px-4 py-3 text-sm sm:grid-cols-[minmax(0,2fr)_minmax(120px,1fr)_90px_minmax(110px,1fr)]">
                     <div className="flex min-w-0 items-center gap-3"><span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary"><UserRound className="h-4 w-4" /></span><div className="min-w-0"><p className="truncate font-semibold text-slate-800">{player.nombre} {player.apellidos || ""}</p><p className="truncate text-xs text-slate-400">{player.categoria || selectedTeam.categoria || "—"}</p></div></div>
-                    <span className="text-slate-600">{player.posicion || "—"}</span>
-                    <span className="inline-flex items-center gap-1 text-slate-600"><Hash className="h-3.5 w-3.5" />{player.dorsal || "—"}</span>
-                    <StatusBadge status={player.estado} />
+                    <span className="text-right text-slate-600 sm:text-left"><span className="text-xs font-bold uppercase text-slate-400 sm:hidden">Posición · </span>{player.posicion || "—"}</span>
+                    <span className="inline-flex items-center gap-1 text-slate-600"><Hash className="h-3.5 w-3.5" /><span className="text-xs font-bold uppercase text-slate-400 sm:hidden">Dorsal </span>{player.dorsal || "—"}</span>
+                    <div className="flex justify-end sm:block"><StatusBadge status={player.estado} /></div>
                   </div>
                 ))}
             </div>

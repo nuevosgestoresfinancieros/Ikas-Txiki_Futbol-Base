@@ -69,20 +69,24 @@ Aplicación web integral para la **gestión de una escuela de fútbol base juven
 ## 📁 Estructura del proyecto
 
 ```
-/app
+.
 ├── backend/
-│   ├── server.py          # API FastAPI (todas las rutas con prefijo /api)
+│   ├── server.py             # API FastAPI, rutas con prefijo /api
 │   ├── requirements.txt
-│   └── .env               # MONGO_URL, DB_NAME, CORS_ORIGINS
+│   ├── .env.example          # Plantilla de variables, sin secretos reales
+│   └── templates/            # Plantillas funcionales de importación
 ├── frontend/
 │   ├── src/
-│   │   ├── App.js         # Rutas + SplashScreen
-│   │   ├── api.js         # Cliente axios (usa REACT_APP_BACKEND_URL)
-│   │   ├── i18n.js        # Traducciones ES/EU
-│   │   ├── components/    # Layout, GlobalSearch, SplashScreen, form, shared, ui/
-│   │   └── pages/         # Dashboard, Players, Teams, Matches, ... Settings
+│   │   ├── App.js
+│   │   ├── api.js            # Cliente axios: usa REACT_APP_BACKEND_URL o /api
+│   │   ├── i18n.js
+│   │   ├── components/
+│   │   └── pages/
+│   ├── public/               # PWA, iconos y manifest
 │   ├── package.json
-│   └── .env               # REACT_APP_BACKEND_URL
+│   └── .env.example          # Plantilla de configuración frontend
+├── deploy.sh                 # Despliegue actual en VPS
+├── .gitignore
 └── README.md
 ```
 
@@ -90,54 +94,76 @@ Aplicación web integral para la **gestión de una escuela de fútbol base juven
 
 ## 🚀 Puesta en marcha
 
-Los servicios se gestionan con **supervisor** y se reinician solos al detectar cambios.
-
-```bash
-# Reiniciar servicios tras cambiar .env o instalar dependencias
-sudo supervisorctl restart backend
-sudo supervisorctl restart frontend
-
-# Ver estado / logs
-sudo supervisorctl status
-tail -n 100 /var/log/supervisor/backend.*.log
-tail -n 100 /var/log/supervisor/frontend.*.log
-```
-
-**Instalar dependencias** (si hace falta):
+### Desarrollo local
 
 ```bash
 # Backend
-cd /app/backend && pip install -r requirements.txt
+cd backend
+cp .env.example .env
+pip install -r requirements.txt
+uvicorn server:app --host 0.0.0.0 --port 8001
 
-# Frontend (SIEMPRE con yarn, nunca npm)
-cd /app/frontend && yarn install
+# Frontend
+cd ../frontend
+cp .env.example .env
+yarn install
+yarn start
 ```
 
 - Frontend interno: `http://localhost:3000`
-- Backend interno: `http://0.0.0.0:8001` (las rutas externas se enrutan por `/api`)
+- Backend interno: `http://localhost:8001`
+
+### Producción actual en VPS
+
+El despliegue actual se realiza con `deploy.sh` en el servidor. El script:
+
+1. actualiza `main` desde GitHub;
+2. instala dependencias del frontend;
+3. construye el frontend;
+4. reinicia el backend;
+5. recarga Apache.
+
+```bash
+cd /var/www/ikastxiki
+sudo bash deploy.sh
+```
+
+No migres a otro proveedor sin planificar antes variables, dominio, CORS, MongoDB y almacenamiento de archivos subidos.
 
 ---
 
 ## 🔐 Variables de entorno
 
-**No modifiques las claves existentes.** Se inyectan desde el entorno.
+Nunca subas archivos `.env` reales a GitHub. Usa `.env.example` como plantilla y configura los valores reales solo en tu equipo, VPS o proveedor de despliegue.
 
 `backend/.env`
 ```
-MONGO_URL=...        # Conexión a MongoDB (no cambiar)
-DB_NAME=...          # Nombre de la base de datos (no cambiar)
-CORS_ORIGINS=...     # Orígenes permitidos, separados por comas
-JWT_SECRET=...       # Clave aleatoria de al menos 32 caracteres
-ADMIN_USER=...       # Usuario administrador inicial
-ADMIN_PASSWORD=...   # Contraseña segura; nunca debe ser "admin"
+MONGO_URL=...                 # Conexión a MongoDB
+DB_NAME=...                   # Nombre de la base de datos
+CORS_ORIGINS=...              # Orígenes permitidos, separados por comas
+JWT_SECRET=...                # Clave aleatoria de al menos 32 caracteres
+ADMIN_USER=...                # Usuario administrador inicial
+ADMIN_PASSWORD=...            # Contraseña segura; nunca debe ser "admin"
+SMTP_HOST=...                 # Opcional: servidor SMTP
+SMTP_FROM=...                 # Opcional: remitente de correo
+SMTP_USER=...                 # Opcional
+SMTP_PASSWORD=...             # Opcional
 ```
 
 `frontend/.env`
 ```
-REACT_APP_BACKEND_URL=https://<tu-app>.preview.emergentagent.com   # URL pública del backend (no cambiar)
+REACT_APP_BACKEND_URL=http://localhost:8001
 ```
 
-> El frontend siempre llama a la API usando `REACT_APP_BACKEND_URL` + `/api`. El backend siempre usa `MONGO_URL`.
+En producción con Apache sirviendo frontend y API bajo el mismo dominio, `REACT_APP_BACKEND_URL` puede quedar vacío para usar `/api`.
+
+### Seguridad antes de publicar en GitHub
+
+- Mantén el repositorio **privado**.
+- No subas `.env`, Excel privados, backups, bases de datos, exportaciones ni archivos de `uploads`.
+- Si alguna clave real estuvo hardcodeada o subida alguna vez, rótala antes de considerar el repositorio seguro.
+- Revisa `git status` antes de cada commit.
+- La plantilla versionada `backend/templates/plantilla_inscripciones_2026-2027.xlsx` es funcional; no contiene una base de datos real.
 
 ---
 
@@ -174,7 +200,7 @@ Todas las rutas llevan el prefijo **`/api`**.
 | Comunicación | `GET/POST /api/communications`, `PUT/DELETE /api/communications/{id}` |
 | Configuración | `GET/PUT /api/settings`, `GET /api/categories` |
 | Buscador | `GET /api/search?q=...` |
-| Datos | `POST /api/seed-demo`, `POST /api/clear-all`, `GET /api/export-excel`, `POST /api/import-excel` |
+| Datos | `POST /api/seed-demo`, `POST /api/clear-all`, `GET /api/export-excel`, `GET /api/export-csv`, `POST /api/import-excel` |
 
 **Ejemplo de prueba con cURL:**
 ```bash
