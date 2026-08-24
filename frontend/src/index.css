@@ -52,7 +52,7 @@
 
     html {
         min-width: 320px;
-        overflow-x: clip;
+        overflow-x: hidden;
         background: #f5f8fc;
         scroll-behavior: smooth;
     }
@@ -61,7 +61,7 @@
         min-height: 100vh;
         min-height: 100dvh;
         margin: 0;
-        overflow-x: clip;
+        overflow-x: hidden;
         @apply bg-background text-foreground;
         background:
             radial-gradient(circle at 100% 0%, rgba(147, 200, 238, 0.2), transparent 34rem),
@@ -91,6 +91,25 @@
     ::selection {
         color: #ffffff;
         background: var(--brand-corporate);
+    }
+}
+
+@media (max-width: 640px) {
+    body {
+        background-attachment: scroll;
+    }
+
+    .app-authenticated main {
+        min-width: 0;
+    }
+
+    .app-authenticated [role="dialog"] {
+        max-height: calc(100dvh - 1rem);
+        overflow-y: auto;
+    }
+
+    .app-authenticated main table {
+        min-width: max-content;
     }
 }
 

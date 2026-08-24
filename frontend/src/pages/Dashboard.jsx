@@ -11,6 +11,7 @@ import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/shared";
 import NextActivity from "@/components/dashboard/NextActivity";
+import InstallAppCard from "@/components/InstallAppCard";
 
 const metricStyles = {
   teal: "bg-[#EAF6FD] text-[#1B5C8F] border-[#CFE9FA]",
@@ -169,6 +170,10 @@ const Dashboard = () => {
           </label>
         </section>
       )}
+
+      <div className="mb-6">
+        <InstallAppCard />
+      </div>
 
       <div className="mb-6 grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(18rem,1fr)]">
         <NextActivity activity={data.siguiente_actividad} onOpen={navigate} />

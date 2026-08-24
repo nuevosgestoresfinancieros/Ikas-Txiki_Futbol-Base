@@ -180,8 +180,47 @@ const Equipment = () => {
         <span className="text-xs text-slate-400 ml-auto">{filtered.length} {t("equipmentPlayerCount")}</span>
       </div>
 
+      {/* Vista móvil */}
+      <div className="space-y-3 md:hidden">
+        {filtered.length === 0 ? (
+          <div className="surface-card px-4 py-10 text-center text-sm text-slate-400">{t("equipmentNoResults")}</div>
+        ) : filtered.map((p) => (
+          <article key={`mobile-${p.id}`} className="surface-card p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="truncate font-heading text-base font-bold text-slate-900">{p.nombre} {p.apellidos}</h2>
+                <p className="mt-1 text-xs text-slate-500">{[p.equipo_nombre, p.categoria].filter(Boolean).join(" · ") || "—"}</p>
+              </div>
+              <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-bold ${p.equipacion_entregada ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>
+                {p.equipacion_entregada ? t("delivered") : t("pendingDelivery")}
+              </span>
+            </div>
+            <dl className="mt-4 grid grid-cols-2 gap-2 text-sm">
+              <div className="rounded-xl bg-slate-50 p-3"><dt className="text-xs font-bold uppercase text-slate-400">{t("equipmentBib")}</dt><dd className="mt-1 font-semibold text-slate-800">{p.dorsal || "—"}</dd></div>
+              <div className="rounded-xl bg-slate-50 p-3"><dt className="text-xs font-bold uppercase text-slate-400">{t("equipmentShirt")}</dt><dd className="mt-1 font-semibold text-slate-800">{p.talla_camiseta || "—"}</dd></div>
+              <div className="rounded-xl bg-slate-50 p-3"><dt className="text-xs font-bold uppercase text-slate-400">{t("equipmentShorts")}</dt><dd className="mt-1 font-semibold text-slate-800">{p.talla_pantalon || "—"}</dd></div>
+              <div className="rounded-xl bg-slate-50 p-3"><dt className="text-xs font-bold uppercase text-slate-400">{t("equipmentTracksuit")}</dt><dd className="mt-1 font-semibold text-slate-800">{p.talla_chandal || "—"}</dd></div>
+              <div className="rounded-xl bg-slate-50 p-3"><dt className="text-xs font-bold uppercase text-slate-400">{t("equipmentSocks")}</dt><dd className="mt-1 font-semibold text-slate-800">{p.talla_medias || "—"}</dd></div>
+              <div className="rounded-xl bg-slate-50 p-3"><dt className="text-xs font-bold uppercase text-slate-400">{t("equipmentShoes")}</dt><dd className="mt-1 font-semibold text-slate-800">{p.talla_calzado || "—"}</dd></div>
+            </dl>
+            {(p.segunda_equipacion?.shirt_name || p.segunda_equipacion?.number || p.segunda_equipacion?.shirt_size || p.segunda_equipacion?.socks_size) && (
+              <div className="mt-3 rounded-xl border border-sky-100 bg-sky-50/70 p-3 text-sm">
+                <p className="mb-2 text-xs font-bold uppercase text-sky-700">Segunda equipación</p>
+                <div className="grid grid-cols-2 gap-2 text-slate-700">
+                  <span>Nombre: <strong>{p.segunda_equipacion?.shirt_name || "—"}</strong></span>
+                  <span>Dorsal: <strong>{p.segunda_equipacion?.number || "—"}</strong></span>
+                  <span>Camiseta: <strong>{p.segunda_equipacion?.shirt_size || "—"}</strong></span>
+                  <span>Medias: <strong>{p.segunda_equipacion?.socks_size || "—"}</strong></span>
+                </div>
+              </div>
+            )}
+            {p.observaciones_material && <p className="mt-3 rounded-xl bg-slate-50 p-3 text-xs text-slate-500">{p.observaciones_material}</p>}
+          </article>
+        ))}
+      </div>
+
       {/* Tabla */}
-      <div className="surface-card overflow-hidden">
+      <div className="surface-card hidden overflow-hidden md:block">
         <div className="overflow-x-auto">
           <table className="w-full text-sm min-w-[1250px]">
             <thead className="bg-slate-50 text-left text-xs font-bold uppercase tracking-wider text-slate-500 sticky top-0">

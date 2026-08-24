@@ -117,13 +117,13 @@ PATH_RESOURCES = {
     "attendance": "attendance",
     "inscriptions": "inscriptions", "communications": "communications",
     "reports": "reports", "stats": "stats", "search": "search",
-    "equipment": "equipment", "settings": "settings", "dashboard": "dashboard",
+    "equipment": "equipment", "settings": "settings", "catalog-options": "dashboard", "dashboard": "dashboard",
     "users": "users", "categories": "teams", "compute-category": "players", "calendar": "calendar", "portal": "portal", "notifications": "notifications", "modalities": "modalities",
     "inscription-imports": "data", "assistant": "assistant",
     "exercises": "exercises", "training-templates": "exercises", "statistics": "stats",
     "training-evaluations": "training-evaluations",
     "match-reports": "match-reports",
-    "export-excel": "data", "import-excel": "data", "clear-all": "data",
+    "export-excel": "data", "export-csv": "data", "import-excel": "data", "clear-all": "data",
     "seed-demo": "data",
 }
 
@@ -204,7 +204,7 @@ def route_permission(request: Request) -> tuple[str, str]:
         return "exercises", "create"
     if first in {"clear-all", "seed-demo", "import-excel", "inscription-imports"}:
         return resource, "administer"
-    if first == "export-excel" or "pdf" in parts or "signed-file" in parts or any(part.endswith((".pdf", ".xlsx", ".ics")) for part in parts):
+    if first in {"export-excel", "export-csv"} or "pdf" in parts or "signed-file" in parts or any(part.endswith((".pdf", ".xlsx", ".ics", ".zip")) for part in parts):
         return resource, "export" if method == "GET" else "edit"
     if resource == "settings" and method != "GET":
         return resource, "administer"

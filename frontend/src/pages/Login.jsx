@@ -8,6 +8,7 @@ import api from "@/api";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import ClubLogo from "@/components/ClubLogo";
+import InstallAppCard from "@/components/InstallAppCard";
 
 const featureIcons = [Users, CalendarDays, FileCheck2];
 const featureKeys = ["loginFeaturePlayers", "loginFeatureSchedule", "loginFeatureAdmin"];
@@ -128,7 +129,7 @@ const Login = ({ onLogin }) => {
         </p>
       </section>
 
-      <section className="relative flex min-h-screen min-h-[100dvh] items-center justify-center px-4 py-20 sm:px-8 lg:py-12">
+      <section className="relative flex min-h-screen min-h-[100dvh] flex-col items-center justify-center gap-5 px-4 py-20 sm:px-8 lg:py-12">
         <div className="absolute right-4 top-4 flex rounded-xl border border-slate-200 bg-white p-1 shadow-sm sm:right-8 sm:top-7" aria-label="Idioma">
           {["es", "eu"].map((language) => (
             <button
@@ -145,7 +146,7 @@ const Login = ({ onLogin }) => {
           ))}
         </div>
 
-        <div className="w-full max-w-md animate-fade-up rounded-[1.75rem] border border-white/80 bg-white/90 p-6 shadow-[0_24px_70px_rgba(14,53,84,0.13)] backdrop-blur-sm sm:p-9">
+        <div className="w-full max-w-md animate-fade-up rounded-[1.75rem] border border-white/80 bg-white/90 p-6 shadow-[0_24px_70px_rgba(14,53,84,0.13)] backdrop-blur-sm sm:p-8">
           <div className="mb-8 text-center">
             <ClubLogo className="mx-auto h-[clamp(7rem,30vw,9rem)] w-[clamp(7rem,30vw,9rem)] drop-shadow-[0_14px_30px_rgba(14,53,84,0.18)]" />
             <p className="mt-4 font-heading text-2xl font-extrabold text-[#0E3554]">Ikas-Txiki Manager</p>
@@ -230,6 +231,9 @@ const Login = ({ onLogin }) => {
             <ShieldCheck className="h-4 w-4 text-primary" aria-hidden="true" />
             <span>{t("privacyBody")}</span>
           </div>
+        </div>
+        <div className="w-full max-w-md">
+          <InstallAppCard compact />
         </div>
       </section>
     </main>

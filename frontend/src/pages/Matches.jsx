@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { CalendarDays, Plus, Pencil, Trash2, MapPin, Users, Check, X, Clock, ChevronDown, ChevronUp, ClipboardList, ClipboardCheck } from "lucide-react";
 import { toast } from "sonner";
@@ -13,6 +13,8 @@ import GoogleMapsLinks from "@/components/GoogleMapsLinks";
 import MatchReport from "@/components/MatchReport";
 
 const empty = { condicion: "local", tipo: "liga", estado: "programado" };
+const unique = (values = []) => [...new Set(values.filter(Boolean).map(String))].sort((a, b) => a.localeCompare(b));
+const Datalist = ({ id, values }) => <datalist id={id}>{unique(values).map((value) => <option key={value} value={value} />)}</datalist>;
 
 const Matches = () => {
   const canCreate = usePermission("matches", "create");
@@ -25,22 +27,25 @@ const Matches = () => {
   const [callups, setCallups] = useState([]);
   const [players, setPlayers] = useState([]);
   const [teams, setTeams] = useState([]);
+  const [settings, setSettings] = useState({ temporadas: [], campos: [] });
   const [dialog, setDialog] = useState(false);
   const [form, setForm] = useState(empty);
   const [expanded, setExpanded] = useState(null); // match_id expandido
   const [reportMatch, setReportMatch] = useState(null);
 
   const load = async () => {
-    const [mRes, cRes, pRes, tRes] = await Promise.all([
+    const [mRes, cRes, pRes, tRes, settingsRes] = await Promise.all([
       api.get("/matches"),
       api.get("/callups"),
       api.get("/players"),
       api.get("/teams"),
+      api.get("/catalog-options"),
     ]);
     setMatches(mRes.data);
     setCallups(cRes.data);
     setPlayers(pRes.data);
     setTeams(tRes.data);
+    setSettings(settingsRes.data || {});
   };
 
   useEffect(() => {
@@ -81,6 +86,8 @@ const Matches = () => {
   };
 
   const teamOptions = teams.map((tm) => ({ value: tm.id, label: tm.nombre }));
+  const seasonOptions = useMemo(() => unique([...(settings.temporadas || []), ...teams.map((team) => team.temporada), ...matches.map((match) => match.temporada)]), [settings.temporadas, teams, matches]);
+  const fieldOptions = useMemo(() => unique([...(settings.campos || []), ...teams.map((team) => team.campo), ...matches.flatMap((match) => [match.campo, match.direccion_campo])]), [settings.campos, teams, matches]);
 
   return (
     <div data-testid="matches-page">
@@ -217,17 +224,19 @@ const Matches = () => {
       <Dialog open={dialog} onOpenChange={setDialog}>
         <DialogContent className="max-w-2xl max-h-[92vh] overflow-y-auto">
           <DialogHeader><DialogTitle className="font-heading">{form.id ? t("matches") : t("newMatch")}</DialogTitle></DialogHeader>
+          <Datalist id="match-seasons-list" values={seasonOptions} />
+          <Datalist id="match-fields-list" values={fieldOptions} />
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
             <SelectField label={t("ownTeam")} value={form.equipo_id} onChange={set("equipo_id")} options={teamOptions} testid="match-equipo" />
             <Field label={t("rival")} value={form.rival} onChange={set("rival")} testid="match-rival" />
             <Field label={t("date")} type="date" value={form.fecha} onChange={set("fecha")} testid="match-fecha" />
             <Field label={t("time")} type="time" value={form.hora} onChange={set("hora")} testid="match-hora" />
-            <Field label={t("season")} value={form.temporada} onChange={set("temporada")} testid="match-temporada" />
+            <Field label={t("season")} value={form.temporada} onChange={set("temporada")} testid="match-temporada" list="match-seasons-list" placeholder="2026-2027" />
             <Field label={t("matchday")} value={form.jornada} onChange={set("jornada")} testid="match-jornada" />
             <SelectField label={t("homeAway")} value={form.condicion} onChange={set("condicion")} options={[{value:"local",label:t("home")},{value:"visitante",label:t("away")}]} testid="match-condicion" />
             <SelectField label={t("matchType")} value={form.tipo} onChange={set("tipo")} options={["liga","copa","amistoso","torneo"].map(s=>({value:s,label:s}))} testid="match-tipo" />
-            <Field label={t("field")} value={form.campo} onChange={set("campo")} testid="match-campo" />
-            <Field label={t("fieldAddress")} value={form.direccion_campo} onChange={set("direccion_campo")} testid="match-direccion" />
+            <Field label={t("field")} value={form.campo} onChange={set("campo")} testid="match-campo" list="match-fields-list" />
+            <Field label={t("fieldAddress")} value={form.direccion_campo} onChange={set("direccion_campo")} testid="match-direccion" list="match-fields-list" />
             <div className="sm:col-span-2"><GoogleMapsLinks preview sources={form} /></div>
             <SelectField label={t("status")} value={form.estado} onChange={set("estado")} options={["programado","jugado","aplazado","suspendido","cancelado"].map(s=>({value:s,label:s}))} testid="match-estado" />
             <div />

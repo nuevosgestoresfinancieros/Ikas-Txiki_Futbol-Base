@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Shield, Plus, Pencil, Trash2, Users, UserRound, Hash, MapPin, CalendarDays } from "lucide-react";
 import { toast } from "sonner";
@@ -11,6 +11,13 @@ import { PageHeader, StatusBadge, EmptyState } from "@/components/shared";
 import { Field, SelectField } from "@/components/form";
 
 const empty = { nombre: "", estado: "activo", limite_jugadores: 20 };
+const unique = (values = []) => [...new Set(values.filter(Boolean).map(String))].sort((a, b) => a.localeCompare(b));
+
+const Datalist = ({ id, values }) => (
+  <datalist id={id}>
+    {unique(values).map((value) => <option key={value} value={value} />)}
+  </datalist>
+);
 
 const Teams = () => {
   const canCreate = usePermission("teams", "create");
@@ -18,6 +25,7 @@ const Teams = () => {
   const [params, setParams] = useSearchParams();
   const [teams, setTeams] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [settings, setSettings] = useState({ temporadas: [], campos: [], entrenadores: [] });
   const [dialog, setDialog] = useState(false);
   const [squadDialog, setSquadDialog] = useState(false);
   const [selectedTeam, setSelectedTeam] = useState(null);
@@ -27,7 +35,8 @@ const Teams = () => {
   const load = async () => setTeams((await api.get("/teams")).data);
   useEffect(() => {
     load();
-    api.get("/categories").then((r) => setCategories(r.data));
+    Promise.all([api.get("/categories"), api.get("/catalog-options")])
+      .then(([cat, cfg]) => { setCategories(cat.data); setSettings(cfg.data || {}); });
     if (params.get("new") && canCreate) { setForm(empty); setDialog(true); params.delete("new"); setParams(params); }
     // eslint-disable-next-line
   }, []);
@@ -55,6 +64,9 @@ const Teams = () => {
       setLoadingSquad(false);
     }
   };
+  const seasonOptions = useMemo(() => unique([...(settings.temporadas || []), ...teams.map((team) => team.temporada)]), [settings.temporadas, teams]);
+  const fieldOptions = useMemo(() => unique([...(settings.campos || []), ...teams.map((team) => team.campo)]), [settings.campos, teams]);
+  const coachOptions = useMemo(() => unique([...(settings.entrenadores || []), ...teams.flatMap((team) => [team.entrenador, team.segundo_entrenador])]), [settings.entrenadores, teams]);
 
   return (
     <div data-testid="teams-page">
@@ -116,17 +128,17 @@ const Teams = () => {
             <EmptyState icon={Users} message="Este equipo todavía no tiene jugadores asignados" />
           ) : (
             <div className="overflow-hidden rounded-xl border border-slate-200">
-              <div className="grid grid-cols-[minmax(0,2fr)_minmax(120px,1fr)_90px_minmax(110px,1fr)] gap-3 bg-slate-50 px-4 py-3 text-xs font-bold uppercase tracking-wider text-slate-500">
+              <div className="hidden grid-cols-[minmax(0,2fr)_minmax(120px,1fr)_90px_minmax(110px,1fr)] gap-3 bg-slate-50 px-4 py-3 text-xs font-bold uppercase tracking-wider text-slate-500 sm:grid">
                 <span>Jugador</span><span>Posición</span><span>Dorsal</span><span>Estado</span>
               </div>
               {selectedTeam.jugadores
                 .slice().sort((a, b) => `${a.nombre} ${a.apellidos || ""}`.localeCompare(`${b.nombre} ${b.apellidos || ""}`))
                 .map((player) => (
-                  <div key={player.id} data-testid={`team-player-${player.id}`} className="grid grid-cols-[minmax(0,2fr)_minmax(120px,1fr)_90px_minmax(110px,1fr)] items-center gap-3 border-t border-slate-100 px-4 py-3 text-sm">
+                  <div key={player.id} data-testid={`team-player-${player.id}`} className="grid grid-cols-2 items-center gap-3 border-t border-slate-100 px-4 py-3 text-sm sm:grid-cols-[minmax(0,2fr)_minmax(120px,1fr)_90px_minmax(110px,1fr)]">
                     <div className="flex min-w-0 items-center gap-3"><span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary"><UserRound className="h-4 w-4" /></span><div className="min-w-0"><p className="truncate font-semibold text-slate-800">{player.nombre} {player.apellidos || ""}</p><p className="truncate text-xs text-slate-400">{player.categoria || selectedTeam.categoria || "—"}</p></div></div>
-                    <span className="text-slate-600">{player.posicion || "—"}</span>
-                    <span className="inline-flex items-center gap-1 text-slate-600"><Hash className="h-3.5 w-3.5" />{player.dorsal || "—"}</span>
-                    <StatusBadge status={player.estado} />
+                    <span className="text-right text-slate-600 sm:text-left"><span className="text-xs font-bold uppercase text-slate-400 sm:hidden">Posición · </span>{player.posicion || "—"}</span>
+                    <span className="inline-flex items-center gap-1 text-slate-600"><Hash className="h-3.5 w-3.5" /><span className="text-xs font-bold uppercase text-slate-400 sm:hidden">Dorsal </span>{player.dorsal || "—"}</span>
+                    <div className="flex justify-end sm:block"><StatusBadge status={player.estado} /></div>
                   </div>
                 ))}
             </div>
@@ -137,17 +149,20 @@ const Teams = () => {
       <Dialog open={dialog} onOpenChange={setDialog}>
         <DialogContent className="max-w-2xl max-h-[92vh] overflow-y-auto">
           <DialogHeader><DialogTitle className="font-heading">{form.id ? form.nombre : t("newTeam")}</DialogTitle></DialogHeader>
+          <Datalist id="team-seasons-list" values={seasonOptions} />
+          <Datalist id="team-fields-list" values={fieldOptions} />
+          <Datalist id="team-coaches-list" values={coachOptions} />
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
             <Field label={t("name")} value={form.nombre} onChange={set("nombre")} testid="team-nombre" />
             <SelectField label={t("category")} value={form.categoria} onChange={set("categoria")} options={categories.map(c=>({value:c.name,label:c.name}))} testid="team-categoria" />
-            <Field label={t("season")} value={form.temporada} onChange={set("temporada")} testid="team-temporada" />
+            <Field label={t("season")} value={form.temporada} onChange={set("temporada")} testid="team-temporada" list="team-seasons-list" placeholder="2026-2027" />
             <SelectField label={t("status")} value={form.estado} onChange={set("estado")} options={["activo","cerrado","pendiente"].map(s=>({value:s,label:s}))} testid="team-estado" />
-            <Field label={t("coach")} value={form.entrenador} onChange={set("entrenador")} testid="team-entrenador" />
-            <Field label={t("secondCoach")} value={form.segundo_entrenador} onChange={set("segundo_entrenador")} testid="team-segundo" />
+            <Field label={t("coach")} value={form.entrenador} onChange={set("entrenador")} testid="team-entrenador" list="team-coaches-list" />
+            <Field label={t("secondCoach")} value={form.segundo_entrenador} onChange={set("segundo_entrenador")} testid="team-segundo" list="team-coaches-list" />
             <Field label={t("delegate")} value={form.delegado} onChange={set("delegado")} testid="team-delegado" />
             <Field label={t("trainingDays")} value={form.dias_entrenamiento} onChange={set("dias_entrenamiento")} testid="team-dias" />
             <Field label={t("schedule")} value={form.horario} onChange={set("horario")} testid="team-horario" />
-            <Field label={t("field")} value={form.campo} onChange={set("campo")} testid="team-campo" />
+            <Field label={t("field")} value={form.campo} onChange={set("campo")} testid="team-campo" list="team-fields-list" />
             <Field label={t("maxPlayers")} type="number" value={form.limite_jugadores} onChange={set("limite_jugadores")} testid="team-limite" />
           </div>
           <DialogFooter>

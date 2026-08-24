@@ -44,6 +44,8 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 dump.rdb
+*.tmp
+*.temp
 
 # System files
 .DS_Store
@@ -72,11 +74,20 @@ agenthub/agents/youtube/db
 *.sqlite-*
 *.sqlite3
 *.sqlite3-*
+*.csv
+*.xls
+*.xlsx
+!backend/templates/*.xlsx
+backend/uploads/
+uploads/
 
 # Backups
 *.bak
 *.backup
 backups/
+backup/
+exports/
+exportaciones/
 
 # Archive files and large assets
 **/*.zip
@@ -107,3 +118,10 @@ credentials.json
 private-imports/
 *.private.xlsx
 *.private.xls
+
+# Generated test reports; keep only folder placeholders
+test_reports/*
+!test_reports/.gitkeep
+!test_reports/pytest/
+test_reports/pytest/*
+!test_reports/pytest/.gitkeep

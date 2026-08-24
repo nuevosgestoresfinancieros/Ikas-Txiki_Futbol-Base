@@ -17,6 +17,7 @@ import math
 import re
 import shutil
 import time
+import zipfile
 from collections import defaultdict, deque
 from pathlib import Path
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -31,6 +32,9 @@ from reportlab.lib.units import mm
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, KeepTogether
 from datetime import datetime, timezone, date, timedelta
 from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.worksheet.table import Table, TableStyleInfo
+from openpyxl.utils import get_column_letter
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
@@ -59,7 +63,7 @@ from inscription_import_service import (
     SEASON as IMPORT_SEASON, SAFE_PLAYER_FIELDS, ImportValidationError,
     analyze_rows, decode_plan, encode_plan, encrypt_iban, family_key,
     file_sha256, identity_key, masked_iban, merge_nonempty, normalize_key,
-    parse_excel,
+    parse_excel, _fernet,
 )
 from import_staging_service import (
     ALLOWED_RECORD_FIELDS, audit_event, draft_summary, effective_records, expiry, field_is_valid,
@@ -1432,12 +1436,17 @@ class Team(BaseModel):
 
 @api_router.post("/teams")
 async def create_team(team: Team):
+    if normalized_key(team.nombre) == "no aplica":
+        raise HTTPException(status_code=422, detail="NO APLICA no es un equipo gestionable")
     return await insert_doc("teams", team.model_dump())
 
 
 @api_router.get("/teams")
 async def get_teams():
-    teams = await list_docs("teams")
+    teams = [
+        team for team in await list_docs("teams")
+        if normalized_key(team.get("nombre")) != "no aplica"
+    ]
     players = await list_docs("players")
     for t in teams:
         t["num_jugadores"] = len([p for p in players if p.get("equipo_id") == t["id"]])
@@ -1454,6 +1463,8 @@ async def get_team(team_id: str):
 
 @api_router.put("/teams/{team_id}")
 async def edit_team(team_id: str, team: Team):
+    if normalized_key(team.nombre) == "no aplica":
+        raise HTTPException(status_code=422, detail="NO APLICA no es un equipo gestionable")
     return await update_doc("teams", team_id, team.model_dump())
 
 
@@ -5209,6 +5220,7 @@ async def _statistics_data(filters: dict) -> tuple[dict, dict]:
         raise HTTPException(status_code=403, detail="Las estadísticas internas están restringidas al personal autorizado")
     teams = await list_docs("teams")
     players = await list_docs("players")
+    settings = await db.settings.find_one({"id": SETTINGS_ID}, {"_id": 0, "temporadas": 1}) or {}
     allowed_team_ids = {str(team.get("id")) for team in teams if team.get("id")}
     allowed_player_ids = {str(player.get("id")) for player in players if player.get("id")}
     if filters.get("equipo_id") and filters["equipo_id"] not in allowed_team_ids:
@@ -5216,7 +5228,10 @@ async def _statistics_data(filters: dict) -> tuple[dict, dict]:
     if filters.get("player_id") and filters["player_id"] not in allowed_player_ids:
         raise HTTPException(status_code=403, detail="El jugador solicitado no pertenece a tu ámbito")
     available_categories = {str(team.get("categoria")) for team in teams if team.get("categoria")}
-    available_seasons = {str(team.get("temporada")) for team in teams if team.get("temporada")}
+    available_seasons = {
+        *[str(season) for season in settings.get("temporadas", []) if season],
+        *[str(team.get("temporada")) for team in teams if team.get("temporada")],
+    }
     if filters.get("categoria") and actor.get("role") != "admin" and filters["categoria"] not in available_categories:
         raise HTTPException(status_code=403, detail="La categoría solicitada no pertenece a tu ámbito")
     if filters.get("temporada") and actor.get("role") != "admin" and available_seasons and filters["temporada"] not in available_seasons:
@@ -5837,6 +5852,20 @@ async def update_settings(settings: Settings):
     return await get_settings()
 
 
+@api_router.get("/catalog-options")
+async def get_catalog_options():
+    """Catálogos operativos reutilizables sin exponer toda la configuración admin."""
+    doc = await db.settings.find_one(
+        {"id": SETTINGS_ID},
+        {"_id": 0, "temporadas": 1, "campos": 1, "entrenadores": 1},
+    ) or {}
+    return {
+        "temporadas": sorted({str(value) for value in doc.get("temporadas", []) if value}),
+        "campos": sorted({str(value) for value in doc.get("campos", []) if value}),
+        "entrenadores": sorted({str(value) for value in doc.get("entrenadores", []) if value}),
+    }
+
+
 async def _load_modality_catalog() -> list[ModalityDefinition]:
     settings = await db.settings.find_one({"id": SETTINGS_ID}, {"_id": 0, "modalities": 1}) or {}
     return catalog_from_settings(settings)
@@ -6020,6 +6049,7 @@ async def report_context() -> dict:
             "id", "player_id", "temporada", "partidos_convocado", "partidos_jugados",
             "minutos", "goles", "asistencias", "amarillas", "rojas", "valoracion",
         }),
+        "settings": settings,
         "modalities": catalog_from_settings(settings),
     }
 
@@ -6040,7 +6070,10 @@ def report_filter_options(context: dict) -> dict:
     states.update(normalize_status(item.get("estado")) for callup in context.get("callups", [])
                   for item in callup.get("convocados", []) if item.get("estado"))
     return {
-        "seasons": sorted({team.get("temporada") for team in teams if team.get("temporada")}),
+        "seasons": sorted({
+            *[season for season in (context.get("settings") or {}).get("temporadas", []) if season],
+            *[team.get("temporada") for team in teams if team.get("temporada")],
+        }),
         "categories": sorted({value for value in [
             *(team.get("categoria") for team in teams), *(player.get("categoria") for player in players),
         ] if value}),
@@ -6278,7 +6311,7 @@ async def dashboard(
     )[:5]
     attendance = weekly_attendance(trainings, selected_player_ids or None)
     attendance_detail = attendance_summary(trainings, selected_player_ids or None)
-    attendance_settings = await db.settings.find_one({"id": SETTINGS_ID}, {"_id": 0, "attendance_alert_threshold": 1}) or {}
+    attendance_settings = await db.settings.find_one({"id": SETTINGS_ID}, {"_id": 0, "attendance_alert_threshold": 1, "temporadas": 1}) or {}
     attendance_alerts = repeated_absence_alerts(
         trainings, attendance_settings.get("attendance_alert_threshold", 3), selected_player_ids or None,
     )
@@ -6330,7 +6363,10 @@ async def dashboard(
         "scope": {"team_ids": sorted(selected_team_ids), "player_ids": sorted(selected_player_ids)},
         "filters": {"temporada": temporada, "categoria": categoria, "equipo_id": equipo_id},
         "filter_options": {
-            "temporadas": sorted({team.get("temporada") for team in all_teams if team.get("temporada")}),
+            "temporadas": sorted({
+                *[season for season in attendance_settings.get("temporadas", []) if season],
+                *[team.get("temporada") for team in all_teams if team.get("temporada")],
+            }),
             "categorias": sorted({team.get("categoria") for team in all_teams if team.get("categoria")}),
             "equipos": [
                 {"id": team.get("id"), "nombre": team.get("nombre"), "categoria": team.get("categoria"), "temporada": team.get("temporada")}
@@ -6627,6 +6663,417 @@ async def update_equipment(player_id: str, data: Dict[str, Any]):
 EXPORT_COLLECTIONS = ALL_COLLECTIONS + ["settings"]
 
 
+def _json_cell(value: Any, default: Any = None) -> Any:
+    if default is None:
+        default = {}
+    if value is None:
+        return default
+    if isinstance(value, float) and math.isnan(value):
+        return default
+    if isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return default
+        try:
+            return json.loads(text)
+        except Exception:
+            return default
+    return default
+
+
+def _display_value(value: Any, fallback: str = "") -> str:
+    if value is None:
+        return fallback
+    if isinstance(value, float) and math.isnan(value):
+        return fallback
+    if isinstance(value, bool):
+        return "Sí" if value else "No"
+    text = str(value).strip()
+    return text if text else fallback
+
+
+def _decrypt_iban(value: Any) -> str:
+    token = _display_value(value)
+    if not token:
+        return ""
+    try:
+        return _fernet(JWT_SECRET).decrypt(token.encode("ascii")).decode("ascii")
+    except Exception:
+        return ""
+
+
+def _status_label(value: Any) -> str:
+    text = _display_value(value).lower()
+    labels = {
+        "pendiente": "Pendiente",
+        "pendiente_documentacion": "Pendiente documentación",
+        "recibida": "Recibida",
+        "activo": "Activo",
+        "referencia": "Referencia",
+        "firmada": "Firmada",
+        "validada": "Validada",
+    }
+    return labels.get(text, _display_value(value))
+
+
+def _join_list(value: Any) -> str:
+    items = _json_cell(value, [])
+    if isinstance(items, list):
+        return ", ".join(_display_value(item) for item in items if _display_value(item))
+    return _display_value(value)
+
+
+def _season_pairs(value: Any) -> str:
+    data = _json_cell(value, {})
+    if not isinstance(data, dict):
+        return _display_value(value)
+    parts = []
+    for season, season_value in sorted(data.items()):
+        if isinstance(season_value, list):
+            text = ", ".join(_display_value(v) for v in season_value if _display_value(v))
+        else:
+            text = _display_value(season_value)
+        if text:
+            parts.append(f"{season}: {text}")
+    return " | ".join(parts)
+
+
+def _dict_summary(value: Any) -> str:
+    data = _json_cell(value, {})
+    if not isinstance(data, dict):
+        return _display_value(value)
+    parts = []
+    labels = {
+        "due": "cuota",
+        "paid": "pagado",
+        "balance_reference": "referencia",
+        "confirmed_debt": "deuda confirmada",
+        "notifications": "avisos",
+        "debit": "domiciliación",
+        "images": "imagen",
+        "signed": "firmado",
+    }
+    for key, raw in data.items():
+        if key in {"source_present", "source_numeric"}:
+            continue
+        value_text = _display_value(raw)
+        if value_text:
+            parts.append(f"{labels.get(key, key)}: {value_text}")
+    return " | ".join(parts)
+
+
+def _authorization_state(auths: Mapping[str, dict], key: str) -> str:
+    return _status_label(auths.get(key, {}).get("estado") or "Sin registro")
+
+
+def _missing_notes(player: Mapping[str, Any], bank_rows: list[dict], auths: Mapping[str, dict], team: Mapping[str, Any]) -> str:
+    notes = []
+    if not team:
+        notes.append("sin equipo")
+    if not _display_value(player.get("progenitor1_email")) and not _display_value(player.get("progenitor2_email")):
+        notes.append("sin email familiar")
+    if not _display_value(player.get("progenitor1_telefono")) and not _display_value(player.get("progenitor2_telefono")):
+        notes.append("sin teléfono familiar")
+    if not bank_rows:
+        notes.append("sin cuenta bancaria")
+    if not _display_value(player.get("talla_camiseta")):
+        notes.append("sin talla camiseta")
+    pending_auths = [name for name, row in auths.items() if _display_value(row.get("estado")).lower() not in {"firmada", "validada"}]
+    if pending_auths:
+        notes.append(f"autorizaciones pendientes: {len(pending_auths)}")
+    return "; ".join(notes) or "completo"
+
+
+VISUAL_SHEET_META = {
+    "Control operativo": "Vista de trabajo para saber qué falta por jugador y priorizar la gestión diaria.",
+    "Equipos": "Resumen de equipos, límites y número de jugadores asignados.",
+    "Jugadores por equipo": "Listado de plantillas para entregar o revisar con coordinación deportiva.",
+    "Contactos familias": "Datos de contacto agrupados para administración y comunicación.",
+    "Equipaciones": "Control de tallas, segunda equipación e historial de material.",
+    "Cuentas bancarias": "Referencias bancarias para administración: IBAN completo y versión enmascarada.",
+    "Historial deportivo": "Trayectoria por temporadas, federación, equipos y entrenamientos históricos.",
+    "Autorizaciones resumen": "Estado de permisos por jugador para revisión administrativa.",
+}
+
+
+def _style_excel_sheet(writer, sheet_name: str, freeze: str = "A4", tab_color: str = "0F4C81", table_name: str = ""):
+    ws = writer.book[sheet_name]
+    ws.sheet_properties.tabColor = tab_color
+    if ws.max_row >= 3:
+        ws.freeze_panes = freeze
+        header_fill = PatternFill("solid", fgColor=tab_color)
+        thin = Side(style="thin", color="D8E2EE")
+        for cell in ws[3]:
+            cell.fill = header_fill
+            cell.font = Font(color="FFFFFF", bold=True)
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = Border(bottom=thin)
+        if ws.max_row > 3 and ws.max_column > 1:
+            ref = f"A3:{get_column_letter(ws.max_column)}{ws.max_row}"
+            table = Table(displayName=table_name or re.sub(r"[^A-Za-z0-9_]", "", sheet_name)[:20] or "Tabla", ref=ref)
+            table.tableStyleInfo = TableStyleInfo(
+                name="TableStyleMedium2",
+                showFirstColumn=False,
+                showLastColumn=False,
+                showRowStripes=True,
+                showColumnStripes=False,
+            )
+            ws.add_table(table)
+    for col_idx, column_cells in enumerate(ws.iter_cols(), start=1):
+        letter = get_column_letter(col_idx)
+        max_len = 0
+        for cell in column_cells[:200]:
+            max_len = max(max_len, len(_display_value(cell.value)))
+        ws.column_dimensions[letter].width = min(max(max_len + 2, 12), 42)
+    for row in ws.iter_rows(min_row=4):
+        for cell in row:
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+            if isinstance(cell.value, str):
+                lowered = cell.value.lower()
+                if lowered in {"pendiente", "pendiente documentación"} or "pendiente" in lowered:
+                    cell.fill = PatternFill("solid", fgColor="FFF4CC")
+                elif lowered in {"sí", "validada", "firmada", "activo", "completo"}:
+                    cell.fill = PatternFill("solid", fgColor="E8F6EF")
+                elif lowered in {"no", "sin registro"} or lowered.startswith("sin "):
+                    cell.fill = PatternFill("solid", fgColor="FDEAEA")
+
+
+def _write_visual_sheet(writer, sheet_name: str, rows: list[dict], columns: list[str], tab_color: str = "0F4C81"):
+    df = pd.DataFrame(rows, columns=columns)
+    safe_name = sheet_name[:31]
+    df.to_excel(writer, sheet_name=safe_name, index=False, startrow=2)
+    ws = writer.book[safe_name]
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max(1, len(columns)))
+    ws.cell(1, 1).value = sheet_name
+    ws.cell(1, 1).font = Font(size=16, bold=True, color="FFFFFF")
+    ws.cell(1, 1).fill = PatternFill("solid", fgColor=tab_color)
+    ws.cell(1, 1).alignment = Alignment(horizontal="left", vertical="center")
+    ws.row_dimensions[1].height = 28
+    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=max(1, len(columns)))
+    ws.cell(2, 1).value = VISUAL_SHEET_META.get(sheet_name, "")
+    ws.cell(2, 1).font = Font(italic=True, color="5B677A")
+    ws.cell(2, 1).fill = PatternFill("solid", fgColor="F3F6FA")
+    ws.cell(2, 1).alignment = Alignment(vertical="center", wrap_text=True)
+    ws.row_dimensions[2].height = 24
+    table_name = re.sub(r"[^A-Za-z0-9_]", "", f"Tabla_{safe_name}")[:30]
+    _style_excel_sheet(writer, safe_name, tab_color=tab_color, table_name=table_name)
+
+
+def _write_start_sheet(writer, metrics: list[dict], warnings: list[dict]):
+    sheet_name = "Inicio"
+    pd.DataFrame().to_excel(writer, sheet_name=sheet_name, index=False, header=False)
+    ws = writer.book[sheet_name]
+    ws.sheet_properties.tabColor = "0B3558"
+    ws.merge_cells("A1:F1")
+    ws["A1"] = "Ikas-Txiki Manager · Exportación operativa"
+    ws["A1"].font = Font(size=18, bold=True, color="FFFFFF")
+    ws["A1"].fill = PatternFill("solid", fgColor="0B3558")
+    ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 30
+    ws["A3"] = "Resumen rápido"
+    ws["A3"].font = Font(size=13, bold=True, color="0B3558")
+    metric_fill = PatternFill("solid", fgColor="EAF4FB")
+    for idx, row in enumerate(metrics, start=4):
+        ws.cell(idx, 1).value = row["Métrica"]
+        ws.cell(idx, 2).value = row["Valor"]
+        ws.cell(idx, 1).font = Font(bold=True, color="1F3652")
+        ws.cell(idx, 1).fill = metric_fill
+        ws.cell(idx, 2).fill = metric_fill
+    ws["D3"] = "Avisos operativos"
+    ws["D3"].font = Font(size=13, bold=True, color="0B3558")
+    for idx, row in enumerate(warnings, start=4):
+        ws.cell(idx, 4).value = row["Aviso"]
+        ws.cell(idx, 5).value = row["Cantidad"]
+        ws.cell(idx, 4).fill = PatternFill("solid", fgColor="FFF4CC" if row["Cantidad"] else "E8F6EF")
+        ws.cell(idx, 5).fill = PatternFill("solid", fgColor="FFF4CC" if row["Cantidad"] else "E8F6EF")
+    ws["A13"] = "Cómo usar este Excel"
+    ws["A13"].font = Font(size=13, bold=True, color="0B3558")
+    instructions = [
+        "1. Usa 'Control operativo' para revisar qué falta por jugador.",
+        "2. Usa 'Jugadores por equipo' para trabajar por plantilla.",
+        "3. Usa 'Equipaciones', 'Cuentas bancarias' y 'Autorizaciones resumen' para gestión diaria.",
+        "4. Las hojas técnicas están ocultas y sirven para restaurar/importar la base de datos.",
+    ]
+    for offset, text in enumerate(instructions, start=14):
+        ws.cell(offset, 1).value = text
+    for col in range(1, 7):
+        ws.column_dimensions[get_column_letter(col)].width = 28
+    for row in ws.iter_rows():
+        for cell in row:
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+
+
+async def _excel_export_data() -> dict[str, list[dict]]:
+    return {
+        coll: await db[coll].find({}, {"_id": 0}).to_list(10000)
+        for coll in EXPORT_COLLECTIONS
+    }
+
+
+def _visual_export_rows(data: dict[str, list[dict]]) -> dict[str, tuple[list[dict], list[str]]]:
+    players = data.get("players", [])
+    teams = {row.get("id"): row for row in data.get("teams", [])}
+    payments_by_player = defaultdict(list)
+    authorizations_by_player = defaultdict(dict)
+
+    for row in data.get("payments", []):
+        payments_by_player[row.get("player_id")].append(row)
+    for row in data.get("authorizations", []):
+        authorizations_by_player[row.get("player_id")][_display_value(row.get("tipo"))] = row
+
+    roster_rows = []
+    equipment_rows = []
+    bank_rows = []
+    sports_rows = []
+    authorization_rows = []
+    contact_rows = []
+    control_rows = []
+
+    for player in players:
+        team = teams.get(player.get("equipo_id"), {})
+        second_kit = _json_cell(player.get("segunda_equipacion"), {})
+        sports = _json_cell(player.get("historial_deportivo"), {})
+        fee_ref = _json_cell(player.get("referencias_cuotas"), {})
+        permission_ref = _json_cell(player.get("referencias_permisos"), {})
+        name = f"{_display_value(player.get('nombre'))} {_display_value(player.get('apellidos'))}".strip()
+        player_bank_rows = payments_by_player.get(player.get("id"), [])
+        auths = authorizations_by_player.get(player.get("id"), {})
+        missing_notes = _missing_notes(player, player_bank_rows, auths, team)
+        complete_auths = sum(1 for row in auths.values() if _display_value(row.get("estado")).lower() in {"firmada", "validada"})
+        pending_auths = max(0, 6 - complete_auths)
+
+        roster_rows.append({
+            "Equipo": _display_value(team.get("nombre"), "Sin equipo"),
+            "Temporada equipo": _display_value(team.get("temporada")),
+            "Categoría equipo": _display_value(team.get("categoria")),
+            "Jugador": name,
+            "Fecha nacimiento": _display_value(player.get("fecha_nacimiento")),
+            "Categoría jugador": _display_value(player.get("categoria")),
+            "Modalidad": _display_value(player.get("modalidad")),
+            "Posición": _display_value(player.get("posicion")),
+            "Centro escolar": _display_value(player.get("centro_escolar")),
+            "Estado": _status_label(player.get("estado")),
+        })
+        control_rows.append({
+            "Jugador": name,
+            "Equipo": _display_value(team.get("nombre"), "Sin equipo"),
+            "Estado ficha": _status_label(player.get("estado")),
+            "Autorizaciones pendientes": pending_auths,
+            "Cuenta bancaria": "Sí" if player_bank_rows else "No",
+            "IBAN visible": f"****{_display_value(player_bank_rows[0].get('iban_last4'))}" if player_bank_rows and _display_value(player_bank_rows[0].get("iban_last4")) else "",
+            "Equipación 2ª": "Sí" if second_kit else "No",
+            "Tallas básicas": "Sí" if _display_value(player.get("talla_camiseta")) and _display_value(player.get("talla_medias")) else "No",
+            "Contacto familiar": "Sí" if _display_value(player.get("progenitor1_email")) or _display_value(player.get("progenitor1_telefono")) or _display_value(player.get("progenitor2_email")) or _display_value(player.get("progenitor2_telefono")) else "No",
+            "Qué falta": missing_notes,
+        })
+        equipment_rows.append({
+            "Jugador": name,
+            "Categoría": _display_value(player.get("categoria")),
+            "Talla camiseta": _display_value(player.get("talla_camiseta")),
+            "Talla medias": _display_value(player.get("talla_medias")),
+            "Nombre camiseta 2ª": _display_value(second_kit.get("shirt_name")),
+            "Dorsal 2ª": _display_value(second_kit.get("number")),
+            "Talla camiseta 2ª": _display_value(second_kit.get("shirt_size")),
+            "Talla medias 2ª": _display_value(second_kit.get("socks_size")),
+            "Historial equipación": _season_pairs(player.get("historial_equipacion")),
+            "Equipación entregada": _display_value(player.get("equipacion_entregada")),
+        })
+        sports_rows.append({
+            "Jugador": name,
+            "Equipo actual": _display_value(team.get("nombre"), "Sin equipo"),
+            "Equipo histórico referencia": _display_value(player.get("equipo_historico_referencia")),
+            "Historial equipos": _season_pairs(player.get("historial_equipos")),
+            "Historial federación": _season_pairs(player.get("historial_federacion")),
+            "Programa 2025-2026": _display_value(sports.get("program_2025_2026")),
+            "Categoría deportiva": _display_value(sports.get("playing_category")),
+            "Posición": _display_value(sports.get("position") or player.get("posicion")),
+            "Entrenamientos históricos": _join_list(player.get("historial_entrenamientos")),
+        })
+        authorization_rows.append({
+            "Jugador": name,
+            "General": _authorization_state(auths, "general"),
+            "Médica": _authorization_state(auths, "medica"),
+            "Imagen": _authorization_state(auths, "imagen"),
+            "Protección datos": _authorization_state(auths, "proteccion_datos"),
+            "Recogida": _authorization_state(auths, "recogida"),
+            "Desplazamientos": _authorization_state(auths, "desplazamientos"),
+            "Permisos históricos": _dict_summary(permission_ref),
+        })
+        contact_rows.append({
+            "Jugador": name,
+            "Familia": _display_value(player.get("familia_id")),
+            "Domicilio": _display_value(player.get("domicilio")),
+            "Progenitor 1": _display_value(player.get("progenitor1_nombre")),
+            "Teléfono 1": _display_value(player.get("progenitor1_telefono")),
+            "Email 1": _display_value(player.get("progenitor1_email")),
+            "Progenitor 2": _display_value(player.get("progenitor2_nombre")),
+            "Teléfono 2": _display_value(player.get("progenitor2_telefono")),
+            "Email 2": _display_value(player.get("progenitor2_email")),
+        })
+        for payment in player_bank_rows:
+            full_iban = _decrypt_iban(payment.get("iban_encrypted")) or _display_value(payment.get("iban"))
+            bank_rows.append({
+                "Jugador": name,
+                "Titular cuenta": _display_value(payment.get("titular_cuenta")),
+                "IBAN completo": full_iban,
+                "IBAN enmascarado": f"****{_display_value(payment.get('iban_last4'))}" if _display_value(payment.get("iban_last4")) else "",
+                "IBAN validado": _display_value(payment.get("iban_validado")),
+                "Forma pago": _display_value(payment.get("forma_pago")),
+                "Concepto": _display_value(payment.get("concepto")),
+                "Estado": _display_value(payment.get("estado")),
+                "Referencia histórica": _display_value(payment.get("historical_bank_reference")),
+                "Deuda confirmada": _display_value(payment.get("confirmed_debt")),
+                "Referencia cuotas": _dict_summary(fee_ref),
+            })
+
+    team_summary = []
+    team_counts = defaultdict(int)
+    for row in roster_rows:
+        team_counts[row["Equipo"]] += 1
+    for team in data.get("teams", []):
+        team_summary.append({
+            "Equipo": _display_value(team.get("nombre")),
+            "Categoría": _display_value(team.get("categoria")),
+            "Temporada": _display_value(team.get("temporada")),
+            "Modalidad": _display_value(team.get("modalidad")),
+            "Jugadores": team_counts[_display_value(team.get("nombre"))],
+            "Límite jugadores": _display_value(team.get("limite_jugadores")),
+            "Estado": _display_value(team.get("estado")),
+            "Entrenador": _display_value(team.get("entrenador")),
+            "Campo": _display_value(team.get("campo")),
+        })
+
+    metrics = [
+            {"Métrica": "Jugadores", "Valor": len(players)},
+            {"Métrica": "Familias", "Valor": len(data.get("families", []))},
+            {"Métrica": "Equipos", "Valor": len(data.get("teams", []))},
+            {"Métrica": "Referencias bancarias", "Valor": len(data.get("payments", []))},
+            {"Métrica": "Autorizaciones", "Valor": len(data.get("authorizations", []))},
+            {"Métrica": "Inscripciones", "Valor": len(data.get("inscriptions", []))},
+    ]
+    warnings = [
+        {"Aviso": "Jugadores sin equipo", "Cantidad": sum(1 for row in control_rows if row["Equipo"] == "Sin equipo")},
+        {"Aviso": "Jugadores sin cuenta bancaria", "Cantidad": sum(1 for row in control_rows if row["Cuenta bancaria"] == "No")},
+        {"Aviso": "Jugadores con autorizaciones pendientes", "Cantidad": sum(1 for row in control_rows if row["Autorizaciones pendientes"])},
+        {"Aviso": "Jugadores sin tallas básicas", "Cantidad": sum(1 for row in control_rows if row["Tallas básicas"] == "No")},
+        {"Aviso": "Jugadores sin contacto familiar", "Cantidad": sum(1 for row in control_rows if row["Contacto familiar"] == "No")},
+    ]
+
+    return {
+        "Inicio": (metrics, warnings),
+        "Control operativo": (control_rows, ["Jugador", "Equipo", "Estado ficha", "Autorizaciones pendientes", "Cuenta bancaria", "IBAN visible", "Equipación 2ª", "Tallas básicas", "Contacto familiar", "Qué falta"], "C65911"),
+        "Equipos": (team_summary, ["Equipo", "Categoría", "Temporada", "Modalidad", "Jugadores", "Límite jugadores", "Estado", "Entrenador", "Campo"], "0F4C81"),
+        "Jugadores por equipo": (roster_rows, ["Equipo", "Temporada equipo", "Categoría equipo", "Jugador", "Fecha nacimiento", "Categoría jugador", "Modalidad", "Posición", "Centro escolar", "Estado"], "2F75B5"),
+        "Contactos familias": (contact_rows, ["Jugador", "Familia", "Domicilio", "Progenitor 1", "Teléfono 1", "Email 1", "Progenitor 2", "Teléfono 2", "Email 2"], "548235"),
+        "Equipaciones": (equipment_rows, ["Jugador", "Categoría", "Talla camiseta", "Talla medias", "Nombre camiseta 2ª", "Dorsal 2ª", "Talla camiseta 2ª", "Talla medias 2ª", "Historial equipación", "Equipación entregada"], "8064A2"),
+        "Cuentas bancarias": (bank_rows, ["Jugador", "Titular cuenta", "IBAN completo", "IBAN enmascarado", "IBAN validado", "Forma pago", "Concepto", "Estado", "Referencia histórica", "Deuda confirmada", "Referencia cuotas"], "A64D79"),
+        "Historial deportivo": (sports_rows, ["Jugador", "Equipo actual", "Equipo histórico referencia", "Historial equipos", "Historial federación", "Programa 2025-2026", "Categoría deportiva", "Posición", "Entrenamientos históricos"], "5B9BD5"),
+        "Autorizaciones resumen": (authorization_rows, ["Jugador", "General", "Médica", "Imagen", "Protección datos", "Recogida", "Desplazamientos", "Permisos históricos"], "ED7D31"),
+    }
+
+
 def _flatten_for_excel(doc: dict) -> dict:
     out = {}
     for k, v in doc.items():
@@ -6666,20 +7113,60 @@ def _unflatten_from_excel(row: dict) -> dict:
 async def export_excel():
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        wrote_any = False
+        export_data = await _excel_export_data()
+        for sheet_name, payload in _visual_export_rows(export_data).items():
+            if sheet_name == "Inicio":
+                metrics, warnings = payload
+                _write_start_sheet(writer, metrics, warnings)
+                continue
+            rows, columns, tab_color = payload
+            _write_visual_sheet(writer, sheet_name, rows, columns, tab_color=tab_color)
         for coll in EXPORT_COLLECTIONS:
-            docs = await db[coll].find({}, {"_id": 0}).to_list(10000)
+            docs = export_data.get(coll, [])
             rows = [_flatten_for_excel(d) for d in docs]
             df = pd.DataFrame(rows)
             df.to_excel(writer, sheet_name=coll[:31], index=False)
-            wrote_any = True
-        if not wrote_any:
+            writer.book[coll[:31]].sheet_state = "veryHidden"
+        if not writer.book.sheetnames:
             pd.DataFrame().to_excel(writer, sheet_name="empty", index=False)
     buffer.seek(0)
     fname = f"ikastxiki_backup_{date.today().isoformat()}.xlsx"
     return StreamingResponse(
         buffer,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+def _safe_csv_name(value: str) -> str:
+    name = re.sub(r"[^A-Za-z0-9ÁÉÍÓÚÜÑáéíóúüñ_-]+", "_", value).strip("_")
+    return name or "datos"
+
+
+@api_router.get("/export-csv")
+async def export_csv():
+    export_data = await _excel_export_data()
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for sheet_name, payload in _visual_export_rows(export_data).items():
+            if sheet_name == "Inicio":
+                metrics, warnings = payload
+                rows = [{"Sección": "Resumen", **row} for row in metrics] + [
+                    {"Sección": "Avisos", "Métrica": row["Aviso"], "Valor": row["Cantidad"]} for row in warnings
+                ]
+                df = pd.DataFrame(rows)
+            else:
+                rows, columns, _tab_color = payload
+                df = pd.DataFrame(rows, columns=columns)
+            archive.writestr(f"01_operativo/{_safe_csv_name(sheet_name)}.csv", df.to_csv(index=False))
+        for coll in EXPORT_COLLECTIONS:
+            rows = [_flatten_for_excel(d) for d in export_data.get(coll, [])]
+            archive.writestr(f"02_backup_tecnico/{_safe_csv_name(coll)}.csv", pd.DataFrame(rows).to_csv(index=False))
+    buffer.seek(0)
+    fname = f"ikastxiki_csv_{date.today().isoformat()}.zip"
+    return StreamingResponse(
+        buffer,
+        media_type="application/zip",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
 

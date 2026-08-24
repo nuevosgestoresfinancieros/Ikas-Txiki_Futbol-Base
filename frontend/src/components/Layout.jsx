@@ -13,6 +13,7 @@ import GlobalSearch from "@/components/GlobalSearch";
 import NotificationCenter from "@/components/NotificationCenter";
 import AssistantPanel from "@/components/AssistantPanel";
 import ClubLogo from "@/components/ClubLogo";
+import InstallAppButton from "@/components/InstallAppButton";
 import { can, ROUTE_RESOURCES } from "@/auth";
 
 const navGroups = [
@@ -287,14 +288,17 @@ const Layout = ({ children, onLogout, user }) => {
             <ClubLogo className="h-9 w-9" />
             <span className="font-heading text-sm font-extrabold text-[#0E3554]">{current ? t(current.key) : "Ikas-Txiki Manager"}</span>
           </div>
-          <NotificationCenter user={user} />
+          <div className="flex items-center gap-2">
+            <InstallAppButton />
+            <NotificationCenter user={user} />
+          </div>
         </header>
         <header className="sticky top-0 z-20 flex min-h-16 items-center justify-between border-b border-white/10 bg-gradient-to-r from-[#0E3554]/95 to-[#1B5C8F]/95 px-3 text-white shadow-[0_8px_24px_rgba(14,53,84,0.18)] backdrop-blur-xl lg:hidden">
           <Button data-testid="open-sidebar-btn" variant="ghost" size="icon" aria-label={t("openMenu")} className="text-white hover:bg-white/10 hover:text-white" onClick={() => setOpen(true)}>
             <Menu className="h-6 w-6" aria-hidden="true" />
           </Button>
           <ClubLogo className="h-11 w-11" />
-          <div className="flex items-center"><NotificationCenter user={user} dark /><Button data-testid="mobile-search-btn" variant="ghost" size="icon" aria-label={t("globalSearch")} className="text-white hover:bg-white/10 hover:text-white" onClick={() => setSearchOpen(true)}><Search className="h-5 w-5" aria-hidden="true" /></Button></div>
+          <div className="flex items-center"><InstallAppButton dark compact /><NotificationCenter user={user} dark /><Button data-testid="mobile-search-btn" variant="ghost" size="icon" aria-label={t("globalSearch")} className="text-white hover:bg-white/10 hover:text-white" onClick={() => setSearchOpen(true)}><Search className="h-5 w-5" aria-hidden="true" /></Button></div>
         </header>
 
         <main id="main-content" tabIndex="-1" className="mx-auto max-w-[1440px] px-4 pb-28 pt-5 sm:px-6 sm:pt-7 lg:px-8 lg:pb-10 lg:pt-8 xl:px-10">
