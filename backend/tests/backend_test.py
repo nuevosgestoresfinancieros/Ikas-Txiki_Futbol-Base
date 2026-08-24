@@ -129,6 +129,23 @@ class TestPlayers:
         assert r.status_code == 200
         assert all(p.get("equipo_id") == created_ids["teams"][0] for p in r.json())
 
+    def test_filter_players_by_season_and_pending_documentation(self, session):
+        team = session.post(f"{API}/teams", json={
+            "nombre": "TEST_Filtro temporada", "categoria": "Juvenil", "temporada": "2025-2026",
+        })
+        assert team.status_code == 200, team.text
+        player = session.post(f"{API}/players", json={
+            "nombre": "TEST_Filtro documentación", "equipo_id": team.json()["id"],
+            "estado_documental": "pendiente",
+        })
+        assert player.status_code == 200, player.text
+        r = session.get(f"{API}/players", params={
+            "temporada": "2025-2026", "documentacion_pendiente": "true",
+        })
+        assert r.status_code == 200
+        assert any(p.get("id") == player.json()["id"] for p in r.json())
+        assert all(p.get("estado_documental") != "completo" for p in r.json())
+
     def test_update_player(self, session, created_ids):
         pid = created_ids["players"][0]
         r = session.put(f"{API}/players/{pid}", json={
