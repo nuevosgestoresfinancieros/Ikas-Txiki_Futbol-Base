@@ -32,7 +32,8 @@ const Families = () => {
   const remove = async (f) => { if (!window.confirm(t("confirmDelete"))) return; await api.delete(`/families/${f.id}`); toast.success(t("deleted")); load(); };
 
   const commOptions = [
-    { value: "email", label: "Email" }, { value: "telefono", label: t("phone") }, { value: "whatsapp", label: "WhatsApp" },
+    { value: "email", label: "Email" }, { value: "telefono", label: t("phone") }, { value: "telegram", label: "Telegram" },
+    ...(form.preferencia_comunicacion === "whatsapp" ? [{ value: "whatsapp", label: "WhatsApp (histórico)" }] : []),
   ];
 
   return (

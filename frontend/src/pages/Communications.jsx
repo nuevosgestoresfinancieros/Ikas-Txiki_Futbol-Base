@@ -62,6 +62,10 @@ const Communications = () => {
   const destOptions = form.destinatario_tipo === "equipo" ? teams.map(tm=>({value:tm.id,label:tm.nombre}))
     : form.destinatario_tipo === "categoria" ? categories.map(c=>({value:c.name,label:c.name}))
     : players.map(p=>({value:p.id,label:`${p.nombre} ${p.apellidos||""}`.trim()}));
+  const channelOptions = [
+    { value: "email", label: "Email" }, { value: "telegram", label: "Telegram" }, { value: "sms", label: "SMS" },
+    ...(form.canal === "whatsapp" ? [{ value: "whatsapp", label: "WhatsApp (histórico)" }] : []),
+  ];
 
   return (
     <div data-testid="communications-page">
@@ -76,8 +80,8 @@ const Communications = () => {
             <div key={i.id} data-testid={`comm-card-${i.id}`} className="surface-card interactive-card p-4">
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-start gap-3">
-                  <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${i.canal==="whatsapp"?"bg-green-100 text-green-700":"bg-sky-100 text-sky-700"}`}>
-                    {i.canal === "whatsapp" ? <Send className="h-5 w-5" /> : <Mail className="h-5 w-5" />}
+                  <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${i.canal==="telegram"?"bg-sky-100 text-sky-700":i.canal==="whatsapp"?"bg-slate-100 text-slate-600":"bg-sky-100 text-sky-700"}`}>
+                    {i.canal === "email" ? <Mail className="h-5 w-5" /> : <Send className="h-5 w-5" />}
                   </div>
                   <div>
                     <p className="font-semibold text-slate-800">{i.asunto || "(sin asunto)"}</p>
@@ -104,7 +108,7 @@ const Communications = () => {
               <SelectField label={t("recipientType")} value={form.destinatario_tipo} onChange={(v)=>{set("destinatario_tipo")(v);set("destinatario_id")("");}}
                 options={[{value:"equipo",label:t("byTeam")},{value:"categoria",label:t("byCategory")},{value:"individual",label:t("individual")}]} testid="comm-tipo" />
               <SelectField label={t("recipientType")} value={form.destinatario_id} onChange={set("destinatario_id")} options={destOptions} testid="comm-dest" />
-              <SelectField label={t("channel")} value={form.canal} onChange={set("canal")} options={[{value:"email",label:"Email"},{value:"whatsapp",label:"WhatsApp"},{value:"sms",label:"SMS"}]} testid="comm-canal" />
+              <SelectField label={t("channel")} value={form.canal} onChange={set("canal")} options={channelOptions} testid="comm-canal" />
             </div>
             <SelectField label={t("priority")} value={form.prioridad || "normal"} onChange={set("prioridad")} options={["low","normal","high","urgent"].map((value)=>({value,label:t(`priority_${value}`)}))} testid="comm-priority" />
             <Field label={t("subject")} value={form.asunto} onChange={set("asunto")} testid="comm-asunto" />

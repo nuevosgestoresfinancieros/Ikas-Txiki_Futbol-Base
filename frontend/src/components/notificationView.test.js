@@ -1,8 +1,8 @@
 import { notificationPreferenceKeys, priorityDotClass, unreadLabel } from "./notificationView";
 
-test("notification preferences cover internal and optional email delivery", () => {
+test("notification preferences cover internal, email and Telegram delivery", () => {
   expect(notificationPreferenceKeys).toEqual([
-    "in_app", "email", "callups", "schedule_changes", "payments", "documents",
+    "in_app", "email", "telegram", "callups", "schedule_changes", "payments", "documents",
   ]);
 });
 

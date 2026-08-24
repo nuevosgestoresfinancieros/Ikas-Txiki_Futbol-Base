@@ -4,6 +4,8 @@ from __future__ import annotations
 import os
 import smtplib
 import ssl
+import json
+from urllib import request as urllib_request
 from html import escape
 from datetime import datetime, timezone
 from email.message import EmailMessage
@@ -57,9 +59,44 @@ def provider_configuration(environment: Optional[Mapping[str, str]] = None) -> d
     env = environment if environment is not None else os.environ
     return {
         "email": {"configured": bool(env.get("SMTP_HOST") and env.get("SMTP_FROM")), "provider": "smtp"},
-        "whatsapp": {"configured": bool(env.get("WHATSAPP_PROVIDER_URL") and env.get("WHATSAPP_TOKEN")), "provider": "optional"},
+        "telegram": {
+            "configured": bool(env.get("TELEGRAM_BOT_TOKEN")), "provider": "telegram_bot",
+            "bot_username": env.get("TELEGRAM_BOT_USERNAME", "").lstrip("@") or None,
+        },
         "sms": {"configured": bool(env.get("SMS_PROVIDER_URL") and env.get("SMS_TOKEN")), "provider": "optional"},
     }
+
+
+def dispatch_telegram(chat_id: str, text: str, environment: Optional[Mapping[str, str]] = None,
+                      http_open=None) -> dict:
+    """Send an explicitly consented communication through the club Telegram bot.
+
+    Telegram identifiers are never inferred from a telephone or email address.
+    A recipient must have linked the bot first, so an absent chat id remains a
+    pending delivery rather than a potentially misdirected message.
+    """
+    env = environment if environment is not None else os.environ
+    base = {"id": str(uuid4()), "channel": "telegram", "recipient": str(chat_id or "") or None,
+            "created_at": now_iso(), "provider": "telegram_bot"}
+    token = env.get("TELEGRAM_BOT_TOKEN", "").strip()
+    if not token:
+        return {**base, "status": "pending", "error": "provider_not_configured", "sent_at": None}
+    if not str(chat_id or "").strip():
+        return {**base, "status": "pending", "error": "telegram_not_linked", "sent_at": None}
+    try:
+        payload = json.dumps({"chat_id": str(chat_id), "text": text}).encode("utf-8")
+        opener = http_open or urllib_request.urlopen
+        request = urllib_request.Request(
+            f"https://api.telegram.org/bot{token}/sendMessage", data=payload,
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        with opener(request, timeout=10) as response:
+            result = json.loads(response.read().decode("utf-8"))
+        if not result.get("ok"):
+            return {**base, "status": "failed", "error": "telegram_api_rejected", "sent_at": None}
+        return {**base, "status": "sent", "error": None, "sent_at": now_iso()}
+    except Exception as error:
+        return {**base, "status": "failed", "error": type(error).__name__, "sent_at": None}
 
 
 def dispatch_email(recipient: str, subject: str, body: str,

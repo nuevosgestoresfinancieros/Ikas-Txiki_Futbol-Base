@@ -1,5 +1,5 @@
 export const notificationPreferenceKeys = [
-  "in_app", "email", "callups", "schedule_changes", "payments", "documents",
+  "in_app", "email", "telegram", "callups", "schedule_changes", "payments", "documents",
 ];
 
 export const unreadLabel = (count) => (count > 99 ? "99+" : String(Math.max(0, count || 0)));
