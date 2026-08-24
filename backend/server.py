@@ -7,6 +7,7 @@ from passlib.context import CryptContext
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+from urllib.parse import quote
 import asyncio
 import io
 import base64
@@ -1416,6 +1417,117 @@ async def edit_family(family_id: str, family: Family):
 @api_router.delete("/families/{family_id}")
 async def remove_family(family_id: str):
     return await delete_doc("families", family_id)
+
+
+# ---------- Family access invitations ----------
+class FamilyAccessInvitationRequest(BaseModel):
+    family_ids: List[str] = Field(min_length=1, max_length=500)
+
+
+def _family_access_email(family: dict) -> str | None:
+    for key in ("progenitor1_email", "progenitor2_email"):
+        value = normalized_key(family.get(key))
+        if value and "@" in value:
+            return value
+    return None
+
+
+async def _family_access_username(family: dict) -> str:
+    raw = normalized_key(family.get("progenitor1_nombre") or family.get("contacto_principal") or "familia")
+    base = re.sub(r"[^a-z0-9]+", "", raw)[:18] or "familia"
+    for suffix in range(1, 10000):
+        candidate = f"{base}.{suffix}"
+        if not await db.users.find_one({"username_normalized": normalized_key(candidate)}, {"_id": 1}):
+            return candidate
+    raise HTTPException(status_code=409, detail="No se ha podido generar un usuario único para la familia")
+
+
+def _require_family_access_admin() -> dict:
+    actor = current_user_context.get() or {}
+    if actor.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Solo administración puede gestionar invitaciones familiares")
+    return actor
+
+
+@api_router.get("/families/accesses")
+async def get_family_accesses():
+    _require_family_access_admin()
+    families = await list_docs("families")
+    players = await list_docs("players")
+    users = await db.users.find({"role": "family"}, {"_id": 0, "password_hash": 0}).to_list(5000)
+    users_by_family = {user.get("family_id"): user for user in users if user.get("family_id")}
+    rows = []
+    for family in families:
+        user = users_by_family.get(family.get("id"))
+        email = _family_access_email(family)
+        children = [player for player in players if player.get("familia_id") == family.get("id")]
+        state = "active" if user and account_status(user) == "active" else (
+            invitation_status((user or {}).get("invitation")) if user else ("ready" if email else "missing_email")
+        )
+        rows.append({
+            "family_id": family.get("id"), "family_name": family.get("progenitor1_nombre") or family.get("contacto_principal") or "Familia",
+            "email": email, "children": [{"id": child.get("id"), "name": f"{child.get('nombre', '')} {child.get('apellidos', '')}".strip()} for child in children],
+            "user_id": (user or {}).get("id"), "username": (user or {}).get("username"),
+            "status": state, "invitation_expires_at": ((user or {}).get("invitation") or {}).get("expires_at"),
+        })
+    return sorted(rows, key=lambda row: normalized_key(row["family_name"]))
+
+
+@api_router.post("/families/accesses/invitations")
+async def send_family_access_invitations(request: FamilyAccessInvitationRequest):
+    _require_family_access_admin()
+    family_ids = sorted(set(ids(request.family_ids)))
+    families = await db.families.find({"id": {"$in": family_ids}}, {"_id": 0}).to_list(len(family_ids))
+    found = {family.get("id") for family in families}
+    if found != set(family_ids):
+        raise HTTPException(status_code=404, detail="Una o varias familias no existen")
+    public_url = (os.environ.get("PUBLIC_APP_URL") or os.environ.get("CORS_ORIGINS", "").split(",")[0]).rstrip("/")
+    results = []
+    for family in families:
+        email = _family_access_email(family)
+        if not email:
+            results.append({"family_id": family["id"], "status": "skipped", "reason": "missing_email"})
+            continue
+        children = ids(await db.players.distinct("id", {"familia_id": family["id"]}))
+        existing = await db.users.find_one({"role": "family", "family_id": family["id"]}, {"_id": 0})
+        email_owner = await db.users.find_one({"email_normalized": email}, {"_id": 0, "id": 1, "family_id": 1})
+        if email_owner and email_owner.get("family_id") != family["id"]:
+            results.append({"family_id": family["id"], "status": "skipped", "reason": "email_already_associated"})
+            continue
+        if existing and account_status(existing) == "active":
+            results.append({"family_id": family["id"], "status": "skipped", "reason": "already_active"})
+            continue
+        plain, invitation = issue_token(JWT_SECRET, ttl_minutes=0, ttl_hours=INVITATION_TTL_HOURS)
+        if existing:
+            await db.users.update_one({"id": existing["id"]}, {"$set": {
+                "email": email, "email_normalized": email, "linked_player_ids": children,
+                "invitation": invitation, "account_status": "pending_activation", "active": False, "updated_at": now_iso(),
+            }})
+            target = {**existing, "email": email}
+            action = "family_invitation_resent"
+        else:
+            username = await _family_access_username(family)
+            target = {
+                "id": new_id(), "username": username, "username_normalized": normalized_key(username),
+                "first_name": normalized_text(family.get("progenitor1_nombre") or family.get("contacto_principal") or "Familia"),
+                "last_name": "", "email": email, "email_normalized": email, "phone": family.get("progenitor1_telefono"),
+                "role": "family", "family_id": family["id"], "linked_player_ids": children,
+                "assigned_team_ids": [], "assigned_category_ids": [], "player_id": None,
+                "language": "es", "notification_preferences": NotificationPreferences().model_dump(),
+                "password_hash": pwd_context.hash(generate_temporary_password()), "invitation": invitation,
+                "account_status": "pending_activation", "active": False, "must_change_password": False,
+                "session_version": 0, "failed_login_count": 0, "locked_until": None,
+                "created_at": now_iso(), "updated_at": now_iso(), "last_access_at": None,
+            }
+            await db.users.insert_one(dict(target))
+            action = "family_invitation_created"
+        link = f"{public_url}/activar?token={quote(plain)}"
+        delivery = dispatch_email(email, "Activa tu acceso a Ikas-Txiki", f"Hola,\n\nActiva tu acceso familiar y crea tu contraseña personal:\n{link}\n\nEl enlace caduca en 48 horas. Si no esperabas este correo, puedes ignorarlo.")
+        delivery.update({"type": "family_access_invitation", "family_id": family["id"], "user_id": target["id"]})
+        await db.delivery_logs.insert_one(delivery)
+        await record_user_audit(action, target, ["family_id", "email", "linked_player_ids"])
+        results.append({"family_id": family["id"], "status": delivery["status"], "reason": delivery.get("error")})
+    return {"ok": True, "results": results, "sent": sum(item["status"] == "sent" for item in results)}
 
 
 # ================= TEAMS =================

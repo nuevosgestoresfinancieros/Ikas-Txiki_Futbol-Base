@@ -28,6 +28,7 @@ const Equipment = lazy(() => import("@/pages/Equipment"));
 const Users = lazy(() => import("@/pages/Users"));
 const Calendar = lazy(() => import("@/pages/Calendar"));
 const Portal = lazy(() => import("@/pages/Portal"));
+const ActivateAccount = lazy(() => import("@/pages/ActivateAccount"));
 
 const AppLoader = ({ fullPage = false }) => {
   const { t } = useI18n();
@@ -82,6 +83,7 @@ function App() {
                 ? <Navigate to="/" replace />
                 : <Login onLogin={(u) => setUser(u)} />
           } />
+          <Route path="/activar" element={<Suspense fallback={<AppLoader fullPage />}><ActivateAccount /></Suspense>} />
 
           {/* Rutas protegidas */}
           <Route path="/*" element={
