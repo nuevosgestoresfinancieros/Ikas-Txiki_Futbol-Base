@@ -75,7 +75,7 @@ class TestFamilies:
     def test_create_family(self, session, created_ids):
         r = session.post(f"{API}/families", json={
             "progenitor1_nombre": "TEST_Padre", "progenitor1_email": "p1@test.com",
-            "preferencia_comunicacion": "whatsapp"
+            "preferencia_comunicacion": "telegram"
         })
         assert r.status_code == 200
         d = r.json()

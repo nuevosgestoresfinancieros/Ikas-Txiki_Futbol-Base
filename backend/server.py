@@ -58,7 +58,7 @@ from calendar_service import (
     next_calendar_event, subscription_capability,
 )
 from portal_service import document_status, portal_attendance, portal_callups, safe_payment, safe_player, upcoming
-from notification_service import dispatch_email, make_notification, notification_enabled, provider_configuration
+from notification_service import dispatch_email, dispatch_telegram, make_notification, notification_enabled, provider_configuration
 from brand_assets import BRAND_BLUE, BRAND_TEAL, pdf_logo
 from inscription_import_service import (
     SEASON as IMPORT_SEASON, SAFE_PLAYER_FIELDS, ImportValidationError,
@@ -687,6 +687,7 @@ async def delete_doc(coll: str, _id: str):
 class NotificationPreferences(BaseModel):
     in_app: bool = True
     email: bool = True
+    telegram: bool = True
     callups: bool = True
     schedule_changes: bool = True
     payments: bool = True
@@ -1384,7 +1385,7 @@ class Family(BaseModel):
     progenitor2_email: Optional[str] = None
     domicilio: Optional[str] = None
     contacto_principal: Optional[str] = None
-    preferencia_comunicacion: Optional[str] = "email"  # email, telefono, whatsapp
+    preferencia_comunicacion: Optional[str] = "email"  # email, telefono, telegram
     observaciones: Optional[str] = None
 
 
@@ -5728,7 +5729,7 @@ class Communication(BaseModel):
     destinatario_tipo: str = "equipo"  # equipo, categoria, individual
     destinatario_id: Optional[str] = None
     destinatario_nombre: Optional[str] = None
-    canal: str = "email"  # email, whatsapp
+    canal: str = "email"  # email, telegram; whatsapp only for legacy records
     asunto: Optional[str] = None
     mensaje: Optional[str] = None
     enviado: bool = False
@@ -5738,7 +5739,7 @@ class Communication(BaseModel):
     @field_validator("canal")
     @classmethod
     def validate_channel(cls, value: str):
-        if value not in {"email", "whatsapp", "sms"}:
+        if value not in {"email", "telegram", "whatsapp", "sms"}:
             raise ValueError("Canal no válido")
         return value
 
@@ -5805,7 +5806,7 @@ def _contact_candidates(document: Mapping[str, Any], channel: str) -> list[dict]
     fields = {
         "email": ("email", "email_formulario", "progenitor1_email", "progenitor2_email"),
         "sms": ("phone", "progenitor1_telefono", "progenitor2_telefono"),
-        "whatsapp": ("phone", "progenitor1_telefono", "progenitor2_telefono"),
+        "telegram": ("telegram_chat_id",),
     }.get(channel, ())
     return [{**dict(document), "value": document.get(field)} for field in fields if document.get(field)]
 
@@ -5848,7 +5849,7 @@ async def communication_targets(data: dict, user: Optional[Mapping[str, Any]] = 
     eligibility_exclusions: dict[str, int] = defaultdict(int)
     player_projection = {
         "_id": 0, "active": 1, "estado": 1, "account_status": 1,
-        "email_formulario": 1, "progenitor1_email": 1, "progenitor2_email": 1,
+        "email_formulario": 1, "progenitor1_email": 1, "progenitor2_email": 1, "telegram_chat_id": 1,
         "progenitor1_telefono": 1, "progenitor2_telefono": 1,
         "communication_consents": 1, "consents": 1, "historical.consents": 1,
     }
@@ -5860,7 +5861,7 @@ async def communication_targets(data: dict, user: Optional[Mapping[str, Any]] = 
             eligibility_exclusions["recipient_inactive"] += 1
     family_projection = {
         "_id": 0, "active": 1, "estado": 1, "account_status": 1,
-        "progenitor1_email": 1, "progenitor2_email": 1,
+        "progenitor1_email": 1, "progenitor2_email": 1, "telegram_chat_id": 1,
         "progenitor1_telefono": 1, "progenitor2_telefono": 1,
         "communication_consents": 1, "consents": 1, "historical.consents": 1,
     }
@@ -5967,6 +5968,19 @@ async def create_communication(comm: Communication):
         else:
             logs = [{"id": new_id(), "channel": "email", "recipient": None, "provider": "smtp",
                      "status": "pending", "error": "recipient_missing", "created_at": now_iso(), "sent_at": None}]
+    elif data.get("canal") == "telegram":
+        _, destinations, consent_exclusions = await communication_targets(data, user)
+        if consent_exclusions:
+            await record_security_event(
+                "security.communication_consent.filtered", user, "communication_delivery",
+                "consent_not_granted", aggregate=consent_exclusions,
+            )
+        if destinations:
+            text = "\n\n".join(part for part in (data.get("asunto"), data.get("mensaje")) if part)
+            logs = [dispatch_telegram(destination, text) for destination in destinations]
+        else:
+            logs = [{"id": new_id(), "channel": "telegram", "recipient": None, "provider": "telegram_bot",
+                     "status": "pending", "error": "telegram_not_linked", "created_at": now_iso(), "sent_at": None}]
     else:
         provider = provider_configuration().get(data.get("canal"), {"configured": False, "provider": "optional"})
         logs = [{"id": new_id(), "channel": data.get("canal"), "recipient": None,

@@ -41,6 +41,9 @@ def communication_consent(document: Mapping[str, Any], channel: str) -> str:
     aliases = {
         "email": ("email", "notifications"),
         "sms": ("sms",),
+        "telegram": ("telegram",),
+        # Historical WhatsApp preferences remain readable, but new deliveries
+        # use Telegram and require a separate explicit Telegram consent.
         "whatsapp": ("whatsapp",),
         "in_app": ("in_app", "notifications"),
     }

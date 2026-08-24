@@ -80,8 +80,8 @@ MODULES: dict[str, dict[str, Any]] = {
     "communications": {
         "routes": ["/comunicacion"],
         "roles": ["admin", "coordinator", "coach", "family", "player"],
-        "es": "Comunicación reúne avisos permitidos. El asistente no envía correos, SMS ni WhatsApp.",
-        "eu": "Komunikazioa atalak baimendutako oharrak biltzen ditu. Laguntzaileak ez du mezu elektronikorik, SMSrik edo WhatsApp mezurik bidaltzen.",
+        "es": "Comunicación reúne avisos permitidos. El asistente no envía correos, SMS ni mensajes de Telegram.",
+        "eu": "Komunikazioa atalak baimendutako oharrak biltzen ditu. Laguntzaileak ez du mezu elektronikorik, SMSrik edo Telegram mezurik bidaltzen.",
     },
     "calendar": {
         "routes": ["/calendario"],

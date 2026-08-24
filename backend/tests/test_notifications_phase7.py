@@ -5,7 +5,7 @@ from starlette.requests import Request
 
 from authz import ROLE_PERMISSIONS, route_permission
 from notification_service import (
-    dispatch_email, make_notification, notification_enabled, provider_configuration,
+    dispatch_email, dispatch_telegram, make_notification, notification_enabled, provider_configuration,
 )
 from server import scope_for_collection
 from server import Communication
@@ -30,7 +30,7 @@ def test_preferences_disable_only_the_related_automatic_events():
 def test_provider_status_does_not_claim_unconfigured_channels_are_available():
     status = provider_configuration({})
     assert status["email"]["configured"] is False
-    assert status["whatsapp"]["configured"] is False
+    assert status["telegram"]["configured"] is False
     assert status["sms"]["configured"] is False
 
 
@@ -38,6 +38,29 @@ def test_email_without_provider_is_recorded_pending_not_sent():
     result = dispatch_email("family@example.test", "Subject", "Body", environment={})
     assert result["status"] == "pending" and result["sent_at"] is None
     assert result["error"] == "provider_not_configured"
+
+
+def test_telegram_never_uses_phone_or_sends_without_a_linked_chat():
+    assert dispatch_telegram("", "Aviso", {"TELEGRAM_BOT_TOKEN": "secret"})["error"] == "telegram_not_linked"
+    assert dispatch_telegram("123", "Aviso", {})["error"] == "provider_not_configured"
+
+
+def test_configured_telegram_posts_only_to_the_explicit_chat_id():
+    requests = []
+
+    class FakeResponse:
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def read(self): return b'{"ok": true}'
+
+    def fake_open(request, timeout):
+        requests.append((request, timeout))
+        return FakeResponse()
+
+    result = dispatch_telegram("chat-123", "Aviso", {"TELEGRAM_BOT_TOKEN": "test-token"}, fake_open)
+    assert result["status"] == "sent"
+    assert requests[0][0].full_url.endswith("/bottest-token/sendMessage")
+    assert b'chat-123' in requests[0][0].data
 
 
 def test_configured_email_is_sent_only_after_provider_success():
@@ -105,7 +128,7 @@ def test_communication_cannot_claim_it_was_sent_from_client_data():
     assert payload["estado_envio"] == "pending"
 
 
-@pytest.mark.parametrize("channel", ["email", "whatsapp", "sms"])
+@pytest.mark.parametrize("channel", ["email", "telegram", "whatsapp", "sms"])
 def test_supported_communication_channels_are_explicit(channel):
     assert Communication(canal=channel).canal == channel
 

@@ -16,7 +16,7 @@ const emptyForm = {
   first_name: "", last_name: "", username: "", email: "", phone: "", password: "",
   password_confirmation: "", role: "coach", account_status: "active",
   assigned_team_ids: [], assigned_category_ids: [], player_id: "", family_id: "", language: "es",
-  access_method: "password", notification_preferences: { in_app: true, email: true, callups: true, schedule_changes: true, payments: true, documents: true },
+  access_method: "password", notification_preferences: { in_app: true, email: true, telegram: true, callups: true, schedule_changes: true, payments: true, documents: true },
 };
 
 const Select = ({ label, value, onChange, children, testid }) => (
