@@ -119,6 +119,15 @@ const Dashboard = () => {
   const options = data.filter_options || { temporadas: [], categorias: [], equipos: [] };
   const attendance = data.asistencia_semanal || {};
   const callupPending = data.convocatorias_pendientes?.total || 0;
+  const playersRoute = (additionalFilters = {}) => {
+    const query = new URLSearchParams();
+    const combinedFilters = { ...filters, ...additionalFilters };
+    Object.entries(combinedFilters).forEach(([key, value]) => {
+      if (value) query.set(key, value);
+    });
+    const suffix = query.toString();
+    return suffix ? `/jugadores?${suffix}` : "/jugadores";
+  };
 
   return (
     <div data-testid="dashboard-page" className="animate-fade-up">
@@ -208,8 +217,8 @@ const Dashboard = () => {
           <span className="text-xs font-semibold text-slate-400">{t("needsAttention")}: {alerts.length}</span>
         </div>
         <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <PermissionGate resource="players"><MetricCard testid="active" icon={Users} label={t("activePlayers")} value={data.jugadores_activos} tone="teal" onClick={() => navigate("/jugadores?estado=activo")} /></PermissionGate>
-          <PermissionGate resource="players"><MetricCard testid="docs" icon={FileWarning} label={t("pendingDocs")} value={data.documentacion_pendiente} tone="amber" onClick={() => navigate("/jugadores")} /></PermissionGate>
+          <PermissionGate resource="players"><MetricCard testid="active" icon={Users} label={t("activePlayers")} value={data.jugadores_activos} tone="teal" onClick={() => navigate(playersRoute({ estado: "activo" }))} /></PermissionGate>
+          <PermissionGate resource="players"><MetricCard testid="docs" icon={FileWarning} label={t("pendingDocs")} value={data.documentacion_pendiente} tone="amber" onClick={() => navigate(playersRoute({ documentacion_pendiente: "true" }))} /></PermissionGate>
           <PermissionGate resource="payments"><MetricCard testid="payments" icon={Euro} label={t("pendingPayments")} value={data.pagos_pendientes} detail={`${data.importe_pendiente} € ${t("pendingAmount")}`} tone="rose" onClick={() => navigate("/pagos")} /></PermissionGate>
           <PermissionGate resource="matches"><MetricCard testid="matches" icon={CalendarDays} label={t("upcomingMatches")} value={matches.length} tone="blue" onClick={() => navigate("/partidos")} /></PermissionGate>
         </div>
@@ -218,7 +227,7 @@ const Dashboard = () => {
           <PermissionGate resource="inscriptions"><CompactMetric icon={UserPlus} label={t("newInscriptions")} value={data.nuevas_inscripciones} onClick={() => navigate("/inscripciones")} /></PermissionGate>
           <PermissionGate resource="inscriptions"><CompactMetric icon={ClipboardCheck} label={t("pendingInscriptions")} value={data.inscripciones_pendientes} onClick={() => navigate("/inscripciones")} /></PermissionGate>
           <PermissionGate resource="authorizations"><CompactMetric icon={FileSignature} label={t("authorizations")} value={data.autorizaciones_pendientes} onClick={() => navigate("/autorizaciones")} /></PermissionGate>
-          <PermissionGate resource="players"><CompactMetric icon={Trophy} label={t("totalPlayers")} value={data.total_jugadores} onClick={() => navigate("/jugadores")} /></PermissionGate>
+          <PermissionGate resource="players"><CompactMetric icon={Trophy} label={t("totalPlayers")} value={data.total_jugadores} onClick={() => navigate(playersRoute())} /></PermissionGate>
         </div>
       </section>
 

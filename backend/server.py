@@ -1327,7 +1327,8 @@ async def create_player(player: Player):
 
 @api_router.get("/players")
 async def get_players(equipo_id: Optional[str] = None, estado: Optional[str] = None,
-                      categoria: Optional[str] = None, q: Optional[str] = None):
+                      categoria: Optional[str] = None, temporada: Optional[str] = None,
+                      documentacion_pendiente: bool = False, q: Optional[str] = None):
     query: Dict[str, Any] = {}
     if equipo_id:
         query["equipo_id"] = equipo_id
@@ -1335,7 +1336,15 @@ async def get_players(equipo_id: Optional[str] = None, estado: Optional[str] = N
         query["estado"] = estado
     if categoria:
         query["categoria"] = categoria
+    if documentacion_pendiente:
+        query["estado_documental"] = {"$ne": "completo"}
     docs = await list_docs("players", query)
+    if temporada:
+        season_team_ids = {
+            team.get("id") for team in await list_docs("teams", {"temporada": temporada})
+            if team.get("id")
+        }
+        docs = [player for player in docs if player.get("equipo_id") in season_team_ids]
     if q:
         ql = q.lower()
         docs = [d for d in docs if ql in (f"{d.get('nombre','')} {d.get('apellidos','')}").lower()]

@@ -23,8 +23,10 @@ const Players = () => {
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
   const [fEstado, setFEstado] = useState(params.get("estado") || "all");
-  const [fEquipo, setFEquipo] = useState("all");
-  const [fCat, setFCat] = useState("all");
+  const [fEquipo, setFEquipo] = useState(params.get("equipo_id") || "all");
+  const [fCat, setFCat] = useState(params.get("categoria") || "all");
+  const temporada = params.get("temporada") || "";
+  const documentacionPendiente = params.get("documentacion_pendiente") === "true";
   const [dialog, setDialog] = useState(false);
   const [editing, setEditing] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -39,6 +41,8 @@ const Players = () => {
     if (fEstado !== "all") query.estado = fEstado;
     if (fEquipo !== "all") query.equipo_id = fEquipo;
     if (fCat !== "all") query.categoria = fCat;
+    if (temporada) query.temporada = temporada;
+    if (documentacionPendiente) query.documentacion_pendiente = true;
     if (debouncedQ) query.q = debouncedQ;
     try {
       const res = await api.get("/players", { params: query });
@@ -48,7 +52,7 @@ const Players = () => {
     } finally {
       setLoading(false);
     }
-  }, [debouncedQ, fCat, fEquipo, fEstado]);
+  }, [debouncedQ, documentacionPendiente, fCat, fEquipo, fEstado, temporada]);
 
   const loadMeta = async () => {
     const [tm, cat] = await Promise.all([api.get("/teams"), api.get("/categories")]);
@@ -103,7 +107,7 @@ const Players = () => {
           <SelectTrigger className="h-11 sm:w-44" data-testid="filter-equipo"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">{t("team")}: {t("all")}</SelectItem>
-            {teams.map(tm=><SelectItem key={tm.id} value={tm.id}>{tm.nombre}</SelectItem>)}
+            {teams.filter((tm) => !temporada || tm.temporada === temporada).map(tm=><SelectItem key={tm.id} value={tm.id}>{tm.nombre}</SelectItem>)}
           </SelectContent>
         </Select>
         <Select value={fCat} onValueChange={setFCat}>
@@ -114,6 +118,13 @@ const Players = () => {
           </SelectContent>
         </Select>
       </div>
+      {(temporada || documentacionPendiente) && (
+        <p className="-mt-2 mb-5 text-xs font-semibold text-slate-500" data-testid="players-applied-context">
+          {temporada && `${t("season")}: ${temporada}`}
+          {temporada && documentacionPendiente && " · "}
+          {documentacionPendiente && t("pendingDocs")}
+        </p>
+      )}
 
       {loading ? (
         <div className="surface-card space-y-3 p-5" role="status" aria-label={t("loading")}>
