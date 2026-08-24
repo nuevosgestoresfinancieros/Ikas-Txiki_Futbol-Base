@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from starlette.requests import Request
 
 os.environ.setdefault("MONGO_URL", "mongodb://127.0.0.1:27039")
 os.environ.setdefault("DB_NAME", "ikastxiki_users_phase1_test")
@@ -103,3 +104,23 @@ def test_user_audit_uses_internal_events_without_secret_values(monkeypatch):
     assert event["type"] == "user.updated"
     assert event["detail"]["changed_fields"] == ["role"]
     assert "password" not in str(event)
+
+
+def test_account_provisioning_is_admin_only_and_uses_user_administration_permission():
+    get_request = Request({"type": "http", "method": "GET", "path": "/api/account-provisioning/families", "headers": []})
+    post_request = Request({"type": "http", "method": "POST", "path": "/api/account-provisioning/players/invitations", "headers": []})
+    assert server.route_permission(get_request) == ("users", "administer")
+    assert server.route_permission(post_request) == ("users", "administer")
+    token = server.current_user_context.set({"id": "coach-test", "role": "coach"})
+    try:
+        with pytest.raises(Exception) as error:
+            server._require_family_access_admin()
+        assert error.value.status_code == 403
+    finally:
+        server.current_user_context.reset(token)
+
+
+def test_player_bulk_access_is_limited_to_upper_categories():
+    assert server._upper_category_player({"categoria": "JUVENIL"}) is True
+    assert server._upper_category_player({"categoria": "Sénior"}) is True
+    assert server._upper_category_player({"categoria": "Cadete"}) is False

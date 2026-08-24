@@ -1449,7 +1449,7 @@ def _require_family_access_admin() -> dict:
     return actor
 
 
-@api_router.get("/families/accesses")
+@api_router.get("/account-provisioning/families")
 async def get_family_accesses():
     _require_family_access_admin()
     families = await list_docs("families")
@@ -1473,7 +1473,7 @@ async def get_family_accesses():
     return sorted(rows, key=lambda row: normalized_key(row["family_name"]))
 
 
-@api_router.post("/families/accesses/invitations")
+@api_router.post("/account-provisioning/families/invitations")
 async def send_family_access_invitations(request: FamilyAccessInvitationRequest):
     _require_family_access_admin()
     family_ids = sorted(set(ids(request.family_ids)))
@@ -1527,6 +1527,102 @@ async def send_family_access_invitations(request: FamilyAccessInvitationRequest)
         await db.delivery_logs.insert_one(delivery)
         await record_user_audit(action, target, ["family_id", "email", "linked_player_ids"])
         results.append({"family_id": family["id"], "status": delivery["status"], "reason": delivery.get("error")})
+    return {"ok": True, "results": results, "sent": sum(item["status"] == "sent" for item in results)}
+
+
+class PlayerAccessInvitationRequest(BaseModel):
+    player_ids: List[str] = Field(min_length=1, max_length=500)
+
+
+def _upper_category_player(player: dict) -> bool:
+    return normalized_key(player.get("categoria")) in {"juvenil", "senior", "sénior"}
+
+
+@api_router.get("/account-provisioning/players")
+async def get_player_accesses():
+    _require_family_access_admin()
+    players = await list_docs("players")
+    families = {item.get("id"): item for item in await list_docs("families") if item.get("id")}
+    users = await db.users.find({"role": "player"}, {"_id": 0, "password_hash": 0}).to_list(5000)
+    users_by_player = {user.get("player_id"): user for user in users if user.get("player_id")}
+    rows = []
+    for player in players:
+        if not _upper_category_player(player):
+            continue
+        user = users_by_player.get(player.get("id"))
+        email = normalized_key(player.get("email_formulario")) or None
+        family = families.get(player.get("familia_id"), {})
+        state = "active" if user and account_status(user) == "active" else (
+            invitation_status((user or {}).get("invitation")) if user else ("ready" if email else "missing_email")
+        )
+        rows.append({
+            "player_id": player.get("id"),
+            "player_name": f"{player.get('nombre', '')} {player.get('apellidos', '')}".strip(),
+            "category": player.get("categoria"), "email": email,
+            "family_id": player.get("familia_id"),
+            "family_name": family.get("progenitor1_nombre") or family.get("contacto_principal"),
+            "user_id": (user or {}).get("id"), "username": (user or {}).get("username"),
+            "status": state, "invitation_expires_at": ((user or {}).get("invitation") or {}).get("expires_at"),
+        })
+    return sorted(rows, key=lambda row: normalized_key(row["player_name"]))
+
+
+@api_router.post("/account-provisioning/players/invitations")
+async def send_player_access_invitations(request: PlayerAccessInvitationRequest):
+    _require_family_access_admin()
+    player_ids = sorted(set(ids(request.player_ids)))
+    players = await db.players.find({"id": {"$in": player_ids}}, {"_id": 0}).to_list(len(player_ids))
+    if {player.get("id") for player in players} != set(player_ids):
+        raise HTTPException(status_code=404, detail="Uno o varios jugadores no existen")
+    public_url = (os.environ.get("PUBLIC_APP_URL") or os.environ.get("CORS_ORIGINS", "").split(",")[0]).rstrip("/")
+    results = []
+    for player in players:
+        if not _upper_category_player(player):
+            results.append({"player_id": player["id"], "status": "skipped", "reason": "category_not_eligible"})
+            continue
+        email = normalized_key(player.get("email_formulario")) or None
+        if not email or "@" not in email:
+            results.append({"player_id": player["id"], "status": "skipped", "reason": "missing_personal_email"})
+            continue
+        existing = await db.users.find_one({"role": "player", "player_id": player["id"]}, {"_id": 0})
+        email_owner = await db.users.find_one({"email_normalized": email}, {"_id": 0, "id": 1, "player_id": 1})
+        if email_owner and email_owner.get("player_id") != player["id"]:
+            results.append({"player_id": player["id"], "status": "skipped", "reason": "email_already_associated"})
+            continue
+        if existing and account_status(existing) == "active":
+            results.append({"player_id": player["id"], "status": "skipped", "reason": "already_active"})
+            continue
+        plain, invitation = issue_token(JWT_SECRET, ttl_minutes=0, ttl_hours=INVITATION_TTL_HOURS)
+        if existing:
+            await db.users.update_one({"id": existing["id"]}, {"$set": {
+                "email": email, "email_normalized": email, "family_id": player.get("familia_id"),
+                "invitation": invitation, "account_status": "pending_activation", "active": False, "updated_at": now_iso(),
+            }})
+            target = {**existing, "email": email, "family_id": player.get("familia_id")}
+            action = "player_invitation_resent"
+        else:
+            username = await _family_access_username({"progenitor1_nombre": f"{player.get('nombre', '')} {player.get('apellidos', '')}"})
+            target = {
+                "id": new_id(), "username": username, "username_normalized": normalized_key(username),
+                "first_name": normalized_text(player.get("nombre") or "Jugador"),
+                "last_name": normalized_text(player.get("apellidos") or "Ikas-Txiki"),
+                "email": email, "email_normalized": email, "phone": None,
+                "role": "player", "player_id": player["id"], "family_id": player.get("familia_id"),
+                "linked_player_ids": [], "assigned_team_ids": [], "assigned_category_ids": [],
+                "language": "es", "notification_preferences": NotificationPreferences().model_dump(),
+                "password_hash": pwd_context.hash(generate_temporary_password()), "invitation": invitation,
+                "account_status": "pending_activation", "active": False, "must_change_password": False,
+                "session_version": 0, "failed_login_count": 0, "locked_until": None,
+                "created_at": now_iso(), "updated_at": now_iso(), "last_access_at": None,
+            }
+            await db.users.insert_one(dict(target))
+            action = "player_invitation_created"
+        link = f"{public_url}/activar?token={quote(plain)}"
+        delivery = dispatch_email(email, "Activa tu acceso de jugador a Ikas-Txiki", f"Hola,\n\nActiva tu acceso de jugador y crea tu contraseña personal:\n{link}\n\nEl enlace caduca en 48 horas. Si no esperabas este correo, puedes ignorarlo.")
+        delivery.update({"type": "player_access_invitation", "player_id": player["id"], "user_id": target["id"]})
+        await db.delivery_logs.insert_one(delivery)
+        await record_user_audit(action, target, ["player_id", "family_id", "email"])
+        results.append({"player_id": player["id"], "status": delivery["status"], "reason": delivery.get("error")})
     return {"ok": True, "results": results, "sent": sum(item["status"] == "sent" for item in results)}
 
 
