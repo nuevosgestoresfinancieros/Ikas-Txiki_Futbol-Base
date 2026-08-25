@@ -239,7 +239,8 @@ def analyze_rows(rows: list[dict], season: str, existing: Mapping[str, list[dict
                  file_sha256: str, duplicate_file: bool = False,
                  *, allow_pending_team: bool = False,
                  allow_pending_contact: bool = False,
-                 ignore_team_name_suggestions: bool = False) -> dict:
+                 ignore_team_name_suggestions: bool = False,
+                 allow_pending_family_conflicts: bool = False) -> dict:
     if season != SEASON:
         raise ImportValidationError(f"La temporada permitida es {SEASON}")
     players = list(existing.get("players") or [])
@@ -331,7 +332,14 @@ def analyze_rows(rows: list[dict], season: str, existing: Mapping[str, list[dict
         elif len(team_matches) > 1:
             conflict_message = "Hay más de un equipo existente con el mismo nombre."
         elif len(families_by_key.get(family_key(record), [])) > 1:
-            conflict_message = "Hay más de una familia existente para la misma referencia y requiere revisión."
+            if allow_pending_family_conflicts:
+                # A historical workbook must never be blocked merely because
+                # legacy data contains duplicate household references. Mark it
+                # for a separate, reviewable family link instead of choosing an
+                # arbitrary existing family.
+                record["_family_existing_ambiguous"] = True
+            else:
+                conflict_message = "Hay más de una familia existente para la misma referencia y requiere revisión."
         elif team_matches:
             team = team_matches[0]
             if team.get("categoria") and normalize_key(team.get("categoria")) != normalize_key(record.get("categoria")):

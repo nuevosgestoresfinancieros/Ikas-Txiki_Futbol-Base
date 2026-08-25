@@ -3628,6 +3628,10 @@ def _build_import_operations(analysis: dict, existing: dict, job_id: str,
             # Possible sibling links are a review suggestion, never a reason to
             # silently merge two households during the initial historical load.
             fkey = f"{fkey}:staging:{row.get('_staging_id') or row.get('_row')}"
+        elif keep_family_candidates_separate and row.get("_family_existing_ambiguous"):
+            # Several legacy families already share this source reference. Keep
+            # the imported household separate until an administrator reviews it.
+            fkey = f"{fkey}:historical-pending"
         family = family_by_key.get(fkey)
         family_before = family
         if family:
@@ -4395,7 +4399,7 @@ async def confirm_import_staging(draft_id: str, request: StagingConfirmRequest):
         analysis = analyze_rows(
             rows, draft["season"], existing, draft["source_sha256"], False,
             allow_pending_team=True, allow_pending_contact=True,
-            ignore_team_name_suggestions=True,
+            ignore_team_name_suggestions=True, allow_pending_family_conflicts=True,
         )
         if analysis["blocking_errors"] or analysis["unresolved_conflicts"]:
             raise HTTPException(status_code=409, detail="La validación final ha detectado bloqueos")

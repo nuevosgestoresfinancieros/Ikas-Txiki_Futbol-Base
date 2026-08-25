@@ -53,6 +53,30 @@ def test_historical_operations_keep_team_pending_and_never_create_payments():
     assert inscription["equipo_id"] is None
 
 
+def test_historical_duplicate_legacy_families_do_not_block_or_merge_the_import():
+    source = record(equipo="", progenitor1_email="family@example.invalid")
+    existing = {
+        "players": [], "inscriptions": [], "payments": [], "teams": [],
+        "families": [
+            {"id": "legacy-1", "progenitor1_email": "family@example.invalid"},
+            {"id": "legacy-2", "progenitor1_email": "family@example.invalid"},
+        ],
+    }
+    analysis = analyze_rows(
+        [source], "2026-2027", existing, "test", allow_pending_team=True,
+        allow_pending_contact=True, ignore_team_name_suggestions=True,
+        allow_pending_family_conflicts=True,
+    )
+    operations = _build_import_operations(
+        analysis, existing, "job-test", {}, allow_pending_team=True,
+        keep_family_candidates_separate=True, skip_payments=True,
+    )
+    family = next(item["after"] for item in operations if item["collection"] == "families")
+
+    assert analysis["unresolved_conflicts"] == 0
+    assert family["id"] not in {"legacy-1", "legacy-2"}
+
+
 def test_compact_history_enriches_only_unique_existing_player_and_protects_bank():
     draft = {
         "season": "2026-2027", "duplicates": [], "fuzzy_matches": [],
