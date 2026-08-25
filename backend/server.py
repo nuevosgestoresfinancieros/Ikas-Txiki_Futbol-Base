@@ -1191,6 +1191,15 @@ async def generate_user_invitation(user_id: str):
     actor = current_user_context.get() or {}
     enforce_sensitive_rate(actor, "invitation")
     user = await mutable_security_user(user_id)
+    email = str(user.get("email") or "").strip().lower()
+    if not email or "@" not in email:
+        raise HTTPException(status_code=422, detail="La cuenta necesita un correo válido para enviar la invitación")
+    public_url = (os.environ.get("PUBLIC_APP_URL") or "").strip().rstrip("/")
+    if not public_url:
+        origin = str(os.environ.get("CORS_ORIGINS") or "").strip().strip("[]")
+        public_url = origin.split(",")[0].strip().strip('"').rstrip("/")
+    if not public_url:
+        raise HTTPException(status_code=503, detail="No está configurada la URL pública de activación")
     plain, record = issue_token(JWT_SECRET, ttl_minutes=0, ttl_hours=INVITATION_TTL_HOURS)
     previous = user.get("invitation") or {}
     if previous and not previous.get("used_at"):
@@ -1199,9 +1208,18 @@ async def generate_user_invitation(user_id: str):
         "invitation": record, "previous_invitation": previous or None,
         "account_status": "pending_activation", "active": False,
     }})
-    await record_user_audit("invitation_generated", user, [])
-    return {"ok": True, "invitation_token": plain, "expires_at": record["expires_at"],
-            "show_once": True, "delivery": "not_sent"}
+    link = f"{public_url}/activar?token={quote(plain)}"
+    delivery = dispatch_email(
+        email, "Activa tu acceso a Ikas-Txiki",
+        f"Hola,\n\nActiva tu acceso y crea tu contraseña personal:\n{link}\n\n"
+        f"El enlace caduca en {INVITATION_TTL_HOURS} horas. Si no esperabas este correo, puedes ignorarlo.",
+    )
+    delivery.update({"type": "user_access_invitation", "user_id": user_id})
+    await db.delivery_logs.insert_one(delivery)
+    await record_user_audit("invitation_sent" if delivery["status"] == "sent" else "invitation_delivery_failed", user, [])
+    if delivery["status"] != "sent":
+        raise HTTPException(status_code=502, detail="No se pudo enviar la invitación; revisa la configuración de correo")
+    return {"ok": True, "delivery": "sent", "expires_at": record["expires_at"]}
 
 
 @api_router.delete("/users/{user_id}/security/invitation")

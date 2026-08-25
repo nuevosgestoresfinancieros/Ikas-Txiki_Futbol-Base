@@ -15,11 +15,14 @@ import server
 
 
 def database(user):
-    return SimpleNamespace(users=SimpleNamespace(
-        find_one=AsyncMock(return_value=user),
-        update_one=AsyncMock(return_value=SimpleNamespace(modified_count=1)),
-        count_documents=AsyncMock(return_value=1),
-    ))
+    return SimpleNamespace(
+        users=SimpleNamespace(
+            find_one=AsyncMock(return_value=user),
+            update_one=AsyncMock(return_value=SimpleNamespace(modified_count=1)),
+            count_documents=AsyncMock(return_value=1),
+        ),
+        delivery_logs=SimpleNamespace(insert_one=AsyncMock()),
+    )
 
 
 def run_as_admin(call):
@@ -53,16 +56,41 @@ def test_temporary_password_is_returned_once_but_only_hash_is_persisted(monkeypa
     assert db.users.update_one.await_args.args[1]["$inc"]["session_version"] == 1
 
 
-def test_invitation_regeneration_invalidates_previous_and_never_persists_plain_token(monkeypatch):
+def test_invitation_is_emailed_and_never_returns_or_persists_plain_token(monkeypatch):
     user = {"id": "user-fixture", "role": "family", "session_version": 0,
+            "email": "family@example.invalid",
             "invitation": {"digest": "old", "expires_at": "2099-01-01T00:00:00+00:00"}}
     db = database(user)
     monkeypatch.setattr(server, "db", db)
     monkeypatch.setattr(server, "record_user_audit", AsyncMock())
+    monkeypatch.setenv("PUBLIC_APP_URL", "https://example.invalid")
+    monkeypatch.setattr(server, "dispatch_email", lambda *_args, **_kwargs: {
+        "status": "sent", "error": None, "recipient": "family@example.invalid",
+    })
     result = run_as_admin(server.generate_user_invitation(user["id"]))
     update = db.users.update_one.await_args.args[1]["$set"]
-    assert result["delivery"] == "not_sent" and result["invitation_token"] not in str(update)
+    assert result["delivery"] == "sent" and "invitation_token" not in result
+    assert "token" not in str(update)
     assert update["previous_invitation"]["cancelled_at"]
+    delivery = db.delivery_logs.insert_one.await_args.args[0]
+    assert delivery["type"] == "user_access_invitation" and delivery["status"] == "sent"
+
+
+def test_invitation_delivery_failure_is_logged_without_disclosing_the_token(monkeypatch):
+    user = {"id": "user-fixture", "role": "family", "session_version": 0,
+            "email": "family@example.invalid"}
+    db = database(user)
+    monkeypatch.setattr(server, "db", db)
+    monkeypatch.setattr(server, "record_user_audit", AsyncMock())
+    monkeypatch.setenv("PUBLIC_APP_URL", "https://example.invalid")
+    monkeypatch.setattr(server, "dispatch_email", lambda *_args, **_kwargs: {
+        "status": "failed", "error": "SMTPException", "recipient": "family@example.invalid",
+    })
+    with pytest.raises(Exception) as error:
+        run_as_admin(server.generate_user_invitation(user["id"]))
+    assert error.value.status_code == 502
+    assert "token" not in str(error.value.detail).lower()
+    assert db.delivery_logs.insert_one.await_args.args[0]["status"] == "failed"
 
 
 def test_session_revocation_rejects_self_and_increments_other_user(monkeypatch):
