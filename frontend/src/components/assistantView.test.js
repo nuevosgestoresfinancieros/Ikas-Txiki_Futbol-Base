@@ -76,6 +76,8 @@ test("Cibermedida badge remains an external corporate link", () => {
   expect(html).toContain('href="https://cibermedida.es"');
   expect(html).toContain('target="_blank"');
   expect(html).toContain('rel="noopener noreferrer"');
+  expect(html).toContain("Una creación de Cibermedida");
+  expect(html).toContain('class="cibermedida-badge-label"');
 });
 
 test("assistant identity and essential labels are complete in ES and EU", () => {
