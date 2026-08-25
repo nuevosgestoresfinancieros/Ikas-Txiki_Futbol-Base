@@ -189,6 +189,18 @@
     text-transform: uppercase;
 }
 
+/* The second-kit group is intentionally lighter than the main table header.
+   These scoped rules override the authenticated-table header defaults. */
+.app-authenticated main table thead th.equipment-second-kit-group {
+    background: #dbeefe;
+    color: #0e3554;
+}
+
+.app-authenticated main table thead th.equipment-second-kit-column {
+    background: #eff8ff;
+    color: #145482;
+}
+
 .app-authenticated main table tbody tr:nth-child(even) {
     background: #f8fbfe;
 }

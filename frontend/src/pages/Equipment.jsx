@@ -232,7 +232,7 @@ const Equipment = () => {
                 <th rowSpan="2" className="px-3 py-3">{t("equipmentShorts")}</th>
                 <th rowSpan="2" className="px-3 py-3">{t("equipmentTracksuit")}</th>
                 <th rowSpan="2" className="px-3 py-3">{t("equipmentSocks")}</th>
-                <th colSpan="4" scope="colgroup" className="border-x border-sky-100 bg-sky-100 px-3 py-2 text-center text-sky-900">
+                <th colSpan="4" scope="colgroup" className="equipment-second-kit-group border-x border-sky-100 px-3 py-2 text-center">
                   {t("equipmentSecondKit")}
                 </th>
                 <th rowSpan="2" className="px-3 py-3">{t("equipmentShoes")}</th>
@@ -241,11 +241,11 @@ const Equipment = () => {
                 <th rowSpan="2" className="px-3 py-3 min-w-[140px]">{t("equipmentNotes")}</th>
                 <th rowSpan="2" className="px-3 py-3 text-right">{t("equipmentActions")}</th>
               </tr>
-              <tr className="bg-sky-50 text-sky-800">
-                <th scope="col" className="border-l border-sky-100 px-3 py-2">{t("equipmentSecondKitName")}</th>
-                <th scope="col" className="px-3 py-2">{t("equipmentSecondKitBib")}</th>
-                <th scope="col" className="px-3 py-2">{t("equipmentSecondKitShirt")}</th>
-                <th scope="col" className="border-r border-sky-100 px-3 py-2">{t("equipmentSecondKitSocks")}</th>
+              <tr>
+                <th scope="col" className="equipment-second-kit-column border-l border-sky-100 px-3 py-2">{t("equipmentSecondKitName")}</th>
+                <th scope="col" className="equipment-second-kit-column px-3 py-2">{t("equipmentSecondKitBib")}</th>
+                <th scope="col" className="equipment-second-kit-column px-3 py-2">{t("equipmentSecondKitShirt")}</th>
+                <th scope="col" className="equipment-second-kit-column border-r border-sky-100 px-3 py-2">{t("equipmentSecondKitSocks")}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
