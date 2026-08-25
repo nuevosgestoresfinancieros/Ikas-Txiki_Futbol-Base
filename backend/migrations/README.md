@@ -83,3 +83,17 @@ valor fiable.
 ../venv/bin/python migrations/005_restore_equipment_from_backup.py /tmp/ikastxiki_backup.xlsx \
   --apply --confirm RESTORE-EQUIPMENT-FROM-BACKUP
 ```
+
+## Aceptación de inscripciones de jugadores
+
+`006_accept_player_inscriptions.py` regulariza únicamente las inscripciones
+vinculadas a una ficha de jugador de la temporada indicada. No crea ni elimina
+registros, no modifica jugadores, familias o equipos y deja una auditoría. La
+vista previa informa también de las inscripciones sin jugador, que se excluyen
+deliberadamente para no aceptar expedientes no revisados.
+
+```bash
+../venv/bin/python migrations/006_accept_player_inscriptions.py --season 2026-2027
+../venv/bin/python migrations/006_accept_player_inscriptions.py --season 2026-2027 \
+  --apply --confirm ACCEPT-PLAYER-INSCRIPTIONS
+```
