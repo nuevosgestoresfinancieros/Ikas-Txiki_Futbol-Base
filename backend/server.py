@@ -11,6 +11,7 @@ from urllib.parse import quote
 import asyncio
 import io
 import base64
+import copy
 import html as html_lib
 import json
 import logging
@@ -3689,8 +3690,43 @@ async def _apply_operations(operations: list[dict], reverse: bool = False) -> No
         raise
 
 
-def _historical_enrichment_operations(draft: dict, existing: dict, job_id: str) -> tuple[list[dict], dict]:
-    """Enriquece solo coincidencias nominales únicas; nunca crea jugadores."""
+def _operations_snapshot(existing: dict, operations: list[dict]) -> dict:
+    """Devuelve una vista en memoria de ``existing`` después de las operaciones.
+
+    La importación histórica necesita crear primero la ficha base y, sobre esa
+    misma ficha, guardar únicamente sus referencias históricas protegidas. La
+    vista evita una escritura intermedia y mantiene toda la importación en la
+    misma transacción compensable.
+    """
+    snapshot = {collection: [copy.deepcopy(item) for item in rows]
+                for collection, rows in existing.items()}
+    indexes = {
+        collection: {item.get("id"): item for item in rows}
+        for collection, rows in snapshot.items()
+    }
+    for operation in operations:
+        collection, identifier = operation["collection"], operation["id"]
+        target = copy.deepcopy(operation["after"])
+        bucket = indexes.setdefault(collection, {})
+        if target is None:
+            bucket.pop(identifier, None)
+        else:
+            bucket[identifier] = target
+    for collection, bucket in indexes.items():
+        snapshot[collection] = list(bucket.values())
+    return snapshot
+
+
+def _historical_enrichment_operations(
+    draft: dict, existing: dict, job_id: str, *, resolve_team_suggestions: bool = True,
+) -> tuple[list[dict], dict]:
+    """Añade referencias históricas a coincidencias únicas ya resueltas.
+
+    En una publicación inicial de un Excel histórico, los nombres de equipo son
+    referencias y no una orden para crear o asignar equipos. ``False`` conserva
+    esa protección: las fichas se publican, pero su equipo actual queda pendiente
+    de una confirmación administrativa explícita.
+    """
     now = now_iso()
     players_by_name: Dict[tuple[str, str], list[dict]] = {}
     for player in existing.get("players", []):
@@ -3732,33 +3768,34 @@ def _historical_enrichment_operations(draft: dict, existing: dict, job_id: str) 
             player["posicion"] = historical["sport"]["position"]
         team_name = record.get("equipo") or record.get("equipo_anterior")
         team_key = normalize_key(team_name)
-        # "NO APLICA" means that the player has no team.  Never resolve it
-        # against a legacy catalogue entry with that display name.
-        if team_key == "no_aplica":
-            team_matches = []
-            player["equipo_id"] = None
-        else:
-            team_matches = teams_by_name.get(team_key, []) if team_name else []
-        if not team_matches and team_key and team_key != "no_aplica":
-            source_season = (historical.get("sport") or {}).get("team_assignment_source") or "2025-2026"
-            team = {
-                "id": new_id(), "nombre": team_name, "categoria": record.get("categoria") or None,
-                "modalidad": record.get("modalidad") or None, "temporada": source_season,
-                "limite_jugadores": 18 if record.get("modalidad") == "F7" else 25,
-                "estado": "activo", "created_at": now, "updated_at": now,
-                "historical_import_job_id": job_id,
-            }
-            operations.append({"collection": "teams", "id": team["id"], "before": None, "after": team})
-            teams_by_name[team_key] = [team]
-            team_matches = [team]
-            teams_created += 1
-        if len(team_matches) == 1:
-            player["equipo_id"] = team_matches[0]["id"]
-            player["equipo_historico_referencia"] = team_name
-            team_assignments += 1
-        elif team_name and team_key != "no_aplica":
-            player["equipo_historico_referencia"] = team_name
-            team_pending += 1
+        if resolve_team_suggestions:
+            # "NO APLICA" means that the player has no team. Never resolve it
+            # against a legacy catalogue entry with that display name.
+            if team_key == "no_aplica":
+                team_matches = []
+                player["equipo_id"] = None
+            else:
+                team_matches = teams_by_name.get(team_key, []) if team_name else []
+            if not team_matches and team_key and team_key != "no_aplica":
+                source_season = (historical.get("sport") or {}).get("team_assignment_source") or "2025-2026"
+                team = {
+                    "id": new_id(), "nombre": team_name, "categoria": record.get("categoria") or None,
+                    "modalidad": record.get("modalidad") or None, "temporada": source_season,
+                    "limite_jugadores": 18 if record.get("modalidad") == "F7" else 25,
+                    "estado": "activo", "created_at": now, "updated_at": now,
+                    "historical_import_job_id": job_id,
+                }
+                operations.append({"collection": "teams", "id": team["id"], "before": None, "after": team})
+                teams_by_name[team_key] = [team]
+                team_matches = [team]
+                teams_created += 1
+            if len(team_matches) == 1:
+                player["equipo_id"] = team_matches[0]["id"]
+                player["equipo_historico_referencia"] = team_name
+                team_assignments += 1
+            elif team_name and team_key != "no_aplica":
+                player["equipo_historico_referencia"] = team_name
+                team_pending += 1
         operations.append({"collection": "players", "id": player["id"], "before": before, "after": player})
         matched += 1
 
@@ -4316,14 +4353,66 @@ async def confirm_import_staging(draft_id: str, request: StagingConfirmRequest):
     historical = draft.get("source_format") == HISTORICAL_FORMAT
     if historical:
         existing = await _import_existing()
-        # El importador antiguo pudo registrar el mismo fichero sin guardar el
-        # histórico. Esta versión tiene su propio bloqueo idempotente y solo se
-        # podrá aplicar una vez.
-        lock_id = f"historical-enrichment-v3:{draft['season']}:{draft['source_sha256']}"
+        family_candidate_ids = {
+            record_id for group in draft.get("family_candidates", []) if not group.get("decision")
+            for record_id in (group.get("record_ids") or [])
+        }
+        rows = []
+        for record in effective_records(draft):
+            row = {key: value for key, value in record.items() if key in ALLOWED_RECORD_FIELDS}
+            row.update({
+                "_row": record.get("source_row"), "_staging_id": record.get("id"),
+                "equipo_id": record.get("equipo_id"),
+                "_family_candidate_pending": record.get("id") in family_candidate_ids,
+            })
+            if record.get("identity_override"):
+                row["external_id"] = record["identity_override"]
+            bank = record.get("bank") or {}
+            if bank.get("status") == "valid":
+                row["_bank"] = {
+                    "iban_encrypted": bank.get("iban_encrypted"),
+                    "iban_last4": bank.get("iban_last4"),
+                }
+            rows.append(row)
+        analysis = analyze_rows(
+            rows, draft["season"], existing, draft["source_sha256"], False,
+            allow_pending_team=True, allow_pending_contact=True,
+            ignore_team_name_suggestions=True,
+        )
+        if analysis["blocking_errors"] or analysis["unresolved_conflicts"]:
+            raise HTTPException(status_code=409, detail="La validación final ha detectado bloqueos")
         job_id = new_id()
-        operations, enrichment = _historical_enrichment_operations(draft, existing, job_id)
-        if not enrichment["matched_players"]:
-            raise HTTPException(status_code=409, detail="No hay coincidencias únicas con jugadores existentes")
+        base_operations = _build_import_operations(
+            analysis, existing, job_id, {}, allow_pending_team=True,
+            keep_family_candidates_separate=True, skip_payments=True,
+        )
+        enriched_existing = _operations_snapshot(existing, base_operations)
+        enrichment_operations, enrichment = _historical_enrichment_operations(
+            draft, enriched_existing, job_id, resolve_team_suggestions=False,
+        )
+        operations = [*base_operations, *enrichment_operations]
+        if not operations:
+            raise HTTPException(status_code=409, detail="No hay altas ni actualizaciones aplicables")
+        enrichment.update({
+            "created_players": sum(
+                item["collection"] == "players" and item.get("before") is None
+                for item in base_operations
+            ),
+            "created_families": sum(
+                item["collection"] == "families" and item.get("before") is None
+                for item in base_operations
+            ),
+            "created_inscriptions": sum(
+                item["collection"] == "inscriptions" and item.get("before") is None
+                for item in base_operations
+            ),
+            "base_operations": len(base_operations),
+            "historical_operations": len(enrichment_operations),
+            "team_assignment_policy": "pending_administrative_confirmation",
+        })
+        # Esta versión publica las fichas base y conserva los equipos históricos
+        # como referencia; no crea ni asigna equipos por un texto del Excel.
+        lock_id = f"historical-base-v4:{draft['season']}:{draft['source_sha256']}"
         try:
             await db.import_locks.insert_one({"_id": lock_id, "job_id": job_id, "created_at": now_iso()})
         except DuplicateKeyError as exc:
@@ -4341,7 +4430,7 @@ async def confirm_import_staging(draft_id: str, request: StagingConfirmRequest):
         except Exception as exc:
             await db.import_locks.delete_one({"_id": lock_id})
             await db.inscription_import_jobs.update_one({"id": job_id}, {"$set": {"status": "failed", "updated_at": now_iso()}})
-            raise HTTPException(status_code=500, detail="La actualización histórica fue revertida") from exc
+            raise HTTPException(status_code=500, detail="La importación histórica fue revertida sin cambios parciales") from exc
         return {"ok": True, "job_id": job_id, "status": "applied", "operations": len(operations), "summary": enrichment}
     family_candidate_ids = {
         record_id for group in draft.get("family_candidates", []) if not group.get("decision")
