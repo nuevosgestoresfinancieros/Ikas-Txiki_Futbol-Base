@@ -1,7 +1,7 @@
 import {
   SAFE_ASSISTANT_ROUTES, actionLabelKey, canCreateProposal,
   currentAssistantModule, normalizeGuidedValue, safeAssistantLinks,
-  safeAssistantModules, suggestedQuestions, bindAssistantTrigger,
+  safeAssistantModules, suggestedQuestions,
 } from "./assistantView";
 import { translations } from "../i18n";
 import React, { act, useRef, useState } from "react";
@@ -68,25 +68,14 @@ test("action labels use stable translation keys", () => {
   expect(actionLabelKey("player.assign_team")).toBe("assistantAction_player_assign_team");
 });
 
-test("existing Cibermedida badge opens by click and keyboard without external navigation", () => {
-  document.body.innerHTML = `
-    <a id="cibermedida-badge" href="https://example.invalid" target="_blank" aria-label="old">
-      <span>Hecho por Cibermedida</span>
-    </a>`;
-  const badge = document.getElementById("cibermedida-badge");
-  const open = jest.fn();
-  const cleanup = bindAssistantTrigger(badge, open, "Asistente Cibermedida");
-  expect(badge.getAttribute("href")).toBeNull();
-  expect(badge.getAttribute("role")).toBe("button");
-  expect(badge.getAttribute("aria-haspopup")).toBe("dialog");
-  expect(badge.querySelector("span").textContent).toBe("Asistente Cibermedida");
-  badge.click();
-  badge.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-  badge.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
-  expect(open).toHaveBeenCalledTimes(3);
-  cleanup();
-  expect(badge.getAttribute("href")).toBe("https://example.invalid");
-  expect(badge.querySelector("span").textContent).toBe("Hecho por Cibermedida");
+test("Cibermedida badge remains an external corporate link", () => {
+  const fs = require("fs");
+  const path = require("path");
+  const html = fs.readFileSync(path.resolve(__dirname, "../../public/index.html"), "utf8");
+  expect(html).toContain('id="cibermedida-badge"');
+  expect(html).toContain('href="https://cibermedida.es"');
+  expect(html).toContain('target="_blank"');
+  expect(html).toContain('rel="noopener noreferrer"');
 });
 
 test("assistant identity and essential labels are complete in ES and EU", () => {
@@ -103,8 +92,8 @@ test("assistant identity and essential labels are complete in ES and EU", () => 
 test("component source keeps accessible and explicit confirmation controls", () => {
   const fs = require("fs");
   const source = fs.readFileSync(require.resolve("./AssistantPanel.jsx"), "utf8");
-  expect(source).toContain('document.getElementById("cibermedida-badge")');
-  expect(source).not.toContain("fixed bottom-20");
+  expect(source).toContain('data-testid="assistant-trigger"');
+  expect(source).not.toContain('document.getElementById("cibermedida-badge")');
   expect(source).toContain('aria-live="polite"');
   expect(source).toContain('role="alert"');
   expect(source).toContain('X-Assistant-Confirm');

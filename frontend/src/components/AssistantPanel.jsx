@@ -10,8 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import {
   actionLabelKey, canCreateProposal, normalizeGuidedValue,
-  currentAssistantModule, safeAssistantLinks, safeAssistantModules,
-  suggestedQuestions, bindAssistantTrigger,
+  currentAssistantModule, safeAssistantLinks, safeAssistantModules, suggestedQuestions,
 } from "@/components/assistantView";
 
 const AssistantPanel = ({ user }) => {
@@ -51,12 +50,6 @@ const AssistantPanel = ({ user }) => {
   useEffect(() => {
     if (open) window.setTimeout(() => panelTitleRef.current?.focus(), 0);
   }, [open]);
-
-  useEffect(() => {
-    const trigger = document.getElementById("cibermedida-badge");
-    triggerRef.current = trigger;
-    return bindAssistantTrigger(trigger, () => setOpen(true), t("assistantCibermedida"));
-  }, [t]);
 
   useEffect(() => {
     setProposal(null);
@@ -141,7 +134,20 @@ const AssistantPanel = ({ user }) => {
   };
 
   return (
-    <Sheet open={open} onOpenChange={handleOpenChange}>
+    <>
+      <Button
+        type="button"
+        data-testid="assistant-trigger"
+        className="assistant-trigger"
+        onClick={() => setOpen(true)}
+        aria-haspopup="dialog"
+        aria-label={t("assistantCibermedida")}
+        ref={triggerRef}
+      >
+        <Bot className="h-4 w-4" aria-hidden="true" />
+        <span>{t("assistantCibermedida")}</span>
+      </Button>
+      <Sheet open={open} onOpenChange={handleOpenChange}>
         <SheetContent
           side="right"
           closeLabel={t("close")}
@@ -293,6 +299,7 @@ const AssistantPanel = ({ user }) => {
           </div>
         </SheetContent>
       </Sheet>
+    </>
   );
 };
 
