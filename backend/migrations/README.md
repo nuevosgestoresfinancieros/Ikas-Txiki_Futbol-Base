@@ -70,3 +70,16 @@ verificada, la única escritura posible requiere además:
   --overrides /tmp/equipos-nuevos.json --consolidate-duplicates \
   --apply --confirm RESTORE-ALL-PLAYER-TEAMS
 ```
+
+## Restauración de equipaciones
+
+`005_restore_equipment_from_backup.py` recupera por ID exacto las tallas, la
+segunda equipación —incluido su dorsal— y el historial de equipación. No toca
+el dorsal principal ni la marca de material entregado si la copia no aporta un
+valor fiable.
+
+```bash
+../venv/bin/python migrations/005_restore_equipment_from_backup.py /tmp/ikastxiki_backup.xlsx
+../venv/bin/python migrations/005_restore_equipment_from_backup.py /tmp/ikastxiki_backup.xlsx \
+  --apply --confirm RESTORE-EQUIPMENT-FROM-BACKUP
+```
