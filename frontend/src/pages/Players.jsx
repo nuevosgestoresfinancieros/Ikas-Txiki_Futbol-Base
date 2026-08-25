@@ -82,6 +82,12 @@ const Players = () => {
 
   const teamName = (id) => teams.find((x) => x.id === id)?.nombre || "—";
   const statusLabel = (status) => STATUS_LABELS[lang]?.[status] || status;
+  const bibLabel = (player) => {
+    const mainBib = String(player.dorsal ?? "").trim();
+    if (mainBib) return mainBib;
+    const secondBib = String(player.segunda_equipacion?.number ?? "").trim();
+    return secondBib ? `${t("equipmentSecondKitShort")}: ${secondBib}` : "—";
+  };
   const totalPages = Math.max(1, Math.ceil(players.length / pageSize));
   const visiblePlayers = players.slice((page - 1) * pageSize, page * pageSize);
 
@@ -171,7 +177,7 @@ const Players = () => {
                     </td>
                     <td className="px-4 py-3 hidden md:table-cell text-slate-600">{p.categoria || "—"}</td>
                     <td className="px-4 py-3 hidden md:table-cell text-slate-600">{teamName(p.equipo_id)}</td>
-                    <td className="px-4 py-3 hidden sm:table-cell text-slate-600">{p.dorsal || "—"}</td>
+                    <td className="px-4 py-3 hidden sm:table-cell text-slate-600">{bibLabel(p)}</td>
                     <td className="px-4 py-3"><StatusBadge status={p.estado} /></td>
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-1">
@@ -201,7 +207,7 @@ const Players = () => {
                 <StatusBadge status={p.estado} />
               </div>
               <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3">
-                <span className="text-xs font-semibold text-slate-500">{t("number")}: {p.dorsal || "—"}</span>
+                <span className="text-xs font-semibold text-slate-500">{t("number")}: {bibLabel(p)}</span>
                 <div className="flex gap-1">
                   <PermissionGate resource="players" action="edit"><Button variant="ghost" size="icon" aria-label={`${t("edit")} ${p.nombre}`} onClick={() => openEdit(p)}><Pencil className="h-4 w-4" /></Button></PermissionGate>
                   <PermissionGate resource="players" action="delete"><Button variant="ghost" size="icon" aria-label={`${t("delete")} ${p.nombre}`} onClick={() => remove(p)} className="text-red-500 hover:bg-red-50 hover:text-red-700"><Trash2 className="h-4 w-4" /></Button></PermissionGate>
