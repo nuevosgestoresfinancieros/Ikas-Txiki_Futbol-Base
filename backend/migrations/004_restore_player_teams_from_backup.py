@@ -209,8 +209,9 @@ def main() -> None:
     if duplicates and not args.consolidate_duplicates:
         raise SystemExit("Hay registros duplicados: revise possible_duplicates o use --consolidate-duplicates tras verificar la vista previa")
 
-    # A duplicate that has already been used in sporting or access records must
-    # be reviewed manually. This migration never severs those references.
+    # A duplicate used by sporting or access records must be reviewed manually.
+    # The one safe exception is an inscription: it may be moved to the
+    # canonical player only when it has no matching canonical inscription.
     duplicate_references: dict[str, list[str]] = {}
     reference_checks = {
         "users": lambda player_id: database.users.count_documents({"player_id": player_id}),
@@ -225,9 +226,34 @@ def main() -> None:
         references = [name for name, check in reference_checks.items() if check(player_id)]
         if references:
             duplicate_references[player_id] = references
-    if duplicate_references:
+    forbidden_references = {
+        player_id: references for player_id, references in duplicate_references.items()
+        if set(references) - {"inscriptions"}
+    }
+    inscription_moves: dict[str, list[dict[str, Any]]] = {}
+    inscription_conflicts: dict[str, int] = {}
+    for duplicate in duplicates:
+        source_id = duplicate["player_id"]
+        rows = list(database.inscriptions.find({"player_id": source_id}, {"_id": 0}))
+        if not rows:
+            continue
+        target_id = duplicate["existing_player_id"]
+        collisions = 0
+        for row in rows:
+            query = {"player_id": target_id, "temporada": row.get("temporada")}
+            if row.get("import_identity_key"):
+                query["import_identity_key"] = row["import_identity_key"]
+            if database.inscriptions.count_documents(query):
+                collisions += 1
+        if collisions:
+            inscription_conflicts[source_id] = collisions
+        else:
+            inscription_moves[source_id] = rows
+    if forbidden_references or inscription_conflicts:
         print(json.dumps({"duplicate_references": duplicate_references}, ensure_ascii=False, indent=2))
-        raise SystemExit("No se consolidan duplicados con referencias; requieren revisión manual")
+        print(json.dumps({"forbidden_references": forbidden_references,
+                          "inscription_conflicts": inscription_conflicts}, ensure_ascii=False, indent=2))
+        raise SystemExit("No se consolidan duplicados con referencias incompatibles; requieren revisión manual")
 
     created_teams = [team for source, team in cloned.items() if source in newly_created_source_ids]
     if created_teams:
@@ -245,15 +271,22 @@ def main() -> None:
             "limite_jugadores": existing_count, "updated_at": timestamp,
         }})
     archived_duplicates = 0
+    moved_inscriptions = 0
     for duplicate in duplicates:
         original = database.players.find_one({"id": duplicate["player_id"]})
         if not original:
             continue
+        source_id = duplicate["player_id"]
+        target_id = duplicate["existing_player_id"]
+        result = database.inscriptions.update_many({"player_id": source_id}, {"$set": {
+            "player_id": target_id, "merged_from_player_id": source_id, "updated_at": timestamp,
+        }})
+        moved_inscriptions += result.modified_count
         original.pop("_id", None)
         database.player_duplicate_archive.insert_one({
             "id": str(uuid4()), "archived_at": timestamp,
             "reason": "duplicate_player_during_team_restoration",
-            "canonical_player_id": duplicate["existing_player_id"],
+            "canonical_player_id": target_id,
             "original_player": original,
         })
         database.players.delete_one({"id": duplicate["player_id"]})
@@ -262,10 +295,11 @@ def main() -> None:
         "action": "restore_player_teams_from_backup", "at": timestamp, "season": args.season,
         "assignments": len(assignments), "teams_created": len(created_teams),
         "duplicates_archived": archived_duplicates,
+        "inscriptions_moved": moved_inscriptions,
         "backup": args.backup.name,
     })
     print(json.dumps({"applied": True, "assignments": len(assignments), "teams_created": len(created_teams),
-                      "duplicates_archived": archived_duplicates}, ensure_ascii=False))
+                      "duplicates_archived": archived_duplicates, "inscriptions_moved": moved_inscriptions}, ensure_ascii=False))
     client.close()
 
 

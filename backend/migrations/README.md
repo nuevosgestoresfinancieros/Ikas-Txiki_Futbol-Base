@@ -60,7 +60,9 @@ de forma explícita, por ejemplo `{"player-id": "JUVENIL"}`, ejecute otra
 vista previa con `--overrides` y revise el informe. Si la vista previa muestra
 `possible_duplicates`, no se deben añadir a una plantilla: pueden archivarse
 de forma trazable solo con `--consolidate-duplicates`, y únicamente si no
-tienen referencias deportivas o de acceso. Tras tener una copia de MongoDB
+tienen referencias deportivas o de acceso. Las inscripciones sin conflicto se
+reasocian a la ficha válida y quedan auditadas; cualquier conflicto bloquea el
+lote antes de escribir. Tras tener una copia de MongoDB
 verificada, la única escritura posible requiere además:
 
 ```bash
