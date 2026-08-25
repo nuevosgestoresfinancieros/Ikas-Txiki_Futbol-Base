@@ -55,6 +55,9 @@ export default function Portal({ user }) {
 
   return <div data-testid="portal-page">
     <PageHeader title={user?.role === "family" ? t("familyPortal") : t("playerPortal")} subtitle={t("portalSubtitle")} icon={ShieldCheck} />
+    {user?.role === "family" && <Card title={t("associatedChildren")} icon={UserRound} testid="portal-linked-children">
+      {(data.players || []).length ? <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{data.players.map((player) => <button key={player.id} type="button" onClick={() => setSelectedId(player.id)} aria-pressed={selectedId === player.id} className={`rounded-2xl border p-4 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${selectedId === player.id ? "border-primary bg-primary/5" : "border-slate-200 bg-white hover:border-primary/40"}`}><p className="font-bold text-slate-900">{player.nombre} {player.apellidos}</p><p className="mt-1 text-sm text-slate-600">{player.team_name || t("noTeam")} · {player.categoria || "—"}</p><div className="mt-2"><StatusBadge status={player.estado} /></div></button>)}</div> : <Empty>{t("portalNoAssociation")}</Empty>}
+    </Card>}
     {(data.players || []).length > 1 && <div className="mb-5 flex gap-2 overflow-x-auto pb-1" aria-label={t("selectChild")}>
       {data.players.map((player) => <button key={player.id} type="button" aria-pressed={selectedId === player.id} onClick={() => setSelectedId(player.id)} className={`min-h-11 shrink-0 rounded-xl border px-4 text-sm font-bold ${selectedId === player.id ? "border-primary bg-primary text-white" : "border-slate-200 bg-white text-slate-700"}`}>{player.nombre} {player.apellidos}</button>)}
     </div>}
