@@ -1341,7 +1341,15 @@ async def create_player(player: Player):
         data["fecha_inscripcion"] = now_iso()
     if data.get("fecha_nacimiento"):
         data["categoria"] = compute_category(data["fecha_nacimiento"])
-    return await insert_doc("players", data)
+    created_family_id = await _link_player_family_on_create(data)
+    try:
+        return await insert_doc("players", data)
+    except Exception:
+        # The player has not been created, so only undo the new family created
+        # by this request. Existing families are never modified or removed.
+        if created_family_id:
+            await db.families.delete_one({"id": created_family_id})
+        raise
 
 
 @api_router.get("/players")
@@ -1400,6 +1408,80 @@ class Family(BaseModel):
     contacto_principal: Optional[str] = None
     preferencia_comunicacion: Optional[str] = "email"  # email, telefono, telegram
     observaciones: Optional[str] = None
+
+
+_FAMILY_CONTACT_FIELDS = (
+    "progenitor1_nombre", "progenitor1_telefono", "progenitor1_email",
+    "progenitor2_nombre", "progenitor2_telefono", "progenitor2_email", "domicilio",
+)
+
+
+def _family_details_from_player(player: dict) -> dict:
+    """Extract the shared family record stored alongside a player form."""
+    details = {field: player.get(field) for field in _FAMILY_CONTACT_FIELDS}
+    details["contacto_principal"] = (
+        details.get("progenitor1_nombre") or details.get("progenitor2_nombre") or None
+    )
+    details["preferencia_comunicacion"] = "email"
+    return details
+
+
+def _family_reference_values(data: dict) -> set[str]:
+    """Use only exact contact references; names alone must never link families."""
+    references = {
+        normalized_key(data.get(field))
+        for field in ("progenitor1_email", "progenitor2_email")
+        if normalized_key(data.get(field))
+    }
+    references.update(
+        re.sub(r"\D+", "", str(data.get(field) or ""))
+        for field in ("progenitor1_telefono", "progenitor2_telefono")
+        if re.sub(r"\D+", "", str(data.get(field) or ""))
+    )
+    return references
+
+
+async def _link_player_family_on_create(player: dict) -> Optional[str]:
+    """Attach a new player to one family, creating it from the same form if needed.
+
+    A preselected family id remains authoritative. Otherwise a family is reused
+    only when exactly one existing record has the same tutor email or phone.
+    This prevents a silent link to a different household with a similar name.
+    """
+    explicit_id = str(player.get("familia_id") or "").strip()
+    if explicit_id:
+        if not await db.families.find_one({"id": explicit_id}, {"_id": 0, "id": 1}):
+            raise HTTPException(status_code=422, detail="La familia seleccionada no existe")
+        player["familia_id"] = explicit_id
+        return None
+
+    details = _family_details_from_player(player)
+    references = _family_reference_values(details)
+    has_details = any(str(details.get(field) or "").strip() for field in _FAMILY_CONTACT_FIELDS)
+    if not has_details:
+        return None
+
+    families = await db.families.find({}, {"_id": 0}).to_list(5000)
+    matches = [
+        family for family in families
+        if references and references.intersection(_family_reference_values(family))
+    ]
+    if len(matches) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail="Hay varias familias con el mismo correo o teléfono; selecciona la familia correcta antes de guardar",
+        )
+    if matches:
+        player["familia_id"] = matches[0]["id"]
+        return None
+
+    await ensure_data_scope("families", details)
+    details["id"] = new_id()
+    details["created_at"] = now_iso()
+    details["updated_at"] = details["created_at"]
+    await db.families.insert_one(dict(details))
+    player["familia_id"] = details["id"]
+    return details["id"]
 
 
 @api_router.post("/families")

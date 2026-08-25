@@ -84,6 +84,25 @@ def test_activation_link_strips_legacy_cors_origin_brackets(monkeypatch):
     )
 
 
+def test_player_family_references_do_not_match_by_name_only():
+    player = {
+        "progenitor1_nombre": "Familia Ejemplo",
+        "progenitor1_email": "tutor@example.invalid",
+        "progenitor1_telefono": "600 000 000",
+    }
+    same_name_other_contact = {
+        "progenitor1_nombre": "Familia Ejemplo",
+        "progenitor1_email": "otra@example.invalid",
+        "progenitor1_telefono": "611 111 111",
+    }
+    assert server._family_reference_values(server._family_details_from_player(player)) == {
+        "tutor@example.invalid", "600000000",
+    }
+    assert not server._family_reference_values(server._family_details_from_player(player)).intersection(
+        server._family_reference_values(same_name_other_contact)
+    )
+
+
 def test_invitation_delivery_failure_is_logged_without_disclosing_the_token(monkeypatch):
     user = {"id": "user-fixture", "role": "family", "session_version": 0,
             "email": "family@example.invalid"}
