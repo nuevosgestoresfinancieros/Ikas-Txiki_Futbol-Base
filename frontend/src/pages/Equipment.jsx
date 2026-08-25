@@ -205,12 +205,12 @@ const Equipment = () => {
             </dl>
             {(p.segunda_equipacion?.shirt_name || p.segunda_equipacion?.number || p.segunda_equipacion?.shirt_size || p.segunda_equipacion?.socks_size) && (
               <div className="mt-3 rounded-xl border border-sky-100 bg-sky-50/70 p-3 text-sm">
-                <p className="mb-2 text-xs font-bold uppercase text-sky-700">Segunda equipación</p>
+                <p className="mb-2 text-xs font-bold uppercase text-sky-700">{t("equipmentSecondKit")}</p>
                 <div className="grid grid-cols-2 gap-2 text-slate-700">
-                  <span>Nombre: <strong>{p.segunda_equipacion?.shirt_name || "—"}</strong></span>
-                  <span>Dorsal: <strong>{p.segunda_equipacion?.number || "—"}</strong></span>
-                  <span>Camiseta: <strong>{p.segunda_equipacion?.shirt_size || "—"}</strong></span>
-                  <span>Medias: <strong>{p.segunda_equipacion?.socks_size || "—"}</strong></span>
+                  <span>{t("equipmentSecondKitName")}: <strong>{p.segunda_equipacion?.shirt_name || "—"}</strong></span>
+                  <span>{t("equipmentSecondKitBib")}: <strong>{p.segunda_equipacion?.number || "—"}</strong></span>
+                  <span>{t("equipmentSecondKitShirt")}: <strong>{p.segunda_equipacion?.shirt_size || "—"}</strong></span>
+                  <span>{t("equipmentSecondKitSocks")}: <strong>{p.segunda_equipacion?.socks_size || "—"}</strong></span>
                 </div>
               </div>
             )}
@@ -225,22 +225,27 @@ const Equipment = () => {
           <table className="w-full text-sm min-w-[1250px]">
             <thead className="bg-slate-50 text-left text-xs font-bold uppercase tracking-wider text-slate-500 sticky top-0">
               <tr>
-                <th className="px-4 py-3 min-w-[160px]">{t("equipmentPlayer")}</th>
-                <th className="px-3 py-3">{t("equipmentTeam")}</th>
-                <th className="px-3 py-3">{t("equipmentBib")}</th>
-                <th className="px-3 py-3">{t("equipmentShirt")}</th>
-                <th className="px-3 py-3">{t("equipmentShorts")}</th>
-                <th className="px-3 py-3">{t("equipmentTracksuit")}</th>
-                <th className="px-3 py-3">{t("equipmentSocks")}</th>
-                <th className="px-3 py-3 bg-sky-50">2ª nombre</th>
-                <th className="px-3 py-3 bg-sky-50">2ª dorsal</th>
-                <th className="px-3 py-3 bg-sky-50">2ª camiseta</th>
-                <th className="px-3 py-3 bg-sky-50">2ª medias</th>
-                <th className="px-3 py-3">{t("equipmentShoes")}</th>
-                <th className="px-3 py-3">{t("delivered")}</th>
-                <th className="px-3 py-3">{t("equipmentDeliveryDate")}</th>
-                <th className="px-3 py-3 min-w-[140px]">{t("equipmentNotes")}</th>
-                <th className="px-3 py-3 text-right">{t("equipmentActions")}</th>
+                <th rowSpan="2" className="px-4 py-3 min-w-[160px]">{t("equipmentPlayer")}</th>
+                <th rowSpan="2" className="px-3 py-3">{t("equipmentTeam")}</th>
+                <th rowSpan="2" className="px-3 py-3">{t("equipmentBib")}</th>
+                <th rowSpan="2" className="px-3 py-3">{t("equipmentShirt")}</th>
+                <th rowSpan="2" className="px-3 py-3">{t("equipmentShorts")}</th>
+                <th rowSpan="2" className="px-3 py-3">{t("equipmentTracksuit")}</th>
+                <th rowSpan="2" className="px-3 py-3">{t("equipmentSocks")}</th>
+                <th colSpan="4" scope="colgroup" className="border-x border-sky-100 bg-sky-100 px-3 py-2 text-center text-sky-900">
+                  {t("equipmentSecondKit")}
+                </th>
+                <th rowSpan="2" className="px-3 py-3">{t("equipmentShoes")}</th>
+                <th rowSpan="2" className="px-3 py-3">{t("delivered")}</th>
+                <th rowSpan="2" className="px-3 py-3">{t("equipmentDeliveryDate")}</th>
+                <th rowSpan="2" className="px-3 py-3 min-w-[140px]">{t("equipmentNotes")}</th>
+                <th rowSpan="2" className="px-3 py-3 text-right">{t("equipmentActions")}</th>
+              </tr>
+              <tr className="bg-sky-50 text-sky-800">
+                <th scope="col" className="border-l border-sky-100 px-3 py-2">{t("equipmentSecondKitName")}</th>
+                <th scope="col" className="px-3 py-2">{t("equipmentSecondKitBib")}</th>
+                <th scope="col" className="px-3 py-2">{t("equipmentSecondKitShirt")}</th>
+                <th scope="col" className="border-r border-sky-100 px-3 py-2">{t("equipmentSecondKitSocks")}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
