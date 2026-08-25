@@ -257,10 +257,10 @@
 }
 
 body:not(.app-authenticated) #cibermedida-badge {
-    top: 12px;
+    top: auto !important;
     right: auto !important;
-    bottom: auto !important;
-    left: 12px;
+    bottom: max(12px, env(safe-area-inset-bottom)) !important;
+    left: max(12px, env(safe-area-inset-left)) !important;
 }
 
 .app-authenticated .rgpd-banner {
