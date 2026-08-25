@@ -97,3 +97,17 @@ deliberadamente para no aceptar expedientes no revisados.
 ../venv/bin/python migrations/006_accept_player_inscriptions.py --season 2026-2027 \
   --apply --confirm ACCEPT-PLAYER-INSCRIPTIONS
 ```
+
+## Corrección de equipación principal
+
+`007_promote_primary_equipment.py` corrige las importaciones históricas donde
+la equipación actual quedó guardada como segunda. Promueve nombre, dorsal y
+tallas al conjunto principal, conserva la segunda equipación real vacía y
+guarda los valores anteriores en una auditoría reversible. No se aplica si
+detecta un dorsal o nombre principal ya introducido manualmente.
+
+```bash
+../venv/bin/python migrations/007_promote_primary_equipment.py
+../venv/bin/python migrations/007_promote_primary_equipment.py \
+  --apply --confirm PROMOTE-PRIMARY-EQUIPMENT
+```

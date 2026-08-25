@@ -1308,6 +1308,7 @@ class Player(BaseModel):
     telefono_emergencia: Optional[str] = None
     observaciones_medicas: Optional[str] = None
     # Equipación
+    nombre_camiseta: Optional[str] = None
     talla_camiseta: Optional[str] = None
     talla_pantalon: Optional[str] = None
     talla_chandal: Optional[str] = None
@@ -3902,9 +3903,9 @@ def _historical_enrichment_operations(
         before = _clean_doc(matches[0])
         player = dict(before)
         historical = record.get("historical") or {}
+        current_equipment = historical.get("equipment_current") or {}
         player.update({
             "historial_equipacion": historical.get("equipment_history") or {},
-            "segunda_equipacion": historical.get("equipment_current") or {},
             "historial_equipos": historical.get("team_history") or {},
             "historial_federacion": historical.get("federation_history") or {},
             "historial_deportivo": historical.get("sport") or {},
@@ -3913,6 +3914,13 @@ def _historical_enrichment_operations(
             "referencias_permisos": historical.get("consents") or {},
             "historical_import_job_id": job_id, "updated_at": now,
         })
+        # The historical import names this object "equipment_current": it is
+        # the current primary kit, not a second kit.
+        if current_equipment:
+            player["nombre_camiseta"] = current_equipment.get("shirt_name") or player.get("nombre_camiseta")
+            player["dorsal"] = current_equipment.get("number") or player.get("dorsal")
+            player["talla_camiseta"] = current_equipment.get("shirt_size") or player.get("talla_camiseta")
+            player["talla_medias"] = current_equipment.get("socks_size") or player.get("talla_medias")
         if not player.get("posicion") and (historical.get("sport") or {}).get("position"):
             player["posicion"] = historical["sport"]["position"]
         team_name = record.get("equipo") or record.get("equipo_anterior")
@@ -7092,6 +7100,7 @@ async def get_equipment(equipo_id: Optional[str] = None, entregada: Optional[str
             "equipo_id": p.get("equipo_id"),
             "equipo_nombre": teams.get(p.get("equipo_id"), "—"),
             "dorsal": p.get("dorsal"),
+            "nombre_camiseta": p.get("nombre_camiseta"),
             "talla_camiseta": p.get("talla_camiseta"),
             "talla_pantalon": p.get("talla_pantalon"),
             "talla_chandal": p.get("talla_chandal"),
@@ -7111,7 +7120,7 @@ async def get_equipment(equipo_id: Optional[str] = None, entregada: Optional[str
 async def update_equipment(player_id: str, data: Dict[str, Any]):
     """Actualiza solo los campos de equipación de un jugador."""
     allowed = {
-        "dorsal", "talla_camiseta", "talla_pantalon", "talla_chandal",
+        "dorsal", "nombre_camiseta", "talla_camiseta", "talla_pantalon", "talla_chandal",
         "talla_medias", "talla_calzado", "equipacion_entregada",
         "fecha_entrega_equipacion", "observaciones_material"
     }
@@ -7431,6 +7440,8 @@ def _visual_export_rows(data: dict[str, list[dict]]) -> dict[str, tuple[list[dic
         equipment_rows.append({
             "Jugador": name,
             "Categoría": _display_value(player.get("categoria")),
+            "Nombre camiseta": _display_value(player.get("nombre_camiseta")),
+            "Dorsal": _display_value(player.get("dorsal")),
             "Talla camiseta": _display_value(player.get("talla_camiseta")),
             "Talla medias": _display_value(player.get("talla_medias")),
             "Nombre camiseta 2ª": _display_value(second_kit.get("shirt_name")),

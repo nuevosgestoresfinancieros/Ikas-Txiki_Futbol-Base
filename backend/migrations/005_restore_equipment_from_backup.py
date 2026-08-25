@@ -1,10 +1,10 @@
-"""Restaura equipaciones desde una copia Excel por ID exacto de jugador.
+"""Restaura equipaciones principales desde una copia Excel por ID exacto.
 
 Solo actualiza valores presentes en la copia: talla de camiseta, talla de
-medias, segunda equipación e historial. Nunca modifica el dorsal principal ni
-el estado de material entregado, porque la copia histórica no contiene valores
-fiables para esos campos. Por defecto solo informa; ``--apply`` exige una
-confirmación explícita.
+medias, dorsal, nombre de camiseta e historial. La estructura histórica
+``segunda_equipacion`` de la copia representa la equipación actual principal;
+no se restaura como segunda equipación. Por defecto solo informa; ``--apply``
+exige una confirmación explícita.
 """
 from __future__ import annotations
 
@@ -56,10 +56,17 @@ def fields_to_restore(row: dict[str, Any]) -> dict[str, Any]:
     for field in ("talla_camiseta", "talla_medias"):
         if nonempty(row.get(field)):
             changes[field] = row[field]
-    for field in ("segunda_equipacion", "historial_equipacion"):
-        value = structured(row.get(field))
-        if nonempty(value):
-            changes[field] = value
+    current_kit = structured(row.get("segunda_equipacion"))
+    if isinstance(current_kit, dict):
+        for source, target in {
+            "shirt_name": "nombre_camiseta", "number": "dorsal",
+            "shirt_size": "talla_camiseta", "socks_size": "talla_medias",
+        }.items():
+            if nonempty(current_kit.get(source)):
+                changes[target] = current_kit[source]
+    history = structured(row.get("historial_equipacion"))
+    if nonempty(history):
+        changes["historial_equipacion"] = history
     return changes
 
 
@@ -89,9 +96,10 @@ def main() -> None:
         "players_not_in_current_database": len(updates) - len(matched),
         "first_shirt_sizes": sum("talla_camiseta" in value for value in matched.values()),
         "first_socks_sizes": sum("talla_medias" in value for value in matched.values()),
-        "second_equipment": sum("segunda_equipacion" in value for value in matched.values()),
+        "primary_kit_names": sum("nombre_camiseta" in value for value in matched.values()),
+        "primary_bibs": sum("dorsal" in value for value in matched.values()),
         "equipment_history": sum("historial_equipacion" in value for value in matched.values()),
-        "main_dorsal_modified": False,
+        "main_dorsal_modified": bool(any("dorsal" in value for value in matched.values())),
         "delivery_status_modified": False,
         "dry_run": not args.apply,
     }
@@ -110,7 +118,8 @@ def main() -> None:
     database.equipment_restore_audit.insert_one({
         "action": "restore_equipment_from_backup", "at": timestamp,
         "backup": args.backup.name, "players_matched": len(matched), "players_changed": changed,
-        "main_dorsal_modified": False, "delivery_status_modified": False,
+        "main_dorsal_modified": bool(any("dorsal" in value for value in matched.values())),
+        "delivery_status_modified": False,
     })
     print(json.dumps({"applied": True, "players_changed": changed}, ensure_ascii=False))
     client.close()
