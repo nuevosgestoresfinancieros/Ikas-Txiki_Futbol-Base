@@ -1388,7 +1388,16 @@ async def edit_player(player_id: str, player: Player):
     data = player.model_dump()
     if data.get("fecha_nacimiento"):
         data["categoria"] = compute_category(data["fecha_nacimiento"])
-    return await update_doc("players", player_id, data)
+    existing = await get_doc("players", player_id)
+    created_family_id = None
+    if not existing.get("familia_id") and not data.get("familia_id"):
+        created_family_id = await _link_player_family_on_create(data)
+    try:
+        return await update_doc("players", player_id, data)
+    except Exception:
+        if created_family_id:
+            await db.families.delete_one({"id": created_family_id})
+        raise
 
 
 @api_router.delete("/players/{player_id}")
