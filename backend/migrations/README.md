@@ -57,10 +57,14 @@ asignación verificable.
 
 Para jugadores posteriores a la copia, prepare un JSON que indique el equipo
 de forma explícita, por ejemplo `{"player-id": "JUVENIL"}`, ejecute otra
-vista previa con `--overrides` y revise el informe. Tras tener una copia de
-MongoDB verificada, la única escritura posible requiere además:
+vista previa con `--overrides` y revise el informe. Si la vista previa muestra
+`possible_duplicates`, no se deben añadir a una plantilla: pueden archivarse
+de forma trazable solo con `--consolidate-duplicates`, y únicamente si no
+tienen referencias deportivas o de acceso. Tras tener una copia de MongoDB
+verificada, la única escritura posible requiere además:
 
 ```bash
 ../venv/bin/python migrations/004_restore_player_teams_from_backup.py /tmp/ikastxiki_backup.xlsx \
-  --overrides /tmp/equipos-nuevos.json --apply --confirm RESTORE-ALL-PLAYER-TEAMS
+  --overrides /tmp/equipos-nuevos.json --consolidate-duplicates \
+  --apply --confirm RESTORE-ALL-PLAYER-TEAMS
 ```

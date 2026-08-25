@@ -112,6 +112,8 @@ def main() -> None:
     parser.add_argument("backup", type=Path, help="Excel de copia con hojas players y teams")
     parser.add_argument("--season", default=DEFAULT_SEASON, help="Temporada destino")
     parser.add_argument("--overrides", type=Path, help="JSON de equipos para jugadores no presentes en la copia")
+    parser.add_argument("--consolidate-duplicates", action="store_true",
+                        help="Archivar y retirar registros duplicados sin referencias antes de finalizar")
     parser.add_argument("--apply", action="store_true", help="Escribir los equipos y asignaciones")
     parser.add_argument("--confirm", default="", help="Debe ser RESTORE-ALL-PLAYER-TEAMS")
     args = parser.parse_args()
@@ -202,8 +204,30 @@ def main() -> None:
         return
     if args.confirm != "RESTORE-ALL-PLAYER-TEAMS":
         raise SystemExit("Para aplicar use --confirm RESTORE-ALL-PLAYER-TEAMS")
-    if unresolved or duplicates or invalid_overrides or len(assignments) != len(players):
-        raise SystemExit("No se aplica una restauración parcial ni duplicada: corrija unresolved/possible_duplicates/invalid_overrides primero")
+    if unresolved or invalid_overrides or len(assignments) + len(duplicates) != len(players):
+        raise SystemExit("No se aplica una restauración parcial: corrija unresolved/invalid_overrides primero")
+    if duplicates and not args.consolidate_duplicates:
+        raise SystemExit("Hay registros duplicados: revise possible_duplicates o use --consolidate-duplicates tras verificar la vista previa")
+
+    # A duplicate that has already been used in sporting or access records must
+    # be reviewed manually. This migration never severs those references.
+    duplicate_references: dict[str, list[str]] = {}
+    reference_checks = {
+        "users": lambda player_id: database.users.count_documents({"player_id": player_id}),
+        "inscriptions": lambda player_id: database.inscriptions.count_documents({"player_id": player_id}),
+        "payments": lambda player_id: database.payments.count_documents({"player_id": player_id}),
+        "authorizations": lambda player_id: database.authorizations.count_documents({"player_id": player_id}),
+        "trainings": lambda player_id: database.trainings.count_documents({"asistencia.player_id": player_id}),
+        "callups": lambda player_id: database.callups.count_documents({"convocados.player_id": player_id}),
+    }
+    for duplicate in duplicates:
+        player_id = duplicate["player_id"]
+        references = [name for name, check in reference_checks.items() if check(player_id)]
+        if references:
+            duplicate_references[player_id] = references
+    if duplicate_references:
+        print(json.dumps({"duplicate_references": duplicate_references}, ensure_ascii=False, indent=2))
+        raise SystemExit("No se consolidan duplicados con referencias; requieren revisión manual")
 
     created_teams = [team for source, team in cloned.items() if source in newly_created_source_ids]
     if created_teams:
@@ -220,12 +244,28 @@ def main() -> None:
         database.teams.update_one({"id": team_id, "limite_jugadores": {"$lt": existing_count}}, {"$set": {
             "limite_jugadores": existing_count, "updated_at": timestamp,
         }})
+    archived_duplicates = 0
+    for duplicate in duplicates:
+        original = database.players.find_one({"id": duplicate["player_id"]})
+        if not original:
+            continue
+        original.pop("_id", None)
+        database.player_duplicate_archive.insert_one({
+            "id": str(uuid4()), "archived_at": timestamp,
+            "reason": "duplicate_player_during_team_restoration",
+            "canonical_player_id": duplicate["existing_player_id"],
+            "original_player": original,
+        })
+        database.players.delete_one({"id": duplicate["player_id"]})
+        archived_duplicates += 1
     database.team_restoration_audit.insert_one({
         "action": "restore_player_teams_from_backup", "at": timestamp, "season": args.season,
         "assignments": len(assignments), "teams_created": len(created_teams),
+        "duplicates_archived": archived_duplicates,
         "backup": args.backup.name,
     })
-    print(json.dumps({"applied": True, "assignments": len(assignments), "teams_created": len(created_teams)}, ensure_ascii=False))
+    print(json.dumps({"applied": True, "assignments": len(assignments), "teams_created": len(created_teams),
+                      "duplicates_archived": archived_duplicates}, ensure_ascii=False))
     client.close()
 
 
