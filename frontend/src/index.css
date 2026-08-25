@@ -235,13 +235,17 @@
 *::-webkit-scrollbar-thumb { background: #cbd5e1; border: 3px solid transparent; border-radius: 999px; background-clip: padding-box; }
 *::-webkit-scrollbar-thumb:hover { background-color: #94a3b8; }
 
-.app-authenticated #cibermedida-badge {
-    left: max(12px, env(safe-area-inset-left)) !important;
-    right: auto !important;
-    bottom: calc(78px + env(safe-area-inset-bottom)) !important;
+#cibermedida-badge {
+    top: max(12px, env(safe-area-inset-top)) !important;
+    right: max(12px, env(safe-area-inset-right)) !important;
+    bottom: auto !important;
+    left: auto !important;
+    padding: 6px !important;
     background: linear-gradient(135deg, #0e3554 0%, #2b75b0 100%) !important;
     box-shadow: 0 6px 20px rgba(14, 53, 84, 0.3) !important;
 }
+
+#cibermedida-badge .cibermedida-badge-label { display: none; }
 
 .assistant-trigger {
     position: fixed !important;
@@ -256,19 +260,17 @@
     box-shadow: 0 6px 20px rgba(14, 53, 84, 0.3) !important;
 }
 
-body:not(.app-authenticated) #cibermedida-badge {
-    top: auto !important;
-    right: auto !important;
-    bottom: max(12px, env(safe-area-inset-bottom)) !important;
-    left: max(12px, env(safe-area-inset-left)) !important;
-}
-
 .app-authenticated .rgpd-banner {
     bottom: calc(70px + env(safe-area-inset-bottom));
 }
 
 @media (min-width: 1024px) {
-    .app-authenticated #cibermedida-badge { bottom: 16px !important; }
+    #cibermedida-badge {
+        top: 16px !important;
+        right: 16px !important;
+        padding: 6px 14px 6px 8px !important;
+    }
+    #cibermedida-badge .cibermedida-badge-label { display: inline; }
     .assistant-trigger { bottom: 16px !important; }
     .app-authenticated .rgpd-banner { bottom: 0; }
 }
