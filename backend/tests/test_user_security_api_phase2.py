@@ -76,6 +76,14 @@ def test_invitation_is_emailed_and_never_returns_or_persists_plain_token(monkeyp
     assert delivery["type"] == "user_access_invitation" and delivery["status"] == "sent"
 
 
+def test_activation_link_strips_legacy_cors_origin_brackets(monkeypatch):
+    monkeypatch.delenv("PUBLIC_APP_URL", raising=False)
+    monkeypatch.setenv("CORS_ORIGINS", "[https://ikasfutbase.cibermedida.es]")
+    assert server._activation_link("token_value") == (
+        "https://ikasfutbase.cibermedida.es/activar?token=token_value"
+    )
+
+
 def test_invitation_delivery_failure_is_logged_without_disclosing_the_token(monkeypatch):
     user = {"id": "user-fixture", "role": "family", "session_version": 0,
             "email": "family@example.invalid"}

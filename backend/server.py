@@ -1194,12 +1194,6 @@ async def generate_user_invitation(user_id: str):
     email = str(user.get("email") or "").strip().lower()
     if not email or "@" not in email:
         raise HTTPException(status_code=422, detail="La cuenta necesita un correo válido para enviar la invitación")
-    public_url = (os.environ.get("PUBLIC_APP_URL") or "").strip().rstrip("/")
-    if not public_url:
-        origin = str(os.environ.get("CORS_ORIGINS") or "").strip().strip("[]")
-        public_url = origin.split(",")[0].strip().strip('"').rstrip("/")
-    if not public_url:
-        raise HTTPException(status_code=503, detail="No está configurada la URL pública de activación")
     plain, record = issue_token(JWT_SECRET, ttl_minutes=0, ttl_hours=INVITATION_TTL_HOURS)
     previous = user.get("invitation") or {}
     if previous and not previous.get("used_at"):
@@ -1208,7 +1202,7 @@ async def generate_user_invitation(user_id: str):
         "invitation": record, "previous_invitation": previous or None,
         "account_status": "pending_activation", "active": False,
     }})
-    link = f"{public_url}/activar?token={quote(plain)}"
+    link = _activation_link(plain)
     delivery = dispatch_email(
         email, "Activa tu acceso a Ikas-Txiki",
         f"Hola,\n\nActiva tu acceso y crea tu contraseña personal:\n{link}\n\n"
@@ -1452,6 +1446,27 @@ def _family_access_email(family: dict) -> str | None:
     return None
 
 
+def _public_app_url() -> str:
+    """Return a valid public origin for invitation links.
+
+    Older production .env files use ``CORS_ORIGINS=[https://…]``.  The
+    brackets are configuration notation, not part of an URL; including them
+    in an email link sends installed PWAs to their login page instead of the
+    public activation route.
+    """
+    configured = str(os.environ.get("PUBLIC_APP_URL") or "").strip()
+    fallback = str(os.environ.get("CORS_ORIGINS") or "").split(",")[0].strip()
+    for value in (configured, fallback):
+        origin = value.strip().strip("[]").strip().strip('"').strip("'").rstrip("/")
+        if origin.startswith(("https://", "http://")):
+            return origin
+    raise HTTPException(status_code=503, detail="No está configurada la URL pública de activación")
+
+
+def _activation_link(token: str) -> str:
+    return f"{_public_app_url()}/activar?token={quote(token, safe='')}"
+
+
 async def _family_access_username(family: dict) -> str:
     raw = normalized_key(family.get("progenitor1_nombre") or family.get("contacto_principal") or "familia")
     base = re.sub(r"[^a-z0-9]+", "", raw)[:18] or "familia"
@@ -1501,7 +1516,6 @@ async def send_family_access_invitations(request: FamilyAccessInvitationRequest)
     found = {family.get("id") for family in families}
     if found != set(family_ids):
         raise HTTPException(status_code=404, detail="Una o varias familias no existen")
-    public_url = (os.environ.get("PUBLIC_APP_URL") or os.environ.get("CORS_ORIGINS", "").split(",")[0]).rstrip("/")
     results = []
     for family in families:
         email = _family_access_email(family)
@@ -1541,7 +1555,7 @@ async def send_family_access_invitations(request: FamilyAccessInvitationRequest)
             }
             await db.users.insert_one(dict(target))
             action = "family_invitation_created"
-        link = f"{public_url}/activar?token={quote(plain)}"
+        link = _activation_link(plain)
         delivery = dispatch_email(email, "Activa tu acceso a Ikas-Txiki", f"Hola,\n\nActiva tu acceso familiar y crea tu contraseña personal:\n{link}\n\nEl enlace caduca en 48 horas. Si no esperabas este correo, puedes ignorarlo.")
         delivery.update({"type": "family_access_invitation", "family_id": family["id"], "user_id": target["id"]})
         await db.delivery_logs.insert_one(delivery)
@@ -1594,7 +1608,6 @@ async def send_player_access_invitations(request: PlayerAccessInvitationRequest)
     players = await db.players.find({"id": {"$in": player_ids}}, {"_id": 0}).to_list(len(player_ids))
     if {player.get("id") for player in players} != set(player_ids):
         raise HTTPException(status_code=404, detail="Uno o varios jugadores no existen")
-    public_url = (os.environ.get("PUBLIC_APP_URL") or os.environ.get("CORS_ORIGINS", "").split(",")[0]).rstrip("/")
     results = []
     for player in players:
         if not _upper_category_player(player):
@@ -1637,7 +1650,7 @@ async def send_player_access_invitations(request: PlayerAccessInvitationRequest)
             }
             await db.users.insert_one(dict(target))
             action = "player_invitation_created"
-        link = f"{public_url}/activar?token={quote(plain)}"
+        link = _activation_link(plain)
         delivery = dispatch_email(email, "Activa tu acceso de jugador a Ikas-Txiki", f"Hola,\n\nActiva tu acceso de jugador y crea tu contraseña personal:\n{link}\n\nEl enlace caduca en 48 horas. Si no esperabas este correo, puedes ignorarlo.")
         delivery.update({"type": "player_access_invitation", "player_id": player["id"], "user_id": target["id"]})
         await db.delivery_logs.insert_one(delivery)
