@@ -43,3 +43,24 @@ migración si no existían antes y restaure después la colección desde la copi
 La migración no guarda contraseñas ni una segunda copia de usuarios dentro de la
 base. La copia previa es, por tanto, la fuente de rollback y debe verificarse
 antes de aplicar cambios.
+
+## Restauración de equipos desde una copia Excel
+
+`004_restore_player_teams_from_backup.py` recupera plantillas únicamente por el
+identificador exacto de cada jugador. No se ejecuta en el despliegue y empieza
+siempre con una vista previa. No aplicará cambios si queda un jugador sin una
+asignación verificable.
+
+```bash
+../venv/bin/python migrations/004_restore_player_teams_from_backup.py /tmp/ikastxiki_backup.xlsx
+```
+
+Para jugadores posteriores a la copia, prepare un JSON que indique el equipo
+de forma explícita, por ejemplo `{"player-id": "JUVENIL"}`, ejecute otra
+vista previa con `--overrides` y revise el informe. Tras tener una copia de
+MongoDB verificada, la única escritura posible requiere además:
+
+```bash
+../venv/bin/python migrations/004_restore_player_teams_from_backup.py /tmp/ikastxiki_backup.xlsx \
+  --overrides /tmp/equipos-nuevos.json --apply --confirm RESTORE-ALL-PLAYER-TEAMS
+```
