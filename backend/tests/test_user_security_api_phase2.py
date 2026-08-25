@@ -137,6 +137,24 @@ def test_session_revocation_rejects_self_and_increments_other_user(monkeypatch):
     assert error.value.status_code == 409
 
 
+def test_deactivation_closes_sessions_and_rejects_self(monkeypatch):
+    user = {"id": "user-fixture", "role": "coach", "session_version": 4, "active": True,
+            "account_status": "active"}
+    db = database(user)
+    monkeypatch.setattr(server, "db", db)
+    monkeypatch.setattr(server, "record_user_audit", AsyncMock())
+    run_as_admin(server.deactivate_user(user["id"]))
+    update = db.users.update_one.await_args.args[1]
+    assert update["$set"]["account_status"] == "deactivated"
+    assert update["$set"]["active"] is False
+    assert update["$set"]["sessions_revoked_at"]
+    assert update["$inc"]["session_version"] == 1
+    user["id"] = "admin-fixture"
+    with pytest.raises(Exception) as error:
+        run_as_admin(server.deactivate_user(user["id"]))
+    assert error.value.status_code == 409
+
+
 def test_user_routes_remain_administer_only():
     request = SimpleNamespace(url=SimpleNamespace(path="/api/users/u/security/revoke-sessions"), method="POST")
     assert server.route_permission(request) == ("users", "administer")

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Eye, EyeOff, KeyRound, Link2, LockKeyhole, LogOut, Plus, RefreshCw, Search, ShieldCheck, UnlockKeyhole, UserCog } from "lucide-react";
+import { Eye, EyeOff, KeyRound, Link2, LockKeyhole, LogOut, Plus, RefreshCw, Search, ShieldCheck, UnlockKeyhole, UserCog, UserX } from "lucide-react";
 import api from "@/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -148,6 +148,16 @@ export default function Users() {
     } catch (requestError) { toast({ title: requestError.response?.data?.detail || t("saveError"), variant: "destructive" }); }
     finally { setSecurityBusy(false); }
   };
+  const deactivateAccess = async () => {
+    if (!security || !window.confirm(t("confirmDeactivateAccess"))) return;
+    setSecurityBusy(true); setRevealedSecret(null);
+    try {
+      await api.delete(`/users/${security.user.id}`);
+      toast({ title: t("accessDeactivated") });
+      setSecurity(null); await load();
+    } catch (requestError) { toast({ title: requestError.response?.data?.detail || t("saveError"), variant: "destructive" }); }
+    finally { setSecurityBusy(false); }
+  };
 
   return (
     <div className="space-y-6" data-testid="users-page">
@@ -227,6 +237,7 @@ export default function Users() {
             <Button disabled={securityBusy} variant="outline" onClick={() => securityAction("invitation")}><Link2 className="h-4 w-4" />{t("generateInvitation")}</Button>
             <Button disabled={securityBusy} variant="outline" onClick={() => securityAction("revoke-sessions")}><LogOut className="h-4 w-4" />{t("closeSessions")}</Button>
             {security.locked ? <Button disabled={securityBusy} variant="outline" onClick={() => securityAction("unlock")}><UnlockKeyhole className="h-4 w-4" />{t("unlockAccess")}</Button> : <Button disabled={securityBusy} variant="outline" onClick={() => securityAction("lock")}><LockKeyhole className="h-4 w-4" />{t("lockAccess")}</Button>}
+            <Button disabled={securityBusy} variant="destructive" onClick={deactivateAccess}><UserX className="h-4 w-4" />{t("deactivateAccess")}</Button>
           </div>}
         </div>}</DialogContent>
       </Dialog>

@@ -1129,14 +1129,19 @@ async def edit_user(user_id: str, changes: UserUpdate):
 async def deactivate_user(user_id: str):
     if user_id == "environment-admin":
         raise HTTPException(status_code=403, detail="La cuenta del sistema es de solo lectura")
+    actor = current_user_context.get() or {}
     existing = await db.users.find_one({"id": user_id}, {"_id": 0})
     if not existing:
         raise HTTPException(status_code=404, detail="No encontrado")
+    if actor.get("id") == user_id:
+        raise HTTPException(status_code=409, detail="No puedes darte de baja desde tu propia sesión")
     candidate = {**existing, "active": False, "account_status": "deactivated"}
     await ensure_admin_protection(existing, candidate)
+    moment = now_iso()
     await db.users.update_one({"id": user_id}, {"$set": {
-        "active": False, "account_status": "deactivated", "updated_at": now_iso(),
-    }})
+        "active": False, "account_status": "deactivated", "updated_at": moment,
+        "sessions_revoked_at": moment,
+    }, "$inc": {"session_version": 1}})
     await record_user_audit("deactivated", candidate, ["active", "account_status"], existing)
     return {"ok": True}
 
