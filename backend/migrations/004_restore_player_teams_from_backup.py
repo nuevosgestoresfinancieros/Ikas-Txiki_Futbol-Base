@@ -50,6 +50,14 @@ def missing_team_query() -> dict:
     ]}
 
 
+def player_identity(player: dict[str, Any]) -> tuple[str, str, str, str]:
+    """Conservative identity used only to stop an accidental duplicate roster row."""
+    return (
+        normal(player.get("nombre")), normal(player.get("apellidos")),
+        normal(player.get("categoria")), normal(player.get("modalidad")),
+    )
+
+
 def sheet_rows(path: Path, sheet: str) -> list[dict[str, Any]]:
     workbook = load_workbook(path, read_only=True, data_only=True)
     try:
@@ -117,16 +125,32 @@ def main() -> None:
     load_dotenv(backend_dir / ".env")
     client = MongoClient(os.environ["MONGO_URL"], serverSelectionTimeoutMS=5000)
     database = client[os.environ["DB_NAME"]]
-    players = list(database.players.find(missing_team_query(), {"_id": 1, "id": 1, "nombre": 1, "apellidos": 1}))
+    players = list(database.players.find(missing_team_query(), {
+        "_id": 1, "id": 1, "nombre": 1, "apellidos": 1, "categoria": 1, "modalidad": 1,
+    }))
+    assigned_players = list(database.players.find({"equipo_id": {"$nin": [None, ""]}}, {
+        "_id": 0, "id": 1, "nombre": 1, "apellidos": 1, "categoria": 1, "modalidad": 1, "equipo_id": 1,
+    }))
+    assigned_by_identity = {player_identity(player): player for player in assigned_players}
     target_teams = list(database.teams.find({"temporada": args.season}))
 
     current_by_name = {normal(team.get("nombre")): team for team in target_teams if team.get("id")}
     plans: list[tuple[dict[str, Any], str, str]] = []  # player, source team id/name, source kind
     unresolved: list[dict[str, str]] = []
     invalid_overrides: list[dict[str, str]] = []
+    duplicates: list[dict[str, str]] = []
 
     for player in players:
         player_id = str(player.get("id") or "")
+        existing = assigned_by_identity.get(player_identity(player))
+        if existing:
+            duplicates.append({
+                "player_id": player_id,
+                "name": f"{player.get('nombre') or ''} {player.get('apellidos') or ''}".strip(),
+                "existing_player_id": str(existing.get("id") or ""),
+                "existing_team_id": str(existing.get("equipo_id") or ""),
+            })
+            continue
         backup_team_id = backup_assignments.get(player_id)
         if backup_team_id:
             plans.append((player, backup_team_id, "backup"))
@@ -166,6 +190,7 @@ def main() -> None:
         "assignments_planned": len(assignments),
         "teams_to_create": sorted({team.get("nombre") for source, team in cloned.items() if source in newly_created_source_ids}),
         "unresolved": unresolved,
+        "possible_duplicates": duplicates,
         "invalid_overrides": invalid_overrides,
         "sample_assignments": assignments[:10],
         "dry_run": not args.apply,
@@ -177,8 +202,8 @@ def main() -> None:
         return
     if args.confirm != "RESTORE-ALL-PLAYER-TEAMS":
         raise SystemExit("Para aplicar use --confirm RESTORE-ALL-PLAYER-TEAMS")
-    if unresolved or invalid_overrides or len(assignments) != len(players):
-        raise SystemExit("No se aplica una restauración parcial: corrija unresolved/invalid_overrides primero")
+    if unresolved or duplicates or invalid_overrides or len(assignments) != len(players):
+        raise SystemExit("No se aplica una restauración parcial ni duplicada: corrija unresolved/possible_duplicates/invalid_overrides primero")
 
     created_teams = [team for source, team in cloned.items() if source in newly_created_source_ids]
     if created_teams:
