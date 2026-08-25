@@ -1,7 +1,7 @@
 """Safety boundaries for finalizing a historical staging draft."""
 
 from inscription_import_service import analyze_rows
-from server import _build_import_operations, _historical_enrichment_operations
+from server import _build_import_operations, _historical_enrichment_operations, _operations_snapshot
 
 
 def record(**changes):
@@ -134,3 +134,47 @@ def test_historical_enrichment_never_assigns_existing_no_aplica_team():
     assert player_op["after"]["equipo_id"] is None
     assert summary["team_assignments"] == 0
     assert not any(op["collection"] == "teams" for op in operations)
+
+
+def test_historical_base_publication_creates_player_without_assigning_text_team():
+    """A staged historical row becomes an official profile, not an auto-team assignment."""
+    staged = record(
+        id="row-new", source_row=2,
+        historical={
+            "equipment_current": {"number": "25", "shirt_size": "S"},
+            "team_history": {"2025-2026": "S.D.A. JUVENIL B"},
+            "sport": {"position": "JUGADOR"},
+            "bank_reference": {"holder": "Persona Tutora"},
+        },
+        bank={"status": "valid", "iban_encrypted": "ciphertext", "iban_last4": "9190"},
+    )
+    draft = {"season": "2026-2027", "duplicates": [], "fuzzy_matches": [], "records": [staged]}
+    existing = {"players": [], "families": [], "inscriptions": [], "payments": [], "teams": []}
+    row = dict(staged)
+    row.update({"_row": staged["source_row"], "_staging_id": staged["id"], "equipo_id": None,
+                "_family_candidate_pending": False,
+                "_bank": {"iban_encrypted": "ciphertext", "iban_last4": "9190"}})
+    analysis = analyze_rows(
+        [row], draft["season"], existing, "historical-new", allow_pending_team=True,
+        allow_pending_contact=True, ignore_team_name_suggestions=True,
+    )
+    base_operations = _build_import_operations(
+        analysis, existing, "job-new", {}, allow_pending_team=True,
+        keep_family_candidates_separate=True, skip_payments=True,
+    )
+    snapshot = _operations_snapshot(existing, base_operations)
+    enrichment_operations, summary = _historical_enrichment_operations(
+        draft, snapshot, "job-new", resolve_team_suggestions=False,
+    )
+    all_operations = [*base_operations, *enrichment_operations]
+
+    assert analysis["blocking_errors"] == 0
+    assert sum(op["collection"] == "players" and op["before"] is None for op in base_operations) == 1
+    assert not any(op["collection"] == "teams" for op in all_operations)
+    base_player = next(op["after"] for op in base_operations if op["collection"] == "players")
+    enriched_player = next(op["after"] for op in enrichment_operations if op["collection"] == "players")
+    assert base_player["equipo_id"] is None
+    assert enriched_player["equipo_id"] is None
+    assert enriched_player["historial_equipos"]["2025-2026"] == "S.D.A. JUVENIL B"
+    assert summary["matched_players"] == 1
+    assert any(op["collection"] == "payments" for op in enrichment_operations)
