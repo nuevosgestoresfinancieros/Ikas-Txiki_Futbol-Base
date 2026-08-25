@@ -57,16 +57,18 @@ def test_temporary_password_is_returned_once_but_only_hash_is_persisted(monkeypa
 
 
 def test_invitation_is_emailed_and_never_returns_or_persists_plain_token(monkeypatch):
-    user = {"id": "user-fixture", "role": "family", "session_version": 0,
+    user = {"id": "user-fixture", "username": "fixture", "role": "family", "session_version": 0,
             "email": "family@example.invalid",
             "invitation": {"digest": "old", "expires_at": "2099-01-01T00:00:00+00:00"}}
     db = database(user)
     monkeypatch.setattr(server, "db", db)
     monkeypatch.setattr(server, "record_user_audit", AsyncMock())
     monkeypatch.setenv("PUBLIC_APP_URL", "https://example.invalid")
-    monkeypatch.setattr(server, "dispatch_email", lambda *_args, **_kwargs: {
-        "status": "sent", "error": None, "recipient": "family@example.invalid",
-    })
+    sent = {}
+    def dispatch(*args, **kwargs):
+        sent["args"], sent["kwargs"] = args, kwargs
+        return {"status": "sent", "error": None, "recipient": "family@example.invalid"}
+    monkeypatch.setattr(server, "dispatch_email", dispatch)
     result = run_as_admin(server.generate_user_invitation(user["id"]))
     update = db.users.update_one.await_args.args[1]["$set"]
     assert result["delivery"] == "sent" and "invitation_token" not in result
@@ -74,6 +76,8 @@ def test_invitation_is_emailed_and_never_returns_or_persists_plain_token(monkeyp
     assert update["previous_invitation"]["cancelled_at"]
     delivery = db.delivery_logs.insert_one.await_args.args[0]
     assert delivery["type"] == "user_access_invitation" and delivery["status"] == "sent"
+    assert "Tu usuario de Ikas-Txiki es: fixture" in sent["args"][2]
+    assert sent["kwargs"]["action_label"] == "Crear mi contraseña"
 
 
 def test_activation_link_strips_legacy_cors_origin_brackets(monkeypatch):

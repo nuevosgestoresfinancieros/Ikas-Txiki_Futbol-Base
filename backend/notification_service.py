@@ -101,7 +101,8 @@ def dispatch_telegram(chat_id: str, text: str, environment: Optional[Mapping[str
 
 def dispatch_email(recipient: str, subject: str, body: str,
                    environment: Optional[Mapping[str, str]] = None,
-                   smtp_factory=None) -> dict:
+                   smtp_factory=None, *, action_url: Optional[str] = None,
+                   action_label: Optional[str] = None) -> dict:
     env = environment if environment is not None else os.environ
     config = provider_configuration(env)["email"]
     base = {"id": str(uuid4()), "channel": "email", "recipient": recipient,
@@ -115,6 +116,15 @@ def dispatch_email(recipient: str, subject: str, body: str,
         message["Subject"] = subject
         message.set_content(body)
         safe_body = "<br>".join(escape(body).splitlines())
+        action_html = ""
+        if action_url and action_label:
+            action_html = (
+                '<p style="margin:24px 0;text-align:center">'
+                f'<a href="{escape(action_url, quote=True)}" '
+                f'style="display:inline-block;border-radius:10px;background:{BRAND_BLUE};color:#ffffff;'
+                'padding:13px 20px;font-weight:700;text-decoration:none">'
+                f'{escape(action_label)}</a></p>'
+            )
         message.add_alternative(
             f"""<!doctype html>
 <html lang="es">
@@ -127,7 +137,7 @@ def dispatch_email(recipient: str, subject: str, body: str,
             <strong style="font-size:20px;color:{BRAND_BLUE}">{BRAND_NAME}</strong><br>
             <span style="font-size:13px;color:#52616b">{CLUB_NAME}</span>
           </td></tr>
-          <tr><td style="padding:28px;font-size:15px;line-height:1.65">{safe_body}</td></tr>
+          <tr><td style="padding:28px;font-size:15px;line-height:1.65">{safe_body}{action_html}</td></tr>
           <tr><td style="padding:16px 24px;background:#eef6f9;text-align:center;font-size:12px;color:#52616b">
             {BRAND_NAME} · {CLUB_NAME}
           </td></tr>

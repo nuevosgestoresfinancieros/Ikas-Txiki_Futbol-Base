@@ -40,7 +40,12 @@ export default function BulkAccountProvisioning({ type, onCancel, onCompleted })
   };
 
   const statusLabels = { ready: t("readyToInvite"), pending: t("invitationPending"), expired: t("invitationExpired"), active: t("activeAccount"), missing_email: t("missingValidEmail") };
-  if (result) return <section className="space-y-4"><div className="rounded-2xl bg-emerald-50 p-5 text-emerald-950"><CheckCircle2 className="mb-2 h-8 w-8" /><h3 className="font-bold">{t("processCompleted")}</h3><p>{t("invitationsResult").replace("{sent}", result.sent).replace("{remaining}", result.results.length - result.sent)}</p></div><Button type="button" onClick={onCancel}>{t("close")}</Button></section>;
+  if (result) {
+    const sent = result.results.filter((item) => item.status === "sent").length;
+    const failed = result.results.filter((item) => item.status === "failed").length;
+    const skipped = result.results.length - sent - failed;
+    return <section className="space-y-4"><div className="rounded-2xl bg-emerald-50 p-5 text-emerald-950"><CheckCircle2 className="mb-2 h-8 w-8" /><h3 className="font-bold">{t("processCompleted")}</h3><p>{t("invitationsResult").replace("{sent}", sent).replace("{remaining}", skipped + failed)}</p><dl className="mt-4 grid grid-cols-3 gap-2 text-center text-sm"><div className="rounded-xl bg-white/70 p-2"><dt>{t("sent")}</dt><dd className="text-lg font-bold">{sent}</dd></div><div className="rounded-xl bg-white/70 p-2"><dt>{t("failed")}</dt><dd className="text-lg font-bold">{failed}</dd></div><div className="rounded-xl bg-white/70 p-2"><dt>{t("pending")}</dt><dd className="text-lg font-bold">{skipped}</dd></div></dl></div><Button type="button" onClick={onCancel}>{t("close")}</Button></section>;
+  }
 
   return <section className="space-y-4">
     <div className="rounded-2xl bg-sky-50 p-4 text-sm text-sky-950"><strong>{t(familyMode ? "bulkFamilyTitle" : "bulkPlayerTitle")}</strong><p className="mt-1">{t("bulkAccessIntro")}</p></div>

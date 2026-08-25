@@ -1205,8 +1205,8 @@ async def generate_user_invitation(user_id: str):
     link = _activation_link(plain)
     delivery = dispatch_email(
         email, "Activa tu acceso a Ikas-Txiki",
-        f"Hola,\n\nActiva tu acceso y crea tu contraseña personal:\n{link}\n\n"
-        f"El enlace caduca en {INVITATION_TTL_HOURS} horas. Si no esperabas este correo, puedes ignorarlo.",
+        _invitation_email_body(str(user.get("username") or ""), link),
+        action_url=link, action_label="Crear mi contraseña",
     )
     delivery.update({"type": "user_access_invitation", "user_id": user_id})
     await db.delivery_logs.insert_one(delivery)
@@ -1558,6 +1558,16 @@ def _activation_link(token: str) -> str:
     return f"{_public_app_url()}/activar?token={quote(token, safe='')}"
 
 
+def _invitation_email_body(username: str, link: str, access_label: str = "") -> str:
+    role_line = f" {access_label}" if access_label else ""
+    return (
+        f"Hola,\n\nTu usuario de Ikas-Txiki es: {username}\n\n"
+        f"Activa tu acceso{role_line} y crea tu contraseña personal pulsando el botón de este correo "
+        f"o abriendo este enlace:\n{link}\n\n"
+        f"El enlace caduca en {INVITATION_TTL_HOURS} horas. No compartas este mensaje."
+    )
+
+
 async def _family_access_username(family: dict) -> str:
     raw = normalized_key(family.get("progenitor1_nombre") or family.get("contacto_principal") or "familia")
     base = re.sub(r"[^a-z0-9]+", "", raw)[:18] or "familia"
@@ -1647,7 +1657,11 @@ async def send_family_access_invitations(request: FamilyAccessInvitationRequest)
             await db.users.insert_one(dict(target))
             action = "family_invitation_created"
         link = _activation_link(plain)
-        delivery = dispatch_email(email, "Activa tu acceso a Ikas-Txiki", f"Hola,\n\nActiva tu acceso familiar y crea tu contraseña personal:\n{link}\n\nEl enlace caduca en 48 horas. Si no esperabas este correo, puedes ignorarlo.")
+        delivery = dispatch_email(
+            email, "Activa tu acceso a Ikas-Txiki",
+            _invitation_email_body(target["username"], link, "familiar"),
+            action_url=link, action_label="Crear mi contraseña",
+        )
         delivery.update({"type": "family_access_invitation", "family_id": family["id"], "user_id": target["id"]})
         await db.delivery_logs.insert_one(delivery)
         await record_user_audit(action, target, ["family_id", "email", "linked_player_ids"])
@@ -1742,7 +1756,11 @@ async def send_player_access_invitations(request: PlayerAccessInvitationRequest)
             await db.users.insert_one(dict(target))
             action = "player_invitation_created"
         link = _activation_link(plain)
-        delivery = dispatch_email(email, "Activa tu acceso de jugador a Ikas-Txiki", f"Hola,\n\nActiva tu acceso de jugador y crea tu contraseña personal:\n{link}\n\nEl enlace caduca en 48 horas. Si no esperabas este correo, puedes ignorarlo.")
+        delivery = dispatch_email(
+            email, "Activa tu acceso de jugador a Ikas-Txiki",
+            _invitation_email_body(target["username"], link, "de jugador"),
+            action_url=link, action_label="Crear mi contraseña",
+        )
         delivery.update({"type": "player_access_invitation", "player_id": player["id"], "user_id": target["id"]})
         await db.delivery_logs.insert_one(delivery)
         await record_user_audit(action, target, ["player_id", "family_id", "email"])
