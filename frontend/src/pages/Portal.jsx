@@ -31,7 +31,11 @@ export default function Portal({ user }) {
 
   const view = useMemo(() => filterPortalByPlayer(data || {}, selectedId), [data, selectedId]);
   const next = useMemo(() => nextPortalActivity(view.schedule), [view.schedule]);
-  const formatDate = (value, options = { dateStyle: "medium" }) => value ? new Intl.DateTimeFormat(lang === "eu" ? "eu-ES" : "es-ES", options).format(new Date(`${value.slice(0, 10)}T12:00:00`)) : "—";
+  const formatDate = (value, options = { dateStyle: "medium" }) => {
+    if (!value) return "—";
+    const parsed = new Date(`${String(value).slice(0, 10)}T12:00:00`);
+    return Number.isNaN(parsed.getTime()) ? "—" : new Intl.DateTimeFormat(lang === "eu" ? "eu-ES" : "es-ES", options).format(parsed);
+  };
 
   const respond = async (callup, status) => {
     if (!window.confirm(t(status === "confirmed" ? "confirmCallupQuestion" : "declineCallupQuestion"))) return;
