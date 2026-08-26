@@ -138,7 +138,7 @@ export default function Users() {
   const securityAction = async (path, method = "post", confirmation = "confirmSensitiveAction") => {
     // Reenviar una invitación es idempotente para el administrador: mantiene
     // auditoría y rota el enlace, pero no necesita un diálogo bloqueante.
-    if (!security || (confirmation && !window.confirm(t(confirmation)))) return;
+    if (!security || securityBusy || (confirmation && !window.confirm(t(confirmation)))) return;
     setSecurityBusy(true); setRevealedSecret(null);
     try {
       const response = await api[method](`/users/${security.user.id}/security/${path}`);
