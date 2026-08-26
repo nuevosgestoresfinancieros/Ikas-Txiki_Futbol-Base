@@ -136,7 +136,9 @@ export default function Users() {
     catch { toast({ title: t("loadError"), variant: "destructive" }); }
   };
   const securityAction = async (path, method = "post", confirmation = "confirmSensitiveAction") => {
-    if (!security || !window.confirm(t(confirmation))) return;
+    // Reenviar una invitación es idempotente para el administrador: mantiene
+    // auditoría y rota el enlace, pero no necesita un diálogo bloqueante.
+    if (!security || (confirmation && !window.confirm(t(confirmation)))) return;
     setSecurityBusy(true); setRevealedSecret(null);
     try {
       const response = await api[method](`/users/${security.user.id}/security/${path}`);
@@ -234,7 +236,7 @@ export default function Users() {
           {revealedSecret && <div className="rounded-2xl border-2 border-amber-300 bg-amber-50 p-4" role="alert"><p className="font-bold text-amber-950">{t("shownOnlyOnce")}</p><code className="mt-2 block break-all rounded-lg bg-white p-3 text-sm">{revealedSecret.value}</code><Button className="mt-3" variant="outline" onClick={() => setRevealedSecret(null)}>{t("understoodHideSecret")}</Button></div>}
           {security.read_only ? <p className="rounded-xl bg-sky-50 p-4 text-sm text-sky-900">{t("systemSecurityReadOnly")}</p> : <div className="grid gap-3 sm:grid-cols-2">
             <Button disabled={securityBusy} variant="outline" onClick={() => securityAction("temporary-password")}><KeyRound className="h-4 w-4" />{t("generateTemporaryPassword")}</Button>
-            <Button disabled={securityBusy} variant="outline" onClick={() => securityAction("invitation")}><Link2 className="h-4 w-4" />{t("generateInvitation")}</Button>
+            <Button disabled={securityBusy} variant="outline" onClick={() => securityAction("invitation", "post", "")}><Link2 className="h-4 w-4" />{t("generateInvitation")}</Button>
             <Button disabled={securityBusy} variant="outline" onClick={() => securityAction("revoke-sessions")}><LogOut className="h-4 w-4" />{t("closeSessions")}</Button>
             {security.locked ? <Button disabled={securityBusy} variant="outline" onClick={() => securityAction("unlock")}><UnlockKeyhole className="h-4 w-4" />{t("unlockAccess")}</Button> : <Button disabled={securityBusy} variant="outline" onClick={() => securityAction("lock")}><LockKeyhole className="h-4 w-4" />{t("lockAccess")}</Button>}
             <Button disabled={securityBusy} variant="destructive" onClick={deactivateAccess}><UserX className="h-4 w-4" />{t("deactivateAccess")}</Button>
