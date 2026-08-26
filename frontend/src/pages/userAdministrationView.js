@@ -8,6 +8,12 @@ export const userDisplayName = (user) => {
   return name || user.username || "—";
 };
 
+// Presentation-only distinction; the authorization role remains `admin`.
+export const userRoleLabelKey = (user) =>
+  user.role === "admin" && (user.username === "javier_flor" || user.email === "docentetics2025@gmail.com")
+    ? "role_admin_secondary"
+    : `role_${user.role}`;
+
 export const filterUsers = (users, filters) => {
   const needle = (filters.search || "").trim().toLocaleLowerCase();
   return users.filter((user) => {

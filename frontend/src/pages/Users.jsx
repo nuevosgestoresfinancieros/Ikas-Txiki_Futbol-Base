@@ -9,7 +9,7 @@ import { useI18n } from "@/i18n";
 import BulkAccountProvisioning from "./BulkAccountProvisioning";
 import {
   USER_STATUSES, allPasswordChecksPass, normalizedStatus, normalizedTeamOptions, passwordChecks,
-  safeUsernameSuggestion, userCounters, userDisplayName, wizardLinkComplete,
+  safeUsernameSuggestion, userCounters, userDisplayName, userRoleLabelKey, wizardLinkComplete,
 } from "./userAdministrationView";
 
 const emptyForm = {
@@ -188,7 +188,7 @@ export default function Users() {
           : <><div className="grid gap-3" data-testid="users-list">{paginatedUsers.map((user) => (
             <article key={user.id} className="rounded-2xl border border-slate-200 bg-white p-4 transition-shadow hover:shadow-md">
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="font-bold text-slate-900">{userDisplayName(user)}</h2><span className="rounded-full bg-sky-50 px-2.5 py-1 text-xs font-bold text-sky-800">{t(`role_${user.role}`)}</span><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">{t(`accountStatus_${normalizedStatus(user)}`)}</span></div><p className="mt-1 break-all text-sm text-slate-500">{user.system_account ? `${t("systemAdministrator")} · ${t("configuredOnServer")}` : [user.username, user.email].filter(Boolean).join(" · ")}</p><p className="mt-1 text-xs text-slate-500">{t("lastAccess")}: {user.last_access_at ? new Date(user.last_access_at).toLocaleString() : t("never")}</p></div>
+                <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="font-bold text-slate-900">{userDisplayName(user)}</h2><span className="rounded-full bg-sky-50 px-2.5 py-1 text-xs font-bold text-sky-800">{t(userRoleLabelKey(user))}</span><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">{t(`accountStatus_${normalizedStatus(user)}`)}</span></div><p className="mt-1 break-all text-sm text-slate-500">{user.system_account ? `${t("systemAdministrator")} · ${t("configuredOnServer")}` : [user.username, user.email].filter(Boolean).join(" · ")}</p><p className="mt-1 text-xs text-slate-500">{t("lastAccess")}: {user.last_access_at ? new Date(user.last_access_at).toLocaleString() : t("never")}</p></div>
                 <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => showProfile(user)}><UserCog className="h-4 w-4" />{t("viewProfile")}</Button><Button variant="outline" onClick={() => showEffectivePermissions(user)}><ShieldCheck className="h-4 w-4" />{t("effectivePermissions")}</Button><Button variant="outline" onClick={() => showSecurity(user)}><LockKeyhole className="h-4 w-4" />{t("security")}</Button>{!user.read_only && <Button variant="outline" onClick={() => openEdit(user)}><UserCog className="h-4 w-4" />{t("edit")}</Button>}</div>
               </div>
             </article>

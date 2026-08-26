@@ -1,7 +1,7 @@
 import { translations } from "../i18n";
 import {
   allPasswordChecksPass, filterUsers, normalizedStatus, normalizedTeamOptions, passwordChecks,
-  safeUsernameSuggestion, userCounters, userDisplayName, wizardLinkComplete,
+  safeUsernameSuggestion, userCounters, userDisplayName, userRoleLabelKey, wizardLinkComplete,
 } from "./userAdministrationView";
 
 const users = [
@@ -25,6 +25,11 @@ test("keeps legacy users compatible and counts every account state", () => {
 test("uses identity first and supports the read-only system account", () => {
   expect(userDisplayName(users[0])).toBe("Administrador del sistema");
   expect(userDisplayName(users[1])).toBe("Entrenador Ficticio");
+});
+
+test("labels Javier as second system administrator without changing his admin role", () => {
+  expect(userRoleLabelKey({ username: "javier_flor", role: "admin" })).toBe("role_admin_secondary");
+  expect(userRoleLabelKey({ username: "admin", role: "admin" })).toBe("role_admin");
 });
 
 test("requires a strong confirmed-password shape", () => {
