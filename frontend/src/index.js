@@ -3,7 +3,7 @@ import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "@/index.css";
 import App from "@/App";
-import { registerPwaServiceWorker } from "@/lib/pwa";
+import { registerPwaLaunchHandler, registerPwaServiceWorker } from "@/lib/pwa";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -24,3 +24,4 @@ root.render(
 );
 
 registerPwaServiceWorker();
+registerPwaLaunchHandler();

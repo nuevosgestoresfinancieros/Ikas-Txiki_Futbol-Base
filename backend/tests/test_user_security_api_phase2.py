@@ -88,6 +88,16 @@ def test_activation_link_strips_legacy_cors_origin_brackets(monkeypatch):
     )
 
 
+def test_activation_link_normalizes_markdown_formatted_public_url(monkeypatch):
+    monkeypatch.setenv(
+        "PUBLIC_APP_URL",
+        "[https://ikasfutbase.cibermedida.es](https://ikasfutbase.cibermedida.es)",
+    )
+    assert server._activation_link("token_value") == (
+        "https://ikasfutbase.cibermedida.es/activar?token=token_value"
+    )
+
+
 def test_player_family_references_do_not_match_by_name_only():
     player = {
         "progenitor1_nombre": "Familia Ejemplo",

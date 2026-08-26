@@ -6,6 +6,9 @@
   "id": "/?source=pwa",
   "start_url": "/?source=pwa",
   "scope": "/",
+  "launch_handler": {
+    "client_mode": ["navigate-existing", "auto"]
+  },
   "display": "standalone",
   "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
   "categories": ["business", "productivity", "sports"],

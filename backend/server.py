@@ -1572,7 +1572,11 @@ def _public_app_url() -> str:
     configured = str(os.environ.get("PUBLIC_APP_URL") or "").strip()
     fallback = str(os.environ.get("CORS_ORIGINS") or "").split(",")[0].strip()
     for value in (configured, fallback):
-        origin = value.strip().strip("[]").strip().strip('"').strip("'").rstrip("/")
+        origin = value.strip()
+        markdown_link = re.fullmatch(r"\[([^\]]+)]\([^)]+\)", origin)
+        if markdown_link:
+            origin = markdown_link.group(1)
+        origin = origin.strip("[]").strip().strip('"').strip("'").rstrip("/")
         if origin.startswith(("https://", "http://")):
             return origin
     raise HTTPException(status_code=503, detail="No está configurada la URL pública de activación")

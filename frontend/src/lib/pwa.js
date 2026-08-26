@@ -16,6 +16,30 @@ export const detectPwaState = () => {
   return { standalone, ios, chromium };
 };
 
+export const getActivationLaunchUrl = (targetURL, currentOrigin = window.location.origin) => {
+  try {
+    const target = new URL(targetURL, currentOrigin);
+    if (target.origin !== currentOrigin || target.pathname !== "/activar" || !target.searchParams.get("token")) {
+      return null;
+    }
+    return `${target.pathname}${target.search}${target.hash}`;
+  } catch {
+    return null;
+  }
+};
+
+export const registerPwaLaunchHandler = () => {
+  if (!window.launchQueue?.setConsumer) return;
+
+  window.launchQueue.setConsumer(({ targetURL }) => {
+    const activationUrl = getActivationLaunchUrl(targetURL);
+    if (!activationUrl) return;
+
+    const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (currentUrl !== activationUrl) window.location.assign(activationUrl);
+  });
+};
+
 export const registerPwaServiceWorker = () => {
   if (!("serviceWorker" in navigator) || process.env.NODE_ENV !== "production") return;
 
