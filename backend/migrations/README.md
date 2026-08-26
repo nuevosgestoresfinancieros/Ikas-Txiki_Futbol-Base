@@ -111,3 +111,16 @@ detecta un dorsal o nombre principal ya introducido manualmente.
 ../venv/bin/python migrations/007_promote_primary_equipment.py \
   --apply --confirm PROMOTE-PRIMARY-EQUIPMENT
 ```
+
+## Consolidación de familias por correo
+
+`008_consolidate_families_by_email.py` unifica fichas familiares con el mismo
+correo exacto, reasigna sus hijos e inscripciones y archiva cada ficha retirada
+antes de eliminarla. Si un grupo tiene más de una cuenta familiar, la migración
+se bloquea sin hacer cambios: ese caso exige revisión administrativa.
+
+```bash
+../venv/bin/python migrations/008_consolidate_families_by_email.py
+../venv/bin/python migrations/008_consolidate_families_by_email.py \
+  --apply --confirm CONSOLIDATE-FAMILIES-BY-EMAIL
+```

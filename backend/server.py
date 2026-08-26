@@ -1543,6 +1543,24 @@ def _family_access_email(family: dict) -> str | None:
     return None
 
 
+def _family_access_display_name(family: dict, children: list[dict]) -> str:
+    """Return a human-friendly family label for the bulk invitation picker.
+
+    Historical imports sometimes use placeholders such as ``progenitor`` as a
+    contact name.  They are not useful to an administrator choosing recipients;
+    when that happens, use the linked child's name instead of exposing the
+    technical placeholder.
+    """
+    raw_name = normalized_text(family.get("progenitor1_nombre") or family.get("contacto_principal"))
+    if normalized_key(raw_name) not in {"", "progenitor", "progenitor1", "familia"}:
+        return raw_name
+    if children:
+        child_name = normalized_text(f"{children[0].get('nombre', '')} {children[0].get('apellidos', '')}")
+        if child_name:
+            return f"Familia de {child_name}"
+    return "Familia"
+
+
 def _public_app_url() -> str:
     """Return a valid public origin for invitation links.
 
@@ -1603,11 +1621,15 @@ async def get_family_accesses():
         user = users_by_family.get(family.get("id"))
         email = _family_access_email(family)
         children = [player for player in players if player.get("familia_id") == family.get("id")]
+        # The bulk flow can only send an invitation to a real address.  Do not
+        # make administrators sift through historical records without one.
+        if not email:
+            continue
         state = "active" if user and account_status(user) == "active" else (
-            invitation_status((user or {}).get("invitation")) if user else ("ready" if email else "missing_email")
+            invitation_status((user or {}).get("invitation")) if user else "ready"
         )
         rows.append({
-            "family_id": family.get("id"), "family_name": family.get("progenitor1_nombre") or family.get("contacto_principal") or "Familia",
+            "family_id": family.get("id"), "family_name": _family_access_display_name(family, children),
             "email": email, "children": [{"id": child.get("id"), "name": f"{child.get('nombre', '')} {child.get('apellidos', '')}".strip()} for child in children],
             "user_id": (user or {}).get("id"), "username": (user or {}).get("username"),
             "status": state, "invitation_expires_at": ((user or {}).get("invitation") or {}).get("expires_at"),
