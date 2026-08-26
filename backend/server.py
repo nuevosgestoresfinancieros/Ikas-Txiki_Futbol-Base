@@ -352,7 +352,7 @@ async def consume_password_token(kind: str, request: TokenPasswordRequest) -> di
     if not result.modified_count:
         raise HTTPException(status_code=400, detail="Enlace inválido, caducado o ya utilizado")
     await record_user_audit(f"{kind}_completed", user, [])
-    return {"ok": True}
+    return {"ok": True, "username": user.get("username")}
 
 
 @app.post("/api/auth/change-temporary-password")
