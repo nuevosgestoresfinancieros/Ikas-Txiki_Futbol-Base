@@ -56,7 +56,7 @@ def test_temporary_password_is_returned_once_but_only_hash_is_persisted(monkeypa
     assert db.users.update_one.await_args.args[1]["$inc"]["session_version"] == 1
 
 
-def test_invitation_is_emailed_and_never_returns_or_persists_plain_token(monkeypatch):
+def test_invitation_is_emailed_and_keeps_recent_pending_links_usable(monkeypatch):
     user = {"id": "user-fixture", "username": "fixture", "role": "family", "session_version": 0,
             "email": "family@example.invalid",
             "invitation": {"digest": "old", "expires_at": "2099-01-01T00:00:00+00:00"}}
@@ -73,11 +73,32 @@ def test_invitation_is_emailed_and_never_returns_or_persists_plain_token(monkeyp
     update = db.users.update_one.await_args.args[1]["$set"]
     assert result["delivery"] == "sent" and "invitation_token" not in result
     assert "token" not in str(update)
-    assert update["previous_invitation"]["cancelled_at"]
+    assert update["invitation_history"] == [user["invitation"]]
     delivery = db.delivery_logs.insert_one.await_args.args[0]
     assert delivery["type"] == "user_access_invitation" and delivery["status"] == "sent"
     assert "Tu usuario de Ikas-Txiki es: fixture" in sent["args"][2]
     assert sent["kwargs"]["action_label"] == "Crear mi contraseña"
+
+
+def test_recently_resent_invitation_can_still_activate(monkeypatch):
+    plain, original = server.issue_token(server.JWT_SECRET, ttl_minutes=0, ttl_hours=48)
+    _new_plain, latest = server.issue_token(server.JWT_SECRET, ttl_minutes=0, ttl_hours=48)
+    user = {
+        "id": "user-fixture", "username": "family", "role": "family",
+        "active": False, "account_status": "pending_activation", "session_version": 0,
+        "invitation": latest, "invitation_history": [original],
+    }
+    db = database(user)
+    monkeypatch.setattr(server, "db", db)
+    monkeypatch.setattr(server, "record_user_audit", AsyncMock())
+    request = server.TokenPasswordRequest(
+        token=plain, password="New-Secure-Password-2026!",
+        password_confirmation="New-Secure-Password-2026!",
+    )
+    assert asyncio.run(server.activate_invitation(request)) == {"ok": True, "username": "family"}
+    update = db.users.update_one.await_args.args[1]["$set"]
+    assert update["active"] is True
+    assert update["invitation_history"] == []
 
 
 def test_activation_link_strips_legacy_cors_origin_brackets(monkeypatch):

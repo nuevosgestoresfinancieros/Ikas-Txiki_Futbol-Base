@@ -67,8 +67,13 @@ const Login = ({ onLogin }) => {
         password: form.password,
       });
       if (response.data.requires_password_change) { setPasswordChangeToken(response.data.password_change_token); return; }
-      onLogin?.(response.data.user || { username: response.data.username, role: "admin", permissions: {} });
-      const destination = location.state?.from?.pathname || "/";
+      const loggedUser = response.data.user || { username: response.data.username, role: "admin", permissions: {} };
+      onLogin?.(loggedUser);
+      // Una cuenta familiar o de jugador no debe volver al dashboard interno
+      // aunque el navegador hubiera guardado la ruta anterior.
+      const destination = ["family", "player"].includes(loggedUser.role)
+        ? "/portal"
+        : location.state?.from?.pathname || "/";
       navigate(destination, { replace: true });
     } catch (requestError) {
       const status = requestError.response?.status;

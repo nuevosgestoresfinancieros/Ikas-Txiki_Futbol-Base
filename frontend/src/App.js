@@ -57,6 +57,11 @@ const ProtectedRoute = ({ children, user }) => {
 const AuthorizedRoute = ({ user, resource, children }) =>
   can(user, resource) ? children : <Navigate to="/" replace />;
 
+// Las familias y los jugadores no usan el panel interno del club. Su punto de
+// entrada es siempre el portal, incluso después de activar la cuenta o de
+// restaurar una sesión existente.
+const initialRouteFor = (user) => ["family", "player"].includes(user?.role) ? "/portal" : "/";
+
 function App() {
   const [user, setUser] = useState(undefined); // undefined=cargando, null=no auth, objeto=autenticado
 
@@ -81,7 +86,7 @@ function App() {
             user === undefined
               ? <AppLoader fullPage />
               : user
-                ? <Navigate to="/" replace />
+                ? <Navigate to={initialRouteFor(user)} replace />
                 : <Login onLogin={(u) => setUser(u)} />
           } />
           <Route path="/activar" element={<Suspense fallback={<AppLoader fullPage />}><ActivateAccount /></Suspense>} />
@@ -94,7 +99,11 @@ function App() {
               <AuthProvider user={user}><Layout onLogout={handleLogout} user={user}>
                 <Suspense fallback={<AppLoader />}>
                   <Routes>
-                    <Route path="/" element={<Dashboard />} />
+                    <Route path="/" element={
+                      ["family", "player"].includes(user?.role)
+                        ? <Navigate to="/portal" replace />
+                        : <Dashboard />
+                    } />
                     <Route path="/inscripciones" element={<AuthorizedRoute user={user} resource="inscriptions"><Inscriptions /></AuthorizedRoute>} />
                     <Route path="/jugadores" element={<AuthorizedRoute user={user} resource="players"><Players /></AuthorizedRoute>} />
                     <Route path="/familias" element={<AuthorizedRoute user={user} resource="families"><Families /></AuthorizedRoute>} />

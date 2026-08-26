@@ -336,23 +336,32 @@ async def consume_password_token(kind: str, request: TokenPasswordRequest) -> di
     validate_password_strength(request.password)
     digest = token_digest(request.token, JWT_SECRET)
     field = "invitation" if kind == "invitation" else "recovery"
-    user = await db.users.find_one({f"{field}.digest": digest})
-    record = (user or {}).get(field)
+    token_query = {"$or": [
+        {f"{field}.digest": digest},
+        {f"{field}_history.digest": digest},
+    ]}
+    user = await db.users.find_one(token_query)
+    candidates = [(user or {}).get(field)] + list((user or {}).get(f"{field}_history") or [])
+    record = next((candidate for candidate in candidates if candidate and candidate.get("digest") == digest), None)
     if not user or not token_is_usable(record):
         raise HTTPException(status_code=400, detail="Enlace inválido o caducado")
     moment = now_iso()
     result = await db.users.update_one({
-        "id": user["id"], f"{field}.digest": digest, f"{field}.used_at": None,
-        f"{field}.cancelled_at": None, f"{field}.expires_at": {"$gt": moment},
+        "id": user["id"], "active": {"$ne": True},
+        "$or": [{f"{field}.digest": digest}, {f"{field}_history.digest": digest}],
     }, {"$set": {
         "password_hash": pwd_context.hash(request.password), "must_change_password": False,
         "account_status": "active", "active": True, f"{field}.used_at": moment,
+        f"{field}.cancelled_at": moment, f"{field}_history": [],
         "last_password_change_at": moment, "sessions_revoked_at": moment,
     }, "$inc": {"session_version": 1}})
     if not result.modified_count:
         raise HTTPException(status_code=400, detail="Enlace inválido, caducado o ya utilizado")
     await record_user_audit(f"{kind}_completed", user, [])
-    return {"ok": True, "username": user.get("username")}
+    response = {"ok": True}
+    if kind == "invitation":
+        response["username"] = user.get("username")
+    return response
 
 
 @app.post("/api/auth/change-temporary-password")
@@ -1200,11 +1209,24 @@ async def generate_user_invitation(user_id: str):
     if not email or "@" not in email:
         raise HTTPException(status_code=422, detail="La cuenta necesita un correo válido para enviar la invitación")
     plain, record = issue_token(JWT_SECRET, ttl_minutes=0, ttl_hours=INVITATION_TTL_HOURS)
-    previous = user.get("invitation") or {}
-    if previous and not previous.get("used_at"):
-        previous = {**previous, "cancelled_at": now_iso()}
+    # Un reenvío no puede convertir en inválido un correo que la familia acaba
+    # de recibir. Conservamos un número reducido de enlaces pendientes hasta
+    # que se active la cuenta o caduquen. Solo se guardan hashes, nunca tokens.
+    pending = list(user.get("invitation_history") or [])
+    current = user.get("invitation") or {}
+    if token_is_usable(current):
+        pending.append(current)
+    pending = [item for item in pending if token_is_usable(item)]
+    unique_pending = []
+    seen_digests = set()
+    for item in reversed(pending):
+        digest = item.get("digest")
+        if digest and digest not in seen_digests:
+            unique_pending.append(item)
+            seen_digests.add(digest)
+    invitation_history = list(reversed(unique_pending[:3]))
     await db.users.update_one({"id": user_id}, {"$set": {
-        "invitation": record, "previous_invitation": previous or None,
+        "invitation": record, "invitation_history": invitation_history,
         "account_status": "pending_activation", "active": False,
     }})
     link = _activation_link(plain)

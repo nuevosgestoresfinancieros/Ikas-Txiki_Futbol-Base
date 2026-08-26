@@ -1,4 +1,6 @@
-const CACHE_VERSION = "ikas-txiki-pwa-20260820-1";
+// Fuerza la actualización de instalaciones existentes antes de abrir una
+// invitación: las rutas de activación nunca se sirven desde un HTML antiguo.
+const CACHE_VERSION = "ikas-txiki-pwa-20260826-activation-1";
 
 self.addEventListener("install", () => {
   self.skipWaiting();
