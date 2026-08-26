@@ -9,6 +9,7 @@ import RgpdBanner from "@/components/RgpdBanner";
 import Login from "@/pages/Login";
 import SplashScreen from "@/components/SplashScreen";
 import { AuthProvider, can } from "@/auth";
+import AppErrorBoundary from "@/components/AppErrorBoundary";
 
 const Dashboard = lazy(() => import("@/pages/Dashboard"));
 const Players = lazy(() => import("@/pages/Players"));
@@ -74,7 +75,7 @@ function App() {
     <I18nProvider>
       <SplashScreen ready={user !== undefined} />
       <BrowserRouter>
-        <Routes>
+        <AppErrorBoundary><Routes>
           {/* Ruta pública — Login */}
           <Route path="/login" element={
             user === undefined
@@ -117,7 +118,7 @@ function App() {
             </ProtectedRoute>
           }
         />
-        </Routes>
+        </Routes></AppErrorBoundary>
         <RgpdBanner />
         <Toaster position="top-right" richColors />
       </BrowserRouter>
