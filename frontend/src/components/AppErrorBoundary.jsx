@@ -3,6 +3,9 @@ import { Link } from "react-router-dom";
 import { AlertTriangle, RefreshCw } from "lucide-react";
 import ClubLogo from "@/components/ClubLogo";
 import { Button } from "@/components/ui/button";
+import { isStaleAssetError } from "@/lib/staleAssetRecovery";
+
+const STALE_ASSET_RELOAD_KEY = "ikastxiki:stale-asset-reload";
 
 /** Prevent an unexpected render error from leaving the application blank. */
 export default class AppErrorBoundary extends React.Component {
@@ -15,6 +18,16 @@ export default class AppErrorBoundary extends React.Component {
   componentDidCatch(error, info) {
     // Keep the error available to browser diagnostics without exposing it to users.
     console.error("Error de renderizado de Ikas-Txiki", error, info);
+
+    // A deployed CRA build can replace an old lazy-loaded chunk while an
+    // installed PWA is still running its previous entry bundle. Retry once
+    // with a cache-busting navigation instead of showing an opaque error.
+    if (isStaleAssetError(error) && !window.sessionStorage.getItem(STALE_ASSET_RELOAD_KEY)) {
+      window.sessionStorage.setItem(STALE_ASSET_RELOAD_KEY, "1");
+      const url = new URL(window.location.href);
+      url.searchParams.set("_ikastxiki_refresh", Date.now().toString());
+      window.location.replace(url.toString());
+    }
   }
 
   render() {

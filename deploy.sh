@@ -11,7 +11,29 @@ echo "→ Instalando dependencias frontend..."
 cd frontend
 yarn install --frozen-lockfile 2>/dev/null || yarn install
 echo "→ Construyendo frontend..."
+
+# CRA assigns a content hash to each JavaScript chunk.  Keeping the previous
+# static assets prevents an already open browser/PWA from failing while it
+# refreshes from its old entry bundle to the new one.
+ASSET_BACKUP="$(mktemp -d)"
+cleanup_assets() {
+    rm -rf "$ASSET_BACKUP"
+}
+trap cleanup_assets EXIT
+if [ -d build/static ]; then
+    cp -a build/static "$ASSET_BACKUP/static"
+fi
 yarn build
+if [ -d "$ASSET_BACKUP/static" ]; then
+    while IFS= read -r -d '' OLD_ASSET; do
+        RELATIVE_PATH="${OLD_ASSET#"$ASSET_BACKUP/static/"}"
+        NEW_ASSET="build/static/$RELATIVE_PATH"
+        if [ ! -e "$NEW_ASSET" ]; then
+            mkdir -p "$(dirname "$NEW_ASSET")"
+            cp -a "$OLD_ASSET" "$NEW_ASSET"
+        fi
+    done < <(find "$ASSET_BACKUP/static" -type f -print0)
+fi
 cd ..
 
 echo "→ Verificando proxy /uploads en Apache..."

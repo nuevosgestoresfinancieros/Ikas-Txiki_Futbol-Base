@@ -46,7 +46,15 @@ export const registerPwaServiceWorker = () => {
   window.addEventListener("load", () => {
     navigator.serviceWorker
       .register("/sw.js", { scope: "/" })
-      .then((registration) => registration.update?.())
+      .then((registration) => {
+        let refreshedForNewWorker = false;
+        navigator.serviceWorker.addEventListener("controllerchange", () => {
+          if (refreshedForNewWorker) return;
+          refreshedForNewWorker = true;
+          window.location.reload();
+        });
+        return registration.update?.();
+      })
       .catch(() => {});
   });
 };
