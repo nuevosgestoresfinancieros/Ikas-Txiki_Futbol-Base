@@ -1,5 +1,5 @@
 import { translations } from "../i18n";
-import { canSendCommunication, communicationSendConfirmation, isCommunicationSending } from "./communicationsView";
+import { canSendCommunication, communicationFailureNeedsAuthorizationHelp, communicationSendConfirmation, isCommunicationSending } from "./communicationsView";
 
 test("muestra Enviar solo para comunicaciones pending o failed", () => {
   expect(canSendCommunication("pending")).toBe(true);
@@ -24,4 +24,17 @@ test("los textos de enviar, éxito, error y reintento están disponibles en ES y
     expect(translations.eu[key]).toBeTruthy();
   });
   expect(canSendCommunication("failed")).toBe(true);
+});
+
+test("la guía y la ayuda de autorización están traducidas en ES y EU", () => {
+  ["communicationGuideTitle", "communicationGuideIntro", "communicationGuideStepAuthorizations", "communicationGuideStepCreate", "communicationGuideStepSave", "communicationGuideStepPreview", "communicationGuideStepConfirm", "communicationStatesTitle", "communicationFailureHelpTitle", "communicationFailureAuthorizationText", "communicationFailureNextStep", "reviewAuthorizations", "viewGuide", "hideGuide"].forEach((key) => {
+    expect(translations.es[key]).toBeTruthy();
+    expect(translations.eu[key]).toBeTruthy();
+  });
+});
+
+test("la ayuda de autorizaciones se muestra solo para motivos de contacto o consentimiento", () => {
+  expect(communicationFailureNeedsAuthorizationHelp("recipient_missing")).toBe(true);
+  expect(communicationFailureNeedsAuthorizationHelp("consent_missing")).toBe(true);
+  expect(communicationFailureNeedsAuthorizationHelp("provider_not_configured")).toBe(false);
 });

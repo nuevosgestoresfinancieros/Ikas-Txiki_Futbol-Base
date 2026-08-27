@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
-import { MessageSquare, Plus, Pencil, Trash2, Mail, Send, Check, Loader2 } from "lucide-react";
+import { Link, useSearchParams } from "react-router-dom";
+import { MessageSquare, Plus, Pencil, Trash2, Mail, Send, Check, Loader2, ChevronDown, ChevronUp, ShieldCheck, FilePenLine, Save, Eye, CircleCheck, Clock3, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
 import { PermissionGate, usePermission } from "@/auth";
@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { PageHeader, EmptyState } from "@/components/shared";
 import { Field, Area, SelectField } from "@/components/form";
-import { canSendCommunication, communicationSendConfirmation, isCommunicationSending } from "./communicationsView";
+import { canSendCommunication, communicationFailureNeedsAuthorizationHelp, communicationSendConfirmation, isCommunicationSending } from "./communicationsView";
 
 const empty = { destinatario_tipo: "equipo", canal: "email", prioridad: "normal" };
 
@@ -28,6 +28,7 @@ const Communications = () => {
   const [form, setForm] = useState(empty);
   const [sendingId, setSendingId] = useState(null);
   const [sendError, setSendError] = useState("");
+  const [guideOpen, setGuideOpen] = useState(true);
 
   const load = async () => setItems((await api.get("/communications")).data);
   useEffect(() => {
@@ -92,6 +93,20 @@ const Communications = () => {
       <PageHeader title={t("communications")} icon={MessageSquare}
         action={canCreate ? <Button data-testid="add-comm-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("add")}</Button> : null} />
 
+      <section className="mb-6 overflow-hidden rounded-2xl border border-[#93C8EE] bg-white shadow-sm" aria-labelledby="communication-guide-title" data-testid="communication-guide">
+        <div className="flex items-center justify-between gap-4 bg-[#0E3554] px-4 py-3 text-white sm:px-5">
+          <div className="min-w-0"><h2 id="communication-guide-title" className="font-heading text-base font-bold sm:text-lg">{t("communicationGuideTitle")}</h2>{!guideOpen && <p className="mt-0.5 text-xs text-[#DCEFFD]">{t("communicationGuideCollapsed")}</p>}</div>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setGuideOpen((open) => !open)} aria-expanded={guideOpen} aria-controls="communication-guide-content" className="shrink-0 border border-[#93C8EE] bg-white/10 text-white hover:bg-white hover:text-[#0E3554]">{guideOpen ? <ChevronUp /> : <ChevronDown />}{t(guideOpen ? "hideGuide" : "viewGuide")}</Button>
+        </div>
+        {guideOpen && <div id="communication-guide-content" className="p-4 sm:p-5">
+          <p className="max-w-4xl text-sm leading-6 text-slate-700">{t("communicationGuideIntro")}</p>
+          <ol className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">{[
+            [ShieldCheck, "communicationGuideStepAuthorizations", "communicationGuideStepAuthorizationsText", true], [FilePenLine, "communicationGuideStepCreate", "communicationGuideStepCreateText"], [Save, "communicationGuideStepSave", "communicationGuideStepSaveText"], [Eye, "communicationGuideStepPreview", "communicationGuideStepPreviewText"], [CircleCheck, "communicationGuideStepConfirm", "communicationGuideStepConfirmText"]
+          ].map(([Icon, title, text, authorizationLink], index) => <li key={title} className="rounded-xl border border-slate-200 bg-slate-50 p-3"><div className="flex items-start gap-2.5"><span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#E7F4FC] text-[#2B75B0]"><Icon className="h-4 w-4" aria-hidden="true" /></span><div><p className="text-xs font-bold uppercase tracking-wide text-[#2B75B0]">{index + 1}. {t(title)}</p><p className="mt-1 text-xs leading-5 text-slate-600">{t(text)}</p>{authorizationLink && <Button asChild variant="link" size="sm" className="mt-1 h-auto px-0 py-0 text-xs"><Link to="/autorizaciones">{t("reviewAuthorizations")}</Link></Button>}</div></div></li>)}</ol>
+          <div className="mt-4 border-t border-[#D7EAF7] pt-4"><h3 className="text-sm font-bold text-[#0E3554]">{t("communicationStatesTitle")}</h3><dl className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">{[[Clock3, "deliveryPending", "communicationStatePendingText", "text-amber-700 bg-amber-50 border-amber-200"], [Loader2, "sending", "communicationStateSendingText", "text-[#2B75B0] bg-[#F1F8FD] border-[#93C8EE]"], [CheckCircle2, "sent", "communicationStateSentText", "text-emerald-700 bg-emerald-50 border-emerald-200"], [AlertTriangle, "failed", "communicationStateFailedText", "text-red-700 bg-red-50 border-red-200"]].map(([Icon, label, text, color]) => <div key={label} className={`rounded-xl border p-3 ${color}`}><dt className="flex items-center gap-1.5 text-xs font-bold"><Icon className={`h-4 w-4 ${label === "sending" ? "animate-spin" : ""}`} aria-hidden="true" />{t(label)}</dt><dd className="mt-1 text-xs leading-5 text-slate-700">{t(text)}</dd></div>)}</dl></div>
+        </div>}
+      </section>
+
       {items.length === 0 ? (
         <EmptyState icon={MessageSquare} message={t("noData")} action={canCreate ? <Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("add")}</Button> : null} />
       ) : (
@@ -117,6 +132,7 @@ const Communications = () => {
                   <PermissionGate resource="communications" action="delete"><Button variant="ghost" size="icon" aria-label={`${t("delete")} ${i.asunto || t("communications")}`} data-testid={`delete-comm-${i.id}`} onClick={() => remove(i)} className="text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button></PermissionGate>
                 </div>
               </div>
+              {i.estado_envio === "failed" && communicationFailureNeedsAuthorizationHelp(i.error_envio) && <aside className="mt-4 rounded-xl border border-[#93C8EE] bg-[#F1F8FD] p-3" aria-labelledby={`communication-failure-help-${i.id}`} data-testid={`communication-failure-help-${i.id}`}><div className="flex gap-2.5"><AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-[#2B75B0]" aria-hidden="true" /><div><h3 id={`communication-failure-help-${i.id}`} className="text-sm font-bold text-[#0E3554]">{t("communicationFailureHelpTitle")}</h3><p className="mt-1 text-sm leading-5 text-slate-700">{t("communicationFailureAuthorizationText")}</p><Button asChild variant="outline" size="sm" className="mt-3"><Link to="/autorizaciones">{t("reviewAuthorizations")}</Link></Button><p className="mt-3 text-xs leading-5 text-slate-600">{t("communicationFailureNextStep")}</p></div></div></aside>}
             </div>
           ))}
         </div>
