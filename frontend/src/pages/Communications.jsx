@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { MessageSquare, Plus, Pencil, Trash2, Mail, Send, Check } from "lucide-react";
+import { MessageSquare, Plus, Pencil, Trash2, Mail, Send, Check, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
 import { PermissionGate, usePermission } from "@/auth";
@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { PageHeader, EmptyState } from "@/components/shared";
 import { Field, Area, SelectField } from "@/components/form";
+import { canSendCommunication, communicationSendConfirmation, isCommunicationSending } from "./communicationsView";
 
 const empty = { destinatario_tipo: "equipo", canal: "email", prioridad: "normal" };
 
@@ -25,6 +26,8 @@ const Communications = () => {
   const [previewError, setPreviewError] = useState("");
   const [dialog, setDialog] = useState(false);
   const [form, setForm] = useState(empty);
+  const [sendingId, setSendingId] = useState(null);
+  const [sendError, setSendError] = useState("");
 
   const load = async () => setItems((await api.get("/communications")).data);
   useEffect(() => {
@@ -57,6 +60,23 @@ const Communications = () => {
     else await api.post("/communications", payload);
     toast.success(t("saved")); setDialog(false); load();
   };
+  const sendCommunication = async (item) => {
+    setSendError("");
+    setSendingId(item.id);
+    try {
+      const preview = await api.get(`/communications/${item.id}/send-preview`);
+      if (!preview.data.can_send) throw new Error(t("communicationAlreadySent"));
+      const recipientCount = preview.data.summary?.available_emails || 0;
+      if (!window.confirm(communicationSendConfirmation(t, recipientCount))) return;
+      await api.post(`/communications/${item.id}/send`);
+      toast.success(t("communicationSent"));
+      await load();
+    } catch (error) {
+      setSendError(error.response?.data?.detail || error.message || t("communicationSendError"));
+    } finally {
+      setSendingId(null);
+    }
+  };
   const remove = async (i) => { if (!window.confirm(t("confirmDelete"))) return; await api.delete(`/communications/${i.id}`); toast.success(t("deleted")); load(); };
 
   const destOptions = form.destinatario_tipo === "equipo" ? teams.map(tm=>({value:tm.id,label:tm.nombre}))
@@ -76,6 +96,7 @@ const Communications = () => {
         <EmptyState icon={MessageSquare} message={t("noData")} action={canCreate ? <Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("add")}</Button> : null} />
       ) : (
         <div className="space-y-3">
+          {sendError && <p className="text-sm font-semibold text-red-700" role="alert">{sendError}</p>}
           {items.map((i) => (
             <div key={i.id} data-testid={`comm-card-${i.id}`} className="surface-card interactive-card p-4">
               <div className="flex items-start justify-between gap-3">
@@ -90,7 +111,8 @@ const Communications = () => {
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  {i.estado_envio === "sent" ? <span className="inline-flex items-center gap-1 text-xs font-bold text-green-600"><Check className="h-4 w-4" />{t("sent")}</span> : i.estado_envio === "failed" ? <span className="text-xs font-bold text-red-600">{t("failed")}</span> : <span className="text-xs font-bold text-amber-600">{t("deliveryPending")}</span>}
+                  {i.estado_envio === "sent" ? <span className="inline-flex items-center gap-1 text-xs font-bold text-green-600"><Check className="h-4 w-4" />{t("sent")}</span> : i.estado_envio === "sending" ? <span className="inline-flex items-center gap-1 text-xs font-bold text-blue-700"><Loader2 className="h-4 w-4 animate-spin" />{t("sending")}</span> : i.estado_envio === "failed" ? <span className="text-xs font-bold text-red-600">{t("failed")}</span> : <span className="text-xs font-bold text-amber-600">{t("deliveryPending")}</span>}
+                  {canCreate && canSendCommunication(i.estado_envio) && <Button variant="outline" size="sm" data-testid={`send-comm-${i.id}`} onClick={() => sendCommunication(i)} disabled={isCommunicationSending(i.id, sendingId)}>{isCommunicationSending(i.id, sendingId) ? <><Loader2 className="h-4 w-4 animate-spin" />{t("sending")}</> : <><Send className="h-4 w-4" />{t("send")}</>}</Button>}
                   <PermissionGate resource="communications" action="edit"><Button variant="ghost" size="icon" aria-label={`${t("edit")} ${i.asunto || t("communications")}`} data-testid={`edit-comm-${i.id}`} onClick={() => openEdit(i)}><Pencil className="h-4 w-4" /></Button></PermissionGate>
                   <PermissionGate resource="communications" action="delete"><Button variant="ghost" size="icon" aria-label={`${t("delete")} ${i.asunto || t("communications")}`} data-testid={`delete-comm-${i.id}`} onClick={() => remove(i)} className="text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button></PermissionGate>
                 </div>

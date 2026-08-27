@@ -20,6 +20,55 @@ NOTIFICATION_TYPES = {
     "authorization.pending", "communication.created",
 }
 PRIORITIES = {"low", "normal", "high", "urgent"}
+RECOVERY_LOGO_CID = "ikastxiki-logo"
+PUBLIC_APP_URL = "https://ikasfutbase.cibermedida.es"
+
+
+def _public_legal_url(path: str) -> str:
+    base_url = str(os.environ.get("PUBLIC_APP_URL") or PUBLIC_APP_URL).strip().rstrip("/")
+    return f"{base_url}{path}"
+
+
+def _recovery_email_html(greeting: str, action_url: str) -> str:
+    """Render the password-recovery email without exposing its token URL as text."""
+    safe_greeting = escape((greeting.splitlines() or ["Hola,"])[0] or "Hola,")
+    safe_url = escape(action_url, quote=True)
+    privacy_url = escape(_public_legal_url("/privacidad"), quote=True)
+    terms_url = escape(_public_legal_url("/condiciones-de-uso"), quote=True)
+    return f"""<!doctype html>
+<html lang="es"><body style="margin:0;padding:0;background:#F5F8FC;font-family:Arial,'Helvetica Neue',Helvetica,sans-serif;color:#263746;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;background:#F5F8FC;"><tr><td align="center" style="padding:28px 12px 36px;">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="width:100%;max-width:600px;margin:0 auto;">
+<tr><td align="center" style="padding:30px 24px 28px;background:#0E3554;background:linear-gradient(135deg,#0E3554 0%,#1B5C8F 58%,#2B75B0 100%);border-radius:20px 20px 0 0;"><img src="cid:{RECOVERY_LOGO_CID}" alt="Ikastxiki" width="86" height="86" style="display:block;width:86px;height:86px;margin:0 auto 14px;border:0;object-fit:contain;"><p style="margin:0;color:#ffffff;font-size:22px;font-weight:800;line-height:28px;">Ikas-Txiki Manager</p><p style="margin:5px 0 0;color:#CFE9FA;font-size:12px;font-weight:700;letter-spacing:0.7px;line-height:18px;text-transform:uppercase;">{CLUB_NAME}</p></td></tr>
+<tr><td style="padding:0 1px;background:#ffffff;border-left:1px solid #CFE9FA;border-right:1px solid #CFE9FA;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr><td style="padding:34px 30px 10px;"><p style="margin:0 0 14px;color:#0E3554;font-size:28px;font-weight:800;letter-spacing:-0.4px;line-height:34px;">Crea tu nueva contraseña</p><p style="margin:0 0 18px;font-size:16px;line-height:25px;">{safe_greeting}</p><p style="margin:0 0 26px;font-size:16px;line-height:25px;">Hemos recibido una solicitud para cambiar la contraseña de tu cuenta. Este enlace es personal, de un solo uso y caduca en <strong>30 minutos</strong>. Si no realizaste esta solicitud, puedes ignorar este mensaje.</p><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0"><tr><td align="center" style="padding:0 0 28px;"><a href="{safe_url}" style="display:inline-block;box-sizing:border-box;width:100%;max-width:360px;padding:16px 22px;background:#0E3554;background:linear-gradient(135deg,#1B5C8F,#0E3554);border-radius:12px;color:#ffffff;font-size:16px;font-weight:800;line-height:20px;text-align:center;text-decoration:none;">Crear mi nueva contraseña</a></td></tr></table><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#EAF6FD;border:1px solid #CFE9FA;border-radius:12px;"><tr><td style="padding:15px 16px;"><p style="margin:0;color:#0E3554;font-size:15px;font-weight:800;line-height:21px;">&#128274;&nbsp; Por tu seguridad, este enlace solo puede utilizarse una vez.</p></td></tr></table></td></tr></table></td></tr>
+<tr><td style="padding:26px 30px 30px;background:#ffffff;border-left:1px solid #CFE9FA;border-right:1px solid #CFE9FA;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#F5F8FC;border-radius:16px;"><tr><td style="padding:22px 20px;"><p style="margin:0 0 8px;color:#0E3554;font-size:18px;font-weight:800;line-height:24px;">Lleva Ikastxiki siempre contigo</p><p style="margin:0 0 14px;color:#52616B;font-size:14px;line-height:21px;">Puedes instalar Ikastxiki como aplicación web, sin descargarla de una tienda.</p><p style="margin:0 0 9px;color:#263746;font-size:14px;line-height:21px;"><strong>Android:</strong> abre Ikastxiki en Chrome &rarr; men&uacute; &#8942; &rarr; “Instalar aplicaci&oacute;n” o “A&ntilde;adir a pantalla de inicio”.</p><p style="margin:0 0 9px;color:#263746;font-size:14px;line-height:21px;"><strong>iPhone/iPad:</strong> abre Ikastxiki en Safari &rarr; Compartir &rarr; “A&ntilde;adir a pantalla de inicio”.</p><p style="margin:0;color:#263746;font-size:14px;line-height:21px;"><strong>Ordenador:</strong> abre Ikastxiki en Chrome o Edge &rarr; icono de instalaci&oacute;n junto a la barra de direcciones.</p></td></tr></table></td></tr>
+<tr><td style="padding:0 30px 26px;background:#ffffff;border-left:1px solid #CFE9FA;border-right:1px solid #CFE9FA;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background:#F5F8FC;border:1px solid #CFE9FA;border-radius:14px;"><tr><td style="padding:18px 18px 16px;"><p style="margin:0 0 8px;color:#0E3554;font-size:15px;font-weight:800;line-height:21px;">&#128737;&nbsp; Protección de datos de menores</p><p style="margin:0 0 10px;color:#52616B;font-size:13px;line-height:20px;">Protección de datos de menores: en Ikastxiki protegemos especialmente la privacidad de niños, niñas y adolescentes. Este correo no incluye datos personales de menores. Los datos se tratan únicamente para prestar el servicio, proteger las cuentas y gestionar esta solicitud.</p><p style="margin:0;color:#52616B;font-size:13px;line-height:20px;">Consulta la <a href="{privacy_url}" style="color:#1B5C8F;font-weight:800;text-decoration:underline;">Política de privacidad</a> para conocer cómo tratamos los datos y ejercer tus derechos. Consulta también las <a href="{terms_url}" style="color:#1B5C8F;font-weight:800;text-decoration:underline;">Condiciones de uso</a>.</p></td></tr></table></td></tr>
+<tr><td align="center" style="padding:20px 28px;background:#EAF6FD;border-radius:0 0 20px 20px;border:1px solid #CFE9FA;border-top:0;"><p style="margin:0 0 6px;color:#0E3554;font-size:13px;font-weight:800;line-height:18px;">Ikas-Txiki Manager · {CLUB_NAME}</p><p style="margin:0;color:#52616B;font-size:12px;line-height:18px;">Nunca compartas este correo ni tu contraseña. Si necesitas ayuda, contacta con el equipo de tu club.</p></td></tr>
+</table></td></tr></table></body></html>"""
+
+
+def _activation_email_html(greeting: str, username: str, action_url: str) -> str:
+    """Render the activation email without exposing its token URL as text."""
+    safe_greeting = escape((greeting.splitlines() or ["Hola,"])[0] or "Hola,")
+    safe_username = escape(username or "")
+    html = _recovery_email_html(greeting, action_url)
+    greeting_block = '<p style="margin:0 0 18px;font-size:16px;line-height:25px;">' + safe_greeting + '</p>'
+    activation_block = (
+        greeting_block
+        + '<p style="margin:0 0 14px;font-size:16px;line-height:25px;">Tu usuario de Ikastxiki es: <strong>'
+        + safe_username + '</strong>.</p>'
+        + '<p style="margin:0 0 26px;font-size:16px;line-height:25px;">Activa tu acceso y crea una contraseña personal desde el botón. El enlace es personal, caduca en <strong>48 horas</strong> y no debe compartirse.</p>'
+    )
+    recovery_block = (
+        greeting_block
+        + '<p style="margin:0 0 26px;font-size:16px;line-height:25px;">Hemos recibido una solicitud para cambiar la contraseña de tu cuenta. Este enlace es personal, de un solo uso y caduca en <strong>30 minutos</strong>. Si no realizaste esta solicitud, puedes ignorar este mensaje.</p>'
+    )
+    return (html
+        .replace('Crea tu nueva contraseña', 'Activa tu acceso a Ikastxiki', 1)
+        .replace(recovery_block, activation_block, 1)
+        .replace('Crear mi nueva contraseña', 'Crear mi contraseña', 1)
+        .replace('&#128274;&nbsp; Por tu seguridad, este enlace solo puede utilizarse una vez.', '&#128274;&nbsp; Protege tu acceso: no compartas este correo ni tu contraseña.', 1)
+    )
 
 
 def now_iso() -> str:
@@ -102,7 +151,7 @@ def dispatch_telegram(chat_id: str, text: str, environment: Optional[Mapping[str
 def dispatch_email(recipient: str, subject: str, body: str,
                    environment: Optional[Mapping[str, str]] = None,
                    smtp_factory=None, *, action_url: Optional[str] = None,
-                   action_label: Optional[str] = None) -> dict:
+                   action_label: Optional[str] = None, template: Optional[str] = None) -> dict:
     env = environment if environment is not None else os.environ
     config = provider_configuration(env)["email"]
     base = {"id": str(uuid4()), "channel": "email", "recipient": recipient,
@@ -125,8 +174,7 @@ def dispatch_email(recipient: str, subject: str, body: str,
                 'padding:13px 20px;font-weight:700;text-decoration:none">'
                 f'{escape(action_label)}</a></p>'
             )
-        message.add_alternative(
-            f"""<!doctype html>
+        html = (_recovery_email_html(body, action_url) if template == "password_recovery" and action_url else _activation_email_html(body, action_label or "", action_url) if template == "account_activation" and action_url else f"""<!doctype html>
 <html lang="es">
   <body style="margin:0;background:#f5fafc;font-family:Arial,sans-serif;color:#1f2937">
     <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f5fafc;padding:24px 12px">
@@ -145,11 +193,10 @@ def dispatch_email(recipient: str, subject: str, body: str,
       </td></tr>
     </table>
   </body>
-</html>""",
-            subtype="html",
-        )
+</html>""")
+        message.add_alternative(html, subtype="html")
         html_part = message.get_payload()[-1]
-        html_part.add_related(logo_bytes(), maintype="image", subtype="png", cid="<ikastxiki-logo>")
+        html_part.add_related(logo_bytes(), maintype="image", subtype="png", cid=f"<{RECOVERY_LOGO_CID}>")
         factory = smtp_factory or (smtplib.SMTP_SSL if env.get("SMTP_USE_SSL", "false").lower() == "true" else smtplib.SMTP)
         port = int(env.get("SMTP_PORT", "465" if factory is smtplib.SMTP_SSL else "587"))
         with factory(env["SMTP_HOST"], port, timeout=10) as client:

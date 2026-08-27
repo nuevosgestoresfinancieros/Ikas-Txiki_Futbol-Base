@@ -125,3 +125,14 @@ test_reports/*
 !test_reports/pytest/
 test_reports/pytest/*
 !test_reports/pytest/.gitkeep
+
+._.DS_Store
+deploy-backups/
+backend/.activation-template-rollback-*/
+backend/*.previous-publish-*
+frontend/.previous-*/
+frontend/build.backup-*/
+frontend/build.failed-*/
+frontend/build.previous-*/
+frontend/build.validation-*/
+frontend/build.backup-*

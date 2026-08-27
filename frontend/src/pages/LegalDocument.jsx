@@ -1,0 +1,20 @@
+import React from "react";
+import { Link } from "react-router-dom";
+import { ArrowLeft, ChevronRight, FileText, ShieldCheck } from "lucide-react";
+import ClubLogo from "@/components/ClubLogo";
+import PublicLegalLinks from "@/components/PublicLegalLinks";
+
+export default function LegalDocument({ title, lead, sections }) {
+  return <main id="inicio" className="min-h-screen min-h-[100dvh] bg-[#F5F8FC] text-slate-700">
+    <header className="border-b border-[#CFE9FA] bg-white"><div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-5 px-5 py-5 sm:px-8">
+      <Link to="/login" className="flex items-center gap-3 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2B75B0] focus-visible:ring-offset-2" aria-label="Volver al inicio de sesión de Ikastxiki"><ClubLogo className="h-12 w-12" /><span><strong className="font-heading text-lg text-[#0E3554]">Ikastxiki</strong><small className="block text-xs font-semibold text-[#2B75B0]">Ikas-Txiki Manager</small></span></Link>
+      <PublicLegalLinks />
+    </div></header>
+    <div className="mx-auto max-w-7xl px-5 py-8 sm:px-8 sm:py-12"><Link to="/login" className="inline-flex items-center gap-2 rounded-lg text-sm font-bold text-[#1B5C8F] underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2B75B0] focus-visible:ring-offset-2"><ArrowLeft className="h-4 w-4" aria-hidden="true" />Volver a iniciar sesión</Link>
+      <div className="mt-6 rounded-[1.75rem] bg-gradient-to-br from-[#0E3554] via-[#1B5C8F] to-[#2B75B0] px-6 py-9 text-white shadow-[0_18px_45px_rgba(14,53,84,.18)] sm:px-10"><div className="flex items-start gap-4"><div className="rounded-2xl bg-white/15 p-3"><ShieldCheck className="h-7 w-7 text-[#CFE9FA]" aria-hidden="true" /></div><div><p className="text-sm font-bold uppercase tracking-[.12em] text-[#CFE9FA]">Información legal</p><h1 className="mt-2 font-heading text-3xl font-extrabold tracking-tight sm:text-4xl">{title}</h1><p className="mt-4 max-w-3xl text-base leading-7 text-slate-100">{lead}</p><p className="mt-5 text-sm font-semibold text-[#CFE9FA]"><time dateTime="2026-08-27">Última actualización: 27 de agosto de 2026</time></p></div></div></div>
+      <div className="mt-8 grid gap-8 lg:grid-cols-[17rem_minmax(0,1fr)]"><aside className="h-fit rounded-2xl border border-[#CFE9FA] bg-white p-5 shadow-sm lg:sticky lg:top-6"><div className="flex items-center gap-2"><FileText className="h-5 w-5 text-[#1B5C8F]" aria-hidden="true" /><h2 className="font-heading font-extrabold text-[#0E3554]">Índice</h2></div><nav className="mt-3" aria-label={"Índice de " + title}><ol className="space-y-1">{sections.map((section, index) => <li key={section.id}><a className="group flex rounded-lg px-2 py-2 text-sm leading-5 text-slate-600 hover:bg-[#EAF6FD] hover:text-[#0E3554] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2B75B0]" href={"#" + section.id}><span className="mr-2 font-bold text-[#2B75B0]">{index + 1}.</span><span>{section.title}</span><ChevronRight className="ml-auto mt-0.5 h-4 w-4 shrink-0 opacity-0 transition-opacity group-hover:opacity-100" aria-hidden="true" /></a></li>)}</ol></nav></aside>
+        <article className="rounded-[1.75rem] border border-white bg-white p-6 shadow-[0_14px_38px_rgba(14,53,84,.09)] sm:p-10"><div className="prose prose-slate max-w-none prose-headings:font-heading prose-headings:scroll-mt-8 prose-headings:text-[#0E3554] prose-h2:mt-0 prose-h2:border-b prose-h2:border-[#CFE9FA] prose-h2:pb-3 prose-p:leading-7 prose-a:text-[#1B5C8F] prose-a:font-semibold prose-a:underline-offset-4 prose-li:leading-7">{sections.map((section, index) => <section key={section.id} id={section.id} className={index ? "mt-12" : ""}><h2><span className="mr-2 text-[#2B75B0]">{index + 1}.</span>{section.title}</h2>{section.content}<p className="mt-6 text-right text-sm"><a href="#inicio">Volver al índice</a></p></section>)}</div></article>
+      </div>
+    </div>
+  </main>;
+}

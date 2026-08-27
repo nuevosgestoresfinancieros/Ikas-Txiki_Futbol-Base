@@ -188,6 +188,20 @@ async def record_security_event(event_type: str, user: Optional[Mapping[str, Any
         logging.getLogger(__name__).warning("Security audit event could not be persisted: %s", event_type)
 
 
+async def record_communication_delivery_audit(event_type: str, user: Optional[Mapping[str, Any]],
+                                              communication_id: str, result: str) -> None:
+    """Persist a delivery audit without including message or recipient data."""
+    try:
+        await db.internal_events.insert_one({
+            "id": str(uuid.uuid4()), "type": event_type,
+            "actor_user_id": (user or {}).get("id"), "actor_role": (user or {}).get("role"),
+            "action": "communication_delivery", "result": result,
+            "communication_id": communication_id, "created_at": now_iso(),
+        })
+    except Exception:
+        logging.getLogger(__name__).warning("Communication delivery audit could not be persisted: %s", event_type)
+
+
 async def get_current_user(request: Request):
     token = request.cookies.get("ikastxiki_session")
     if not token:
@@ -330,7 +344,7 @@ class TokenPasswordRequest(BaseModel):
     password_confirmation: str
 
 
-async def consume_password_token(kind: str, request: TokenPasswordRequest) -> dict:
+async def consume_password_token(kind: str, request: TokenPasswordRequest, response: Response | None = None) -> dict:
     if request.password != request.password_confirmation:
         raise HTTPException(status_code=422, detail="Las contraseñas no coinciden")
     validate_password_strength(request.password)
@@ -346,10 +360,13 @@ async def consume_password_token(kind: str, request: TokenPasswordRequest) -> di
     if not user or not token_is_usable(record):
         raise HTTPException(status_code=400, detail="Enlace inválido o caducado")
     moment = now_iso()
-    result = await db.users.update_one({
-        "id": user["id"], "active": {"$ne": True},
+    token_filter = {
+        "id": user["id"],
         "$or": [{f"{field}.digest": digest}, {f"{field}_history.digest": digest}],
-    }, {"$set": {
+    }
+    if kind == "invitation":
+        token_filter["active"] = {"$ne": True}
+    result = await db.users.update_one(token_filter, {"$set": {
         "password_hash": pwd_context.hash(request.password), "must_change_password": False,
         "account_status": "active", "active": True, f"{field}.used_at": moment,
         f"{field}.cancelled_at": moment, f"{field}_history": [],
@@ -358,10 +375,25 @@ async def consume_password_token(kind: str, request: TokenPasswordRequest) -> di
     if not result.modified_count:
         raise HTTPException(status_code=400, detail="Enlace inválido, caducado o ya utilizado")
     await record_user_audit(f"{kind}_completed", user, [])
-    response = {"ok": True}
+    payload = {"ok": True}
     if kind == "invitation":
-        response["username"] = user.get("username")
-    return response
+        payload["username"] = user.get("username")
+    if kind == "recovery":
+        if response is None:
+            raise RuntimeError("La recuperación requiere una respuesta HTTP para crear la sesión")
+        session_token = create_access_token({
+            "sub": user["username"], "sid": str(uuid.uuid4()),
+            "ver": int(user.get("session_version", 0)) + 1,
+        })
+        response.set_cookie(
+            key="ikastxiki_session", value=session_token, httponly=True, secure=True,
+            samesite="strict", max_age=JWT_EXPIRE_HOURS * 3600, path="/",
+        )
+        authenticated_user = await load_user(user["username"])
+        if not authenticated_user:
+            raise HTTPException(status_code=500, detail="No se ha podido crear la sesión")
+        payload["user"] = public_user(authenticated_user)
+    return payload
 
 
 @app.post("/api/auth/change-temporary-password")
@@ -408,14 +440,22 @@ async def request_recovery(request: RecoveryRequest):
         plain, record = issue_token(JWT_SECRET)
         await db.users.update_one({"id": user["id"]}, {"$set": {"recovery": record}})
         await record_user_audit("recovery_requested", user, [])
+        recipient = normalized_key(user.get("email"))
+        if recipient and "@" in recipient:
+            link = _recovery_link(plain)
+            dispatch_email(
+                recipient, "Restablece tu contraseña de Ikas-Txiki",
+                _recovery_email_body(str(user.get("username") or "")),
+                action_url=link, action_label="Crear mi nueva contraseña", template="password_recovery",
+            )
         if os.environ.get("SECURITY_TEST_MODE") == "1":
             return {"ok": True, "message": "Si la cuenta existe, recibirá instrucciones", "test_token": plain}
     return {"ok": True, "message": "Si la cuenta existe, recibirá instrucciones"}
 
 
 @app.post("/api/auth/recovery/reset")
-async def reset_recovery_password(request: TokenPasswordRequest):
-    return await consume_password_token("recovery", request)
+async def reset_recovery_password(request: TokenPasswordRequest, response: Response):
+    return await consume_password_token("recovery", request, response)
 
 
 @app.get("/api/public/branding")
@@ -945,12 +985,52 @@ async def ensure_admin_protection(existing: dict, candidate: dict) -> None:
             raise HTTPException(status_code=409, detail="No se puede retirar al último administrador persistente")
 
 
+async def permanent_deletion_capability() -> dict:
+    """Report whether this Mongo deployment can guarantee an all-or-nothing deletion.
+
+    Permanent account deletion is deliberately unavailable on standalone MongoDB.
+    A logical session alone is not enough: transactions require a replica set or a
+    mongos router backed by a compatible cluster.
+    """
+    try:
+        hello = await db.command("hello")
+    except Exception:
+        return {
+            "enabled": False,
+            "reason": "No se ha podido verificar la compatibilidad transaccional de MongoDB.",
+        }
+    supported = bool(hello.get("setName")) or hello.get("msg") == "isdbgrid"
+    if supported:
+        return {"enabled": True, "reason": None}
+    return {
+        "enabled": False,
+        "reason": "La eliminación definitiva requiere MongoDB en replica set o un clúster compatible con transacciones.",
+    }
+
+
+class PermanentDeletionConfirmation(BaseModel):
+    confirmation: str
+
+    @field_validator("confirmation")
+    @classmethod
+    def validate_permanent_deletion_confirmation(cls, value: str):
+        if value.strip() != "ELIMINAR":
+            raise ValueError("Escribe ELIMINAR para confirmar la eliminación definitiva")
+        return value.strip()
+
+
 @api_router.get("/users/permissions")
 async def get_permission_matrix():
     return {
         role: {resource: sorted(actions) for resource, actions in resources.items()}
         for role, resources in ROLE_PERMISSIONS.items()
     }
+
+
+@api_router.get("/users/permanent-deletion-capability")
+async def get_permanent_deletion_capability():
+    """UI guard for an operation that must never degrade to partial deletion."""
+    return await permanent_deletion_capability()
 
 
 @api_router.post("/users")
@@ -1134,6 +1214,23 @@ async def edit_user(user_id: str, changes: UserUpdate):
     return secured_public_user(candidate)
 
 
+@api_router.post("/users/{user_id}/permanent-deletion")
+async def permanently_delete_user(user_id: str, request: PermanentDeletionConfirmation):
+    """Fail closed until MongoDB can run the entire deletion in one transaction.
+
+    This endpoint intentionally performs no lookup and no write while the
+    deployment is incompatible, so a request can never turn into a partial
+    account deletion.
+    """
+    capability = await permanent_deletion_capability()
+    if not capability["enabled"]:
+        raise HTTPException(status_code=503, detail=capability["reason"])
+    raise HTTPException(
+        status_code=503,
+        detail="La eliminación definitiva no está habilitada en este despliegue.",
+    )
+
+
 @api_router.delete("/users/{user_id}")
 async def deactivate_user(user_id: str):
     if user_id == "environment-admin":
@@ -1232,8 +1329,8 @@ async def generate_user_invitation(user_id: str):
     link = _activation_link(plain)
     delivery = dispatch_email(
         email, "Activa tu acceso a Ikas-Txiki",
-        _invitation_email_body(str(user.get("username") or ""), link),
-        action_url=link, action_label="Crear mi contraseña",
+        _invitation_email_body(str(user.get("username") or "")),
+        action_url=link, action_label=str(user.get("username") or ""), template="account_activation",
     )
     delivery.update({"type": "user_access_invitation", "user_id": user_id})
     await db.delivery_logs.insert_one(delivery)
@@ -1608,13 +1705,31 @@ def _activation_link(token: str) -> str:
     return f"{_public_app_url()}/activar?token={quote(token, safe='')}"
 
 
-def _invitation_email_body(username: str, link: str, access_label: str = "") -> str:
+def _recovery_link(token: str) -> str:
+    return f"{_public_app_url()}/nueva-contrasena?token={quote(token, safe='')}"
+
+
+def _invitation_email_body(username: str, access_label: str = "") -> str:
     role_line = f" {access_label}" if access_label else ""
     return (
-        f"Hola,\n\nTu usuario de Ikas-Txiki es: {username}\n\n"
-        f"Activa tu acceso{role_line} y crea tu contraseña personal pulsando el botón de este correo "
-        f"o abriendo este enlace:\n{link}\n\n"
-        f"El enlace caduca en {INVITATION_TTL_HOURS} horas. No compartas este mensaje."
+        f"Hola,\n\nTu usuario de Ikastxiki es: {username}.\n\n"
+        f"Activa tu acceso{role_line} y crea tu contraseña personal usando el botón de este correo. "
+        f"El enlace caduca en {INVITATION_TTL_HOURS} horas. No compartas este mensaje.\n\n"
+        "Protección de datos de menores: en Ikastxiki protegemos especialmente la privacidad de niños, niñas y adolescentes. "
+        "Este correo no incluye datos personales de menores. Los datos se tratan únicamente para prestar el servicio, proteger las cuentas y gestionar esta solicitud. "
+        "Consulta la Política de privacidad y las Condiciones de uso en Ikastxiki para conocer más información."
+    )
+
+
+def _recovery_email_body(username: str) -> str:
+    greeting = f"Hola {username}," if username else "Hola,"
+    return (
+        f"{greeting}\n\nHemos recibido una solicitud para cambiar la contraseña de tu cuenta de Ikas-Txiki. "
+        "Usa el botón de este correo para crear una nueva contraseña. El enlace es personal, de un solo uso y caduca en 30 minutos. "
+        "Si no realizaste esta solicitud, puedes ignorar este mensaje.\n\n"
+        "Protección de datos de menores: en Ikastxiki protegemos especialmente la privacidad de niños, niñas y adolescentes. "
+        "Este correo no incluye datos personales de menores. Los datos se tratan únicamente para prestar el servicio, proteger las cuentas y gestionar esta solicitud. "
+        "Consulta la Política de privacidad y las Condiciones de uso en Ikastxiki para conocer más información."
     )
 
 
@@ -1713,8 +1828,8 @@ async def send_family_access_invitations(request: FamilyAccessInvitationRequest)
         link = _activation_link(plain)
         delivery = dispatch_email(
             email, "Activa tu acceso a Ikas-Txiki",
-            _invitation_email_body(target["username"], link, "familiar"),
-            action_url=link, action_label="Crear mi contraseña",
+            _invitation_email_body(target["username"], "familiar"),
+            action_url=link, action_label=target["username"], template="account_activation",
         )
         delivery.update({"type": "family_access_invitation", "family_id": family["id"], "user_id": target["id"]})
         await db.delivery_logs.insert_one(delivery)
@@ -1812,8 +1927,8 @@ async def send_player_access_invitations(request: PlayerAccessInvitationRequest)
         link = _activation_link(plain)
         delivery = dispatch_email(
             email, "Activa tu acceso de jugador a Ikas-Txiki",
-            _invitation_email_body(target["username"], link, "de jugador"),
-            action_url=link, action_label="Crear mi contraseña",
+            _invitation_email_body(target["username"], "de jugador"),
+            action_url=link, action_label=target["username"], template="account_activation",
         )
         delivery.update({"type": "player_access_invitation", "player_id": player["id"], "user_id": target["id"]})
         await db.delivery_logs.insert_one(delivery)
@@ -6240,61 +6355,120 @@ async def create_communication(comm: Communication):
     user = current_user_context.get() or {}
     await communication_target_context(data, user)
     created = await insert_doc("communications", data)
-    users, destinations, consent_exclusions = await communication_targets(data, user)
-    await enqueue_notifications(
-        users, "communication.created", "Nueva comunicación / Komunikazio berria",
-        str(data.get("asunto") or "Ikas-Txiki"), "/comunicacion", data.get("prioridad") or "normal",
-        {"communication_id": created["id"]}, f"communication.created:{created['id']}",
-    )
-    logs = []
-    if data.get("canal") == "email":
-        # Re-resolve immediately before the provider boundary. A preview is
-        # never treated as authorization for a later delivery.
-        _, destinations, consent_exclusions = await communication_targets(data, user)
-        if consent_exclusions:
-            await record_security_event(
-                "security.communication_consent.filtered", user, "communication_delivery",
-                "consent_not_granted", aggregate=consent_exclusions,
-            )
+    # Creation is deliberately side-effect free: delivery requires the explicit
+    # send action below, after the operator has reviewed the send preview.
+    return created
+
+
+async def communication_delivery_logs(data: dict, destinations: list[str]) -> list[dict]:
+    """Dispatch a communication only after its state has been claimed as sending."""
+    channel = data.get("canal")
+    if channel == "email":
         if destinations:
-            logs = [dispatch_email(destination, data.get("asunto") or "Ikas-Txiki", data.get("mensaje") or "")
+            return [dispatch_email(destination, data.get("asunto") or "Ikas-Txiki", data.get("mensaje") or "")
                     for destination in destinations]
-        else:
-            logs = [{"id": new_id(), "channel": "email", "recipient": None, "provider": "smtp",
-                     "status": "pending", "error": "recipient_missing", "created_at": now_iso(), "sent_at": None}]
-    elif data.get("canal") == "telegram":
-        _, destinations, consent_exclusions = await communication_targets(data, user)
-        if consent_exclusions:
-            await record_security_event(
-                "security.communication_consent.filtered", user, "communication_delivery",
-                "consent_not_granted", aggregate=consent_exclusions,
-            )
+        return [{"id": new_id(), "channel": "email", "recipient": None, "provider": "smtp",
+                 "status": "failed", "error": "recipient_missing", "created_at": now_iso(), "sent_at": None}]
+    if channel == "telegram":
         if destinations:
             text = "\n\n".join(part for part in (data.get("asunto"), data.get("mensaje")) if part)
-            logs = [dispatch_telegram(destination, text) for destination in destinations]
-        else:
-            logs = [{"id": new_id(), "channel": "telegram", "recipient": None, "provider": "telegram_bot",
-                     "status": "pending", "error": "telegram_not_linked", "created_at": now_iso(), "sent_at": None}]
-    else:
-        provider = provider_configuration().get(data.get("canal"), {"configured": False, "provider": "optional"})
-        logs = [{"id": new_id(), "channel": data.get("canal"), "recipient": None,
-                 "provider": provider["provider"], "status": "pending",
-                 "error": "provider_optional_not_activated" if provider["configured"] else "provider_not_configured",
-                 "created_at": now_iso(), "sent_at": None}]
-    for log in logs:
-        log["communication_id"] = created["id"]
-    if logs:
-        await db.delivery_logs.insert_many(logs)
-    state = "sent" if logs and all(log["status"] == "sent" for log in logs) else (
-        "failed" if any(log["status"] == "failed" for log in logs) else "pending"
+            return [dispatch_telegram(destination, text) for destination in destinations]
+        return [{"id": new_id(), "channel": "telegram", "recipient": None, "provider": "telegram_bot",
+                 "status": "failed", "error": "telegram_not_linked", "created_at": now_iso(), "sent_at": None}]
+    provider = provider_configuration().get(channel, {"configured": False, "provider": "optional"})
+    return [{"id": new_id(), "channel": channel, "recipient": None, "provider": provider["provider"],
+             "status": "failed", "error": "provider_optional_not_activated" if provider["configured"] else "provider_not_configured",
+             "created_at": now_iso(), "sent_at": None}]
+
+
+SAFE_COMMUNICATION_RETRY_ERRORS = {
+    "provider_not_configured", "provider_optional_not_activated", "recipient_missing", "telegram_not_linked",
+}
+
+
+async def communication_retry_is_safe(comm_id: str, state: str) -> bool:
+    """Only retry failures that conclusively never reached a delivery provider."""
+    if state != "failed":
+        return state == "pending"
+    logs = await db.delivery_logs.find({"communication_id": comm_id}, {"_id": 0, "status": 1, "error": 1}).to_list(5000)
+    return bool(logs) and all(
+        log.get("status") == "failed" and log.get("error") in SAFE_COMMUNICATION_RETRY_ERRORS
+        for log in logs
     )
-    await db.communications.update_one({"id": created["id"]}, {"$set": {
-        "enviado": state == "sent", "estado_envio": state,
-        "fecha_envio": now_iso() if state == "sent" else None,
-        "error_envio": next((log["error"] for log in logs if log.get("error")), None),
-        "delivery_log_ids": [log["id"] for log in logs],
-    }})
-    return await get_doc("communications", created["id"])
+
+
+@api_router.get("/communications/{comm_id}/send-preview")
+async def preview_communication_send(comm_id: str):
+    """Read-only delivery preview; GET avoids implying a send-side effect."""
+    communication = await get_doc("communications", comm_id)
+    user = current_user_context.get() or {}
+    context = await communication_target_context(communication, user, audit_exclusions=False)
+    return {
+        **context,
+        "communication_id": comm_id,
+        "can_send": communication.get("estado_envio", "pending") in {"pending", "failed"},
+        "provider": provider_configuration().get(communication.get("canal"), {"configured": False, "provider": "optional"}),
+    }
+
+
+@api_router.post("/communications/{comm_id}/send")
+async def send_communication(comm_id: str):
+    """Deliver a pending communication once, with an atomic duplicate guard."""
+    communication = await get_doc("communications", comm_id)
+    user = current_user_context.get() or {}
+    state_before_claim = communication.get("estado_envio", "pending")
+    if not await communication_retry_is_safe(comm_id, state_before_claim):
+        raise HTTPException(status_code=409, detail="La comunicación ya se está enviando, fue enviada o no se puede reenviar con seguridad")
+    scope = await scope_for_collection("communications", user)
+    claim = await db.communications.update_one(
+        merge_query({"id": comm_id, "$or": [
+            {"estado_envio": "pending"}, {"estado_envio": "failed"}, {"estado_envio": {"$exists": False}},
+        ]}, scope),
+        {"$set": {"estado_envio": "sending", "enviado": False, "error_envio": None,
+                  "envio_iniciado_at": now_iso(), "updated_at": now_iso()}},
+    )
+    if not claim.matched_count:
+        raise HTTPException(status_code=409, detail="La comunicación ya se está enviando o ya fue enviada")
+    await record_communication_delivery_audit("communication.delivery.started", user, comm_id, "sending")
+
+    try:
+        _, destinations, consent_exclusions = await communication_targets(communication, user)
+        if consent_exclusions:
+            await record_security_event(
+                "security.communication_consent.filtered", user, "communication_delivery",
+                "consent_not_granted", aggregate=consent_exclusions,
+            )
+        logs = await communication_delivery_logs(communication, destinations)
+        for log in logs:
+            log["communication_id"] = comm_id
+            if log.get("status") == "pending":
+                log["status"] = "failed"
+        if logs:
+            await db.delivery_logs.insert_many(logs)
+        state = "sent" if logs and all(log["status"] == "sent" for log in logs) else "failed"
+        error = next((log.get("error") for log in logs if log.get("error")), None)
+        await db.communications.update_one({"id": comm_id}, {"$set": {
+            "enviado": state == "sent", "estado_envio": state,
+            "fecha_envio": now_iso() if state == "sent" else None,
+            "error_envio": error, "delivery_log_ids": [log["id"] for log in logs],
+            "updated_at": now_iso(),
+        }})
+        await record_communication_delivery_audit(f"communication.delivery.{state}", user, comm_id, state)
+        if state == "sent":
+            users, _, _ = await communication_targets(communication, user)
+            await enqueue_notifications(
+                users, "communication.created", "Nueva comunicación / Komunikazio berria",
+                str(communication.get("asunto") or "Ikas-Txiki"), "/comunicacion", communication.get("prioridad") or "normal",
+                {"communication_id": comm_id}, f"communication.created:{comm_id}",
+            )
+    except Exception as error:
+        await db.communications.update_one({"id": comm_id}, {"$set": {
+            "enviado": False, "estado_envio": "failed", "fecha_envio": None,
+            "error_envio": type(error).__name__, "updated_at": now_iso(),
+        }})
+        await record_communication_delivery_audit("communication.delivery.failed", user, comm_id, "failed")
+        raise
+    return await get_doc("communications", comm_id)
 
 
 @api_router.get("/communications")

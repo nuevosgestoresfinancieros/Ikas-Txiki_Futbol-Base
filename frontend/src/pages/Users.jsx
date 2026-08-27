@@ -42,6 +42,7 @@ export default function Users() {
   const [security, setSecurity] = useState(null);
   const [revealedSecret, setRevealedSecret] = useState(null);
   const [securityBusy, setSecurityBusy] = useState(false);
+  const [permanentDeletionCapability, setPermanentDeletionCapability] = useState(null);
   const [profile, setProfile] = useState(null);
   const [wizardStep, setWizardStep] = useState(1);
   const [creationType, setCreationType] = useState(null);
@@ -132,8 +133,13 @@ export default function Users() {
   };
 
   const showSecurity = async (user) => {
-    try { setSecurity({ user, ...(await api.get(`/users/${user.id}/security`)).data }); }
-    catch { toast({ title: t("loadError"), variant: "destructive" }); }
+    try {
+      const [securityResponse, capabilityResponse] = await Promise.all([
+        api.get(`/users/${user.id}/security`), api.get("/users/permanent-deletion-capability"),
+      ]);
+      setSecurity({ user, ...securityResponse.data });
+      setPermanentDeletionCapability(capabilityResponse.data);
+    } catch { toast({ title: t("loadError"), variant: "destructive" }); }
   };
   const securityAction = async (path, method = "post", confirmation = "confirmSensitiveAction") => {
     // Reenviar una invitación es idempotente para el administrador: mantiene
@@ -230,7 +236,7 @@ export default function Users() {
         <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto"><DialogHeader><DialogTitle>{t("effectivePermissions")}</DialogTitle><DialogDescription>{t("effectivePermissionsDescription")}</DialogDescription></DialogHeader>{permissions && <div className="space-y-5"><div className="rounded-xl bg-sky-50 p-4"><p className="font-bold text-sky-950">{userDisplayName(permissions.user)}</p><p className="text-sm text-sky-800">{t("roleDefinesFunctionsScopeDefinesData")}</p></div><div><h3 className="mb-2 font-bold">{t("allowedFunctions")}</h3><div className="grid gap-2 sm:grid-cols-2">{Object.entries(permissions.permissions).map(([resource, actions]) => <div key={resource} className="rounded-xl border p-3"><p className="font-semibold">{t(`permissionResource_${resource}`)}</p><p className="text-xs text-slate-500">{actions.map((action) => t(`permissionAction_${action}`)).join(" · ")}</p></div>)}</div></div><div><h3 className="font-bold">{t("appliedScope")}</h3><pre className="mt-2 overflow-x-auto rounded-xl bg-slate-950 p-3 text-xs text-white">{JSON.stringify(permissions.scope, null, 2)}</pre></div></div>}</DialogContent>
       </Dialog>
 
-      <Dialog open={Boolean(security)} onOpenChange={(open) => { if (!open) { setSecurity(null); setRevealedSecret(null); } }}>
+      <Dialog open={Boolean(security)} onOpenChange={(open) => { if (!open) { setSecurity(null); setRevealedSecret(null); setPermanentDeletionCapability(null); } }}>
         <DialogContent className="max-h-[92vh] max-w-2xl overflow-y-auto"><DialogHeader><DialogTitle>{t("accessSecurity")}</DialogTitle><DialogDescription>{t("accessSecurityDescription")}</DialogDescription></DialogHeader>{security && <div className="space-y-5">
           <div className="grid gap-3 sm:grid-cols-2"><div className="rounded-xl bg-slate-50 p-4"><p className="text-xs font-semibold text-slate-500">{t("securityStatus")}</p><p className="mt-1 font-bold">{security.locked ? t("temporarilyLocked") : t("accessAvailable")}</p></div><div className="rounded-xl bg-slate-50 p-4"><p className="text-xs font-semibold text-slate-500">{t("invitation")}</p><p className="mt-1 font-bold">{t(`invitationStatus_${security.invitation_status || "none"}`)}</p></div></div>
           {revealedSecret && <div className="rounded-2xl border-2 border-amber-300 bg-amber-50 p-4" role="alert"><p className="font-bold text-amber-950">{t("shownOnlyOnce")}</p><code className="mt-2 block break-all rounded-lg bg-white p-3 text-sm">{revealedSecret.value}</code><Button className="mt-3" variant="outline" onClick={() => setRevealedSecret(null)}>{t("understoodHideSecret")}</Button></div>}
@@ -240,7 +246,13 @@ export default function Users() {
             <Button disabled={securityBusy} variant="outline" onClick={() => securityAction("revoke-sessions")}><LogOut className="h-4 w-4" />{t("closeSessions")}</Button>
             {security.locked ? <Button disabled={securityBusy} variant="outline" onClick={() => securityAction("unlock")}><UnlockKeyhole className="h-4 w-4" />{t("unlockAccess")}</Button> : <Button disabled={securityBusy} variant="outline" onClick={() => securityAction("lock")}><LockKeyhole className="h-4 w-4" />{t("lockAccess")}</Button>}
             <Button disabled={securityBusy} variant="destructive" onClick={deactivateAccess}><UserX className="h-4 w-4" />{t("deactivateAccess")}</Button>
+            <Button disabled variant="destructive" title={permanentDeletionCapability?.reason || t("permanentDeletionChecking")} data-testid="permanent-delete-user">
+              <UserX className="h-4 w-4" />{t("permanentDeleteUser")}
+            </Button>
           </div>}
+          <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950" role="status" data-testid="permanent-delete-unavailable">
+            {permanentDeletionCapability?.reason || t("permanentDeletionChecking")}
+          </p>
         </div>}</DialogContent>
       </Dialog>
     </div>

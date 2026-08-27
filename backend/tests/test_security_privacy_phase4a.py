@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from starlette.requests import Request
+from authz import route_permission
 
 os.environ.setdefault("MONGO_URL", "mongodb://127.0.0.1:27039")
 os.environ.setdefault("DB_NAME", "ikastxiki_security_phase4a_test")
@@ -143,8 +144,13 @@ def test_user_without_links_cannot_preview_any_target(monkeypatch):
     assert error.value.status_code == 403
 
 
+@pytest.mark.parametrize("role", ["admin", "coordinator", "coach"])
+def test_authorized_roles_can_preview_and_send_communications(role):
+    server.enforce_permission({"role": role, "active": True}, "communications", "create")
+
+
 @pytest.mark.parametrize("role", ["family", "player"])
-def test_family_and_player_cannot_use_preview_even_with_a_manipulated_request(role):
+def test_family_and_player_cannot_preview_or_send_even_with_a_manipulated_request(role):
     with pytest.raises(Exception) as error:
         server.enforce_permission({"role": role, "active": True}, "communications", "create")
     assert error.value.status_code == 403
@@ -218,17 +224,16 @@ def test_security_audit_contains_only_normalized_aggregate_data(monkeypatch):
     assert not ({"token", "email", "phone", "message"} & set(event))
 
 
-def test_delivery_revalidates_consent_and_never_reuses_an_earlier_resolution(monkeypatch):
+def test_create_communication_is_side_effect_free_and_remains_pending(monkeypatch):
     user = {"id": "admin-fixture", "username": "admin", "role": "admin", "active": True}
     monkeypatch.setattr(server, "communication_target_context", AsyncMock(return_value={
         "resolved_name": "Equipo ficticio", "summary": {},
     }))
-    targets = AsyncMock(side_effect=[
-        ([], ["allowed-before-change@example.test"], {}),
-        ([], [], {"consent_revoked": 1}),
-    ])
+    targets = AsyncMock()
     monkeypatch.setattr(server, "communication_targets", targets)
-    monkeypatch.setattr(server, "insert_doc", AsyncMock(return_value={"id": "communication-fixture"}))
+    monkeypatch.setattr(server, "insert_doc", AsyncMock(return_value={
+        "id": "communication-fixture", "estado_envio": "pending", "enviado": False,
+    }))
     monkeypatch.setattr(server, "enqueue_notifications", AsyncMock(return_value=0))
     monkeypatch.setattr(server, "record_security_event", AsyncMock())
     monkeypatch.setattr(server, "get_doc", AsyncMock(return_value={
@@ -246,6 +251,216 @@ def test_delivery_revalidates_consent_and_never_reuses_an_earlier_resolution(mon
         asunto="Aviso ficticio", mensaje="Contenido ficticio",
     )))
     assert result["estado_envio"] == "pending"
-    assert targets.await_count == 2
+    assert targets.await_count == 0
     dispatch.assert_not_called()
-    assert server.record_security_event.await_args.kwargs["aggregate"] == {"consent_revoked": 1}
+    server.enqueue_notifications.assert_not_called()
+    database.delivery_logs.insert_many.assert_not_called()
+
+
+def test_send_claims_pending_communication_and_uses_only_simulated_provider(monkeypatch):
+    user = {"id": "admin-fixture", "username": "admin", "role": "admin", "active": True}
+    communication = {
+        "id": "communication-fixture", "destinatario_tipo": "equipo", "destinatario_id": "team-fixture",
+        "canal": "email", "asunto": "Aviso ficticio", "mensaje": "Contenido ficticio",
+        "prioridad": "normal", "estado_envio": "pending",
+    }
+    monkeypatch.setattr(server, "get_doc", AsyncMock(side_effect=[communication, {
+        "id": "communication-fixture", "estado_envio": "sent", "enviado": True,
+    }]))
+    monkeypatch.setattr(server, "scope_for_collection", AsyncMock(return_value=None))
+    monkeypatch.setattr(server, "communication_targets", AsyncMock(side_effect=[
+        ([], ["simulated-recipient@example.test"], {}), ([], ["simulated-recipient@example.test"], {}),
+    ]))
+    monkeypatch.setattr(server, "record_security_event", AsyncMock())
+    monkeypatch.setattr(server, "enqueue_notifications", AsyncMock(return_value=1))
+    dispatch = MagicMock(return_value={
+        "id": "log-fixture", "channel": "email", "recipient": "simulated-recipient@example.test",
+        "provider": "simulated", "status": "sent", "error": None, "created_at": "now", "sent_at": "now",
+    })
+    monkeypatch.setattr(server, "dispatch_email", dispatch)
+    database = SimpleNamespace(
+        communications=SimpleNamespace(update_one=AsyncMock(return_value=SimpleNamespace(matched_count=1))),
+        delivery_logs=SimpleNamespace(insert_many=AsyncMock()),
+    )
+    monkeypatch.setattr(server, "db", database)
+
+    result = run_with_user(user, server.send_communication("communication-fixture"))
+
+    assert result["estado_envio"] == "sent"
+    dispatch.assert_called_once_with("simulated-recipient@example.test", "Aviso ficticio", "Contenido ficticio")
+    assert database.delivery_logs.insert_many.await_args.args[0][0]["communication_id"] == "communication-fixture"
+    assert server.enqueue_notifications.await_count == 1
+
+
+def test_sent_communication_cannot_be_resent_without_dispatch(monkeypatch):
+    user = {"id": "admin-fixture", "username": "admin", "role": "admin", "active": True}
+    monkeypatch.setattr(server, "get_doc", AsyncMock(return_value={
+        "id": "communication-fixture", "estado_envio": "sent",
+    }))
+    monkeypatch.setattr(server, "scope_for_collection", AsyncMock(return_value=None))
+    dispatch = MagicMock()
+    monkeypatch.setattr(server, "dispatch_email", dispatch)
+    monkeypatch.setattr(server, "db", SimpleNamespace(
+        communications=SimpleNamespace(update_one=AsyncMock(return_value=SimpleNamespace(matched_count=0))),
+    ))
+
+    with pytest.raises(Exception) as error:
+        run_with_user(user, server.send_communication("communication-fixture"))
+
+    assert error.value.status_code == 409
+    dispatch.assert_not_called()
+
+
+def test_provider_failure_marks_communication_failed_without_notification(monkeypatch):
+    user = {"id": "admin-fixture", "username": "admin", "role": "admin", "active": True}
+    communication = {
+        "id": "communication-fixture", "destinatario_tipo": "equipo", "destinatario_id": "team-fixture",
+        "canal": "email", "asunto": "Aviso ficticio", "mensaje": "Contenido ficticio", "estado_envio": "pending",
+    }
+    monkeypatch.setattr(server, "get_doc", AsyncMock(side_effect=[communication, {
+        "id": "communication-fixture", "estado_envio": "failed", "enviado": False,
+    }]))
+    monkeypatch.setattr(server, "scope_for_collection", AsyncMock(return_value=None))
+    monkeypatch.setattr(server, "communication_targets", AsyncMock(return_value=([], ["failure@example.test"], {})))
+    monkeypatch.setattr(server, "enqueue_notifications", AsyncMock())
+    monkeypatch.setattr(server, "record_communication_delivery_audit", AsyncMock())
+    monkeypatch.setattr(server, "dispatch_email", MagicMock(return_value={
+        "id": "failed-log", "channel": "email", "recipient": "failure@example.test", "provider": "simulated",
+        "status": "failed", "error": "provider_not_configured", "created_at": "now", "sent_at": None,
+    }))
+    communications = SimpleNamespace(update_one=AsyncMock(return_value=SimpleNamespace(matched_count=1)))
+    monkeypatch.setattr(server, "db", SimpleNamespace(
+        communications=communications, delivery_logs=SimpleNamespace(insert_many=AsyncMock()),
+    ))
+
+    result = run_with_user(user, server.send_communication("communication-fixture"))
+
+    assert result["estado_envio"] == "failed"
+    final_update = communications.update_one.await_args_list[1].args[1]["$set"]
+    assert final_update["estado_envio"] == "failed"
+    server.enqueue_notifications.assert_not_called()
+
+
+def test_send_preview_never_dispatches_and_reports_pending_state(monkeypatch):
+    user = {"id": "admin-fixture", "username": "admin", "role": "admin", "active": True}
+    monkeypatch.setattr(server, "get_doc", AsyncMock(return_value={
+        "id": "communication-fixture", "destinatario_tipo": "equipo", "destinatario_id": "team-fixture",
+        "canal": "email", "estado_envio": "pending",
+    }))
+    monkeypatch.setattr(server, "communication_target_context", AsyncMock(return_value={
+        "resolved_name": "Equipo ficticio", "summary": {"available_emails": 2},
+    }))
+    dispatch = MagicMock()
+    monkeypatch.setattr(server, "dispatch_email", dispatch)
+
+    result = run_with_user(user, server.preview_communication_send("communication-fixture"))
+
+    assert result["can_send"] is True
+    assert result["summary"]["available_emails"] == 2
+    dispatch.assert_not_called()
+
+
+def test_send_preview_requires_create_permission_despite_being_read_only():
+    request = Request({"type": "http", "method": "GET", "scheme": "https", "server": ("test", 443),
+                       "client": ("test", 1), "path": "/api/communications/communication-fixture/send-preview",
+                       "query_string": b"", "headers": []})
+    assert route_permission(request) == ("communications", "create")
+
+
+def test_failed_preflight_delivery_can_be_retried_once_with_simulated_provider(monkeypatch):
+    user = {"id": "admin-fixture", "username": "admin", "role": "admin", "active": True}
+    communication = {
+        "id": "communication-fixture", "destinatario_tipo": "equipo", "destinatario_id": "team-fixture",
+        "canal": "email", "asunto": "Aviso ficticio", "mensaje": "Contenido ficticio",
+        "prioridad": "normal", "estado_envio": "failed",
+    }
+    monkeypatch.setattr(server, "get_doc", AsyncMock(side_effect=[communication, {
+        "id": "communication-fixture", "estado_envio": "sent", "enviado": True,
+    }]))
+    monkeypatch.setattr(server, "scope_for_collection", AsyncMock(return_value=None))
+    monkeypatch.setattr(server, "communication_targets", AsyncMock(side_effect=[([], ["retry@example.test"], {}), ([], ["retry@example.test"], {})]))
+    monkeypatch.setattr(server, "enqueue_notifications", AsyncMock(return_value=1))
+    monkeypatch.setattr(server, "record_communication_delivery_audit", AsyncMock())
+    dispatch = MagicMock(return_value={
+        "id": "retry-log", "channel": "email", "recipient": "retry@example.test", "provider": "simulated",
+        "status": "sent", "error": None, "created_at": "now", "sent_at": "now",
+    })
+    monkeypatch.setattr(server, "dispatch_email", dispatch)
+    database = SimpleNamespace(
+        communications=SimpleNamespace(update_one=AsyncMock(return_value=SimpleNamespace(matched_count=1))),
+        delivery_logs=SimpleNamespace(
+            find=MagicMock(return_value=Cursor([{"status": "failed", "error": "provider_not_configured"}])),
+            insert_many=AsyncMock(),
+        ),
+    )
+    monkeypatch.setattr(server, "db", database)
+
+    result = run_with_user(user, server.send_communication("communication-fixture"))
+
+    assert result["estado_envio"] == "sent"
+    dispatch.assert_called_once()
+
+
+def test_confirmed_or_uncertain_delivery_is_never_retried(monkeypatch):
+    user = {"id": "admin-fixture", "username": "admin", "role": "admin", "active": True}
+    monkeypatch.setattr(server, "get_doc", AsyncMock(return_value={
+        "id": "communication-fixture", "estado_envio": "failed",
+    }))
+    dispatch = MagicMock()
+    monkeypatch.setattr(server, "dispatch_email", dispatch)
+    monkeypatch.setattr(server, "db", SimpleNamespace(
+        delivery_logs=SimpleNamespace(find=MagicMock(return_value=Cursor([{"status": "sent", "error": None}]))),
+    ))
+
+    with pytest.raises(Exception) as error:
+        run_with_user(user, server.send_communication("communication-fixture"))
+
+    assert error.value.status_code == 409
+    dispatch.assert_not_called()
+
+
+def test_atomic_claim_allows_only_one_of_two_send_requests(monkeypatch):
+    user = {"id": "admin-fixture", "username": "admin", "role": "admin", "active": True}
+    pending = {
+        "id": "communication-fixture", "destinatario_tipo": "equipo", "destinatario_id": "team-fixture",
+        "canal": "email", "asunto": "Aviso ficticio", "mensaje": "Contenido ficticio", "estado_envio": "pending",
+    }
+    monkeypatch.setattr(server, "get_doc", AsyncMock(side_effect=[pending, {
+        "id": "communication-fixture", "estado_envio": "sent", "enviado": True,
+    }, pending]))
+    monkeypatch.setattr(server, "scope_for_collection", AsyncMock(return_value=None))
+    monkeypatch.setattr(server, "communication_targets", AsyncMock(side_effect=[([], ["once@example.test"], {}), ([], ["once@example.test"], {})]))
+    monkeypatch.setattr(server, "enqueue_notifications", AsyncMock(return_value=1))
+    monkeypatch.setattr(server, "record_communication_delivery_audit", AsyncMock())
+    dispatch = MagicMock(return_value={
+        "id": "once-log", "channel": "email", "recipient": "once@example.test", "provider": "simulated",
+        "status": "sent", "error": None, "created_at": "now", "sent_at": "now",
+    })
+    monkeypatch.setattr(server, "dispatch_email", dispatch)
+    database = SimpleNamespace(
+        communications=SimpleNamespace(update_one=AsyncMock(side_effect=[
+            SimpleNamespace(matched_count=1), SimpleNamespace(matched_count=1), SimpleNamespace(matched_count=0),
+        ])),
+        delivery_logs=SimpleNamespace(insert_many=AsyncMock()),
+    )
+    monkeypatch.setattr(server, "db", database)
+
+    run_with_user(user, server.send_communication("communication-fixture"))
+    with pytest.raises(Exception) as error:
+        run_with_user(user, server.send_communication("communication-fixture"))
+
+    assert error.value.status_code == 409
+    dispatch.assert_called_once()
+
+
+def test_delivery_audit_contains_no_content_or_recipient(monkeypatch):
+    database = communication_db()
+    monkeypatch.setattr(server, "db", database)
+
+    asyncio.run(server.record_communication_delivery_audit(
+        "communication.delivery.sent", coach(), "communication-fixture", "sent",
+    ))
+
+    event = database.internal_events.insert_one.await_args.args[0]
+    assert event["communication_id"] == "communication-fixture"
+    assert not ({"message", "email", "recipient", "destinations", "content"} & set(event))

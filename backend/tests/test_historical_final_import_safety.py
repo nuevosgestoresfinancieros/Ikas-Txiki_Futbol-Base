@@ -104,8 +104,11 @@ def test_compact_history_enriches_only_unique_existing_player_and_protects_bank(
                        "created_players": 0, "official_debts": 0}
     player = next(op["after"] for op in operations if op["collection"] == "players")
     payment = next(op["after"] for op in operations if op["collection"] == "payments")
-    assert player["segunda_equipacion"]["number"] == "9"
+    # equipment_current es la equipación principal; las migraciones 005 y 007
+    # corrigen explícitamente el antiguo mapeo a segunda_equipacion.
+    assert player["dorsal"] == "9"
     assert player["posicion"] == "PORTERO"
+    assert player["talla_camiseta"] == "M"
     assert player["equipo_id"] == "t1"
     assert payment["iban_encrypted"] == "ciphertext"
     assert payment["importe_final"] == 0 and payment["confirmed_debt"] is False

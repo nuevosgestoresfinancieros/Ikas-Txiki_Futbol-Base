@@ -39,7 +39,7 @@ test("requires a strong confirmed-password shape", () => {
 });
 
 test("contains complete Spanish and Basque administration translations", () => {
-  ["createUser", "effectivePermissions", "accountStatus_suspended", "configuredOnServer", "recipientPreview", "excludedRecipients", "passwordMismatch"].forEach((key) => {
+  ["createUser", "effectivePermissions", "accountStatus_suspended", "configuredOnServer", "recipientPreview", "excludedRecipients", "passwordMismatch", "permanentDeleteUser", "permanentDeletionChecking"].forEach((key) => {
     expect(translations.es[key]).toBeTruthy();
     expect(translations.eu[key]).toBeTruthy();
   });

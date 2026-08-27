@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   CalendarDays, Eye, EyeOff, FileCheck2, Loader2, Lock,
   ShieldCheck, User, Users,
@@ -9,6 +9,7 @@ import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import ClubLogo from "@/components/ClubLogo";
 import InstallAppCard from "@/components/InstallAppCard";
+import PublicLegalLinks from "@/components/PublicLegalLinks";
 
 const featureIcons = [Users, CalendarDays, FileCheck2];
 const featureKeys = ["loginFeaturePlayers", "loginFeatureSchedule", "loginFeatureAdmin"];
@@ -223,6 +224,8 @@ const Login = ({ onLogin }) => {
               {error}
             </div>
 
+            {!passwordChangeToken && <Link to="/recuperar-contrasena" className="block text-center text-sm font-semibold text-primary hover:underline">¿Has olvidado tu contraseña?</Link>}
+
             <Button type="submit" disabled={loading} className="h-14 w-full rounded-2xl text-base shadow-lg shadow-blue-900/15">
               {loading ? (
                 <><Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />{t("loggingIn")}</>
@@ -236,6 +239,7 @@ const Login = ({ onLogin }) => {
             <ShieldCheck className="h-4 w-4 text-primary" aria-hidden="true" />
             <span>{t("privacyBody")}</span>
           </div>
+          <PublicLegalLinks className="mt-4" />
         </div>
         <div className="w-full max-w-md">
           <InstallAppCard compact />

@@ -183,6 +183,9 @@ def route_permission(request: Request) -> tuple[str, str]:
     method = request.method.upper()
     if first == "callups" and "respond" in parts:
         return "callups", "respond"
+    if first == "communications" and "send-preview" in parts:
+        # It is read-only, but only people who may send can inspect delivery recipients.
+        return "communications", "create"
     if first == "reports" and "preview" in parts:
         return "reports", "read"
     if first == "reports" and any(part.startswith("export.") for part in parts):

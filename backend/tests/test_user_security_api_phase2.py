@@ -76,8 +76,10 @@ def test_invitation_is_emailed_and_keeps_recent_pending_links_usable(monkeypatch
     assert update["invitation_history"] == [user["invitation"]]
     delivery = db.delivery_logs.insert_one.await_args.args[0]
     assert delivery["type"] == "user_access_invitation" and delivery["status"] == "sent"
-    assert "Tu usuario de Ikas-Txiki es: fixture" in sent["args"][2]
-    assert sent["kwargs"]["action_label"] == "Crear mi contraseña"
+    assert "Tu usuario de Ikastxiki es: fixture" in sent["args"][2]
+    assert "token" not in sent["args"][2].lower()
+    assert sent["kwargs"]["template"] == "account_activation"
+    assert sent["kwargs"]["action_label"] == "fixture"
 
 
 def test_recently_resent_invitation_can_still_activate(monkeypatch):
@@ -219,9 +221,16 @@ def test_recovery_token_is_single_use_and_revokes_sessions(monkeypatch):
     db = database(user)
     monkeypatch.setattr(server, "db", db)
     monkeypatch.setattr(server, "record_user_audit", AsyncMock())
+    monkeypatch.setattr(server, "load_user", AsyncMock(return_value=user))
     request = server.TokenPasswordRequest(token=plain, password="New-Secure-Password-2026!",
                                           password_confirmation="New-Secure-Password-2026!")
-    assert asyncio.run(server.reset_recovery_password(request)) == {"ok": True}
+    response = server.Response()
+    result = asyncio.run(server.reset_recovery_password(request, response))
+    assert result["ok"] and result["user"]["username"] == "fixture"
+    cookie = response.headers["set-cookie"]
+    assert "ikastxiki_session=" in cookie and "HttpOnly" in cookie and "Secure" in cookie and "SameSite=strict" in cookie
+    session_token = cookie.split("ikastxiki_session=", 1)[1].split(";", 1)[0]
+    assert server.jwt.decode(session_token, server.JWT_SECRET, algorithms=[server.JWT_ALGORITHM])["ver"] == 3
     update = db.users.update_one.await_args.args[1]["$set"]
     assert update["recovery.used_at"]
     assert db.users.update_one.await_args.args[1]["$inc"]["session_version"] == 1
@@ -236,14 +245,36 @@ def test_expired_account_lock_is_not_reported_as_active():
 
 def test_second_simultaneous_token_consumer_is_rejected(monkeypatch):
     plain, record = server.issue_token(server.JWT_SECRET)
-    user = {"id": "user-fixture", "role": "player", "session_version": 0, "recovery": record}
+    user = {"id": "user-fixture", "username": "fixture", "role": "player", "session_version": 0, "recovery": record}
     db = database(user)
     db.users.update_one.side_effect = [SimpleNamespace(modified_count=1), SimpleNamespace(modified_count=0)]
     monkeypatch.setattr(server, "db", db)
     monkeypatch.setattr(server, "record_user_audit", AsyncMock())
+    monkeypatch.setattr(server, "load_user", AsyncMock(return_value=user))
     request = server.TokenPasswordRequest(token=plain, password="New-Secure-Password-2026!",
                                           password_confirmation="New-Secure-Password-2026!")
-    assert asyncio.run(server.reset_recovery_password(request)) == {"ok": True}
+    assert asyncio.run(server.reset_recovery_password(request, server.Response()))["ok"]
     with pytest.raises(Exception) as error:
-        asyncio.run(server.reset_recovery_password(request))
+        asyncio.run(server.reset_recovery_password(request, server.Response()))
     assert error.value.status_code == 400
+
+
+def test_permanent_deletion_is_disabled_without_transaction_support_and_never_writes(monkeypatch):
+    database = SimpleNamespace(command=AsyncMock(return_value={
+        "logicalSessionTimeoutMinutes": 30, "maxWireVersion": 21,
+    }))
+    monkeypatch.setattr(server, "db", database)
+    capability = asyncio.run(server.get_permanent_deletion_capability())
+    assert capability["enabled"] is False
+    assert "replica set" in capability["reason"]
+    request = server.PermanentDeletionConfirmation(confirmation="ELIMINAR")
+    with pytest.raises(Exception) as error:
+        asyncio.run(server.permanently_delete_user("user-fixture", request))
+    assert error.value.status_code == 503
+    assert not hasattr(database, "users")
+
+
+def test_permanent_deletion_confirmation_requires_the_exact_word():
+    assert server.PermanentDeletionConfirmation(confirmation=" ELIMINAR ").confirmation == "ELIMINAR"
+    with pytest.raises(Exception):
+        server.PermanentDeletionConfirmation(confirmation="eliminar")

@@ -5,7 +5,7 @@ from starlette.requests import Request
 
 from authz import ROLE_PERMISSIONS, route_permission
 from notification_service import (
-    dispatch_email, dispatch_telegram, make_notification, notification_enabled, provider_configuration,
+    RECOVERY_LOGO_CID, _activation_email_html, _public_legal_url, _recovery_email_html, dispatch_email, dispatch_telegram, make_notification, notification_enabled, provider_configuration,
 )
 from server import scope_for_collection
 from server import Communication
@@ -136,3 +136,98 @@ def test_supported_communication_channels_are_explicit(channel):
 def test_unsupported_communication_channel_is_rejected():
     with pytest.raises(ValueError):
         Communication(canal="push")
+
+
+def test_recovery_email_has_corporate_content_and_hides_the_token_url_from_copy():
+    token_url = "https://example.invalid/nueva-contrasena?token=secret-token"
+    html = _recovery_email_html("Hola Andrea,\n\nTexto solo para la versión plana.", token_url)
+    assert "Crea tu nueva contraseña" in html
+    assert "Lleva Ikastxiki siempre contigo" in html
+    assert "Por tu seguridad, este enlace solo puede utilizarse una vez." in html
+    assert f'cid:{RECOVERY_LOGO_CID}' in html and 'alt="Ikastxiki"' in html
+    assert "Texto solo para la versión plana." not in html
+    assert html.count(token_url) == 1
+    assert f'href="{token_url}"' in html
+    assert "Android:" in html and "iPhone/iPad:" in html and "Ordenador:" in html
+    assert "Protección de datos de menores" in html
+    assert f'href="{_public_legal_url("/privacidad")}"' in html
+    assert f'href="{_public_legal_url("/condiciones-de-uso")}"' in html
+
+
+def test_recovery_email_mime_keeps_the_url_only_in_the_html_button_and_embeds_logo():
+    sent = []
+
+    class FakeSMTP:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def send_message(self, message):
+            sent.append(message)
+
+    token_url = "https://example.invalid/nueva-contrasena?token=secret-token"
+    plain_body = "Hola Andrea,\n\nUsa el botón de este correo para crear una nueva contraseña."
+    result = dispatch_email(
+        "family@example.test", "Recuperación", plain_body,
+        {"SMTP_HOST": "smtp.example.test", "SMTP_FROM": "club@example.test", "SMTP_STARTTLS": "false"},
+        FakeSMTP, action_url=token_url, action_label="Crear mi nueva contraseña", template="password_recovery",
+    )
+    assert result["status"] == "sent" and len(sent) == 1
+    message = sent[0]
+    plain = message.get_body(preferencelist=("plain",)).get_content()
+    html = message.get_body(preferencelist=("html",)).get_content()
+    assert token_url not in plain
+    assert "Usa el botón de este correo" in plain
+    assert html.count(token_url) == 1 and f'href="{token_url}"' in html
+    assert html.count("Hemos recibido una solicitud") == 1
+    assert f'cid:{RECOVERY_LOGO_CID}' in html and 'alt="Ikastxiki"' in html
+    assert f'href="{_public_legal_url("/privacidad")}"' in html
+    assert f'href="{_public_legal_url("/condiciones-de-uso")}"' in html
+    assert any(part.get("Content-ID") == f"<{RECOVERY_LOGO_CID}>" for part in message.walk())
+
+
+def test_activation_email_has_corporate_content_and_hides_the_token_url_from_copy():
+    token_url = "https://example.invalid/activar?token=activation-secret-token"
+    html = _activation_email_html("Hola,", "familia.ejemplo", token_url)
+    assert "Activa tu acceso a Ikastxiki" in html
+    assert "Tu usuario de Ikastxiki es: <strong>familia.ejemplo</strong>" in html
+    assert "48 horas" in html and "Lleva Ikastxiki siempre contigo" in html
+    assert "Protección de datos de menores" in html
+    assert f'cid:{RECOVERY_LOGO_CID}' in html and 'alt="Ikastxiki"' in html
+    assert html.count(token_url) == 1 and f'href="{token_url}"' in html
+    assert f'<a href="{token_url}"' in html and "Crear mi contraseña</a>" in html
+    assert html.count("Crear mi contraseña") == 1
+    assert f'href="{_public_legal_url("/privacidad")}"' in html
+    assert f'href="{_public_legal_url("/condiciones-de-uso")}"' in html
+
+
+def test_activation_email_mime_keeps_url_only_in_html_button_and_embeds_logo():
+    sent = []
+
+    class FakeSMTP:
+        def __init__(self, *_args, **_kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def send_message(self, message): sent.append(message)
+
+    token_url = "https://example.invalid/activar?token=activation-secret-token"
+    plain_body = "Hola,\n\nTu usuario de Ikastxiki es: familia.ejemplo.\n\nUsa el botón de este correo."
+    result = dispatch_email(
+        "family@example.test", "Activación", plain_body,
+        {"SMTP_HOST": "smtp.example.test", "SMTP_FROM": "club@example.test", "SMTP_STARTTLS": "false"},
+        FakeSMTP, action_url=token_url, action_label="familia.ejemplo", template="account_activation",
+    )
+    assert result["status"] == "sent" and len(sent) == 1
+    message = sent[0]
+    plain = message.get_body(preferencelist=("plain",)).get_content()
+    html = message.get_body(preferencelist=("html",)).get_content()
+    assert token_url not in plain
+    assert html.count(token_url) == 1 and f'href="{token_url}"' in html
+    assert html.count("Crear mi contraseña") == 1
+    assert f'cid:{RECOVERY_LOGO_CID}' in html and 'alt="Ikastxiki"' in html
+    assert any(part.get("Content-ID") == f"<{RECOVERY_LOGO_CID}>" for part in message.walk())

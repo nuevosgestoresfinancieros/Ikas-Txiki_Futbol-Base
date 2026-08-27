@@ -34,6 +34,12 @@ if [ -d "$ASSET_BACKUP/static" ]; then
         fi
     done < <(find "$ASSET_BACKUP/static" -type f -print0)
 fi
+
+# The build can inherit a restrictive umask (for example 0077), which makes
+# index.html or static/ unreadable to Apache and causes a 403 response.
+echo "→ Normalizando permisos públicos del frontend..."
+find build -type d -exec chmod 755 {} +
+find build -type f -exec chmod 644 {} +
 cd ..
 
 echo "→ Verificando proxy /uploads en Apache..."

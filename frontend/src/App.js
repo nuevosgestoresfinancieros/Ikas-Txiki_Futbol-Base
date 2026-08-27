@@ -30,6 +30,10 @@ const Users = lazy(() => import("@/pages/Users"));
 const Calendar = lazy(() => import("@/pages/Calendar"));
 const Portal = lazy(() => import("@/pages/Portal"));
 const ActivateAccount = lazy(() => import("@/pages/ActivateAccount"));
+const RequestPasswordRecovery = lazy(() => import("@/pages/RequestPasswordRecovery"));
+const ResetPassword = lazy(() => import("@/pages/ResetPassword"));
+const PrivacyPolicy = lazy(() => import("@/pages/PrivacyPolicy"));
+const TermsOfUse = lazy(() => import("@/pages/TermsOfUse"));
 
 const AppLoader = ({ fullPage = false }) => {
   const { t } = useI18n();
@@ -90,6 +94,10 @@ function App() {
                 : <Login onLogin={(u) => setUser(u)} />
           } />
           <Route path="/activar" element={<Suspense fallback={<AppLoader fullPage />}><ActivateAccount /></Suspense>} />
+          <Route path="/recuperar-contrasena" element={<Suspense fallback={<AppLoader fullPage />}><RequestPasswordRecovery /></Suspense>} />
+          <Route path="/nueva-contrasena" element={<Suspense fallback={<AppLoader fullPage />}><ResetPassword onLogin={setUser} /></Suspense>} />
+          <Route path="/privacidad" element={<Suspense fallback={<AppLoader fullPage />}><PrivacyPolicy /></Suspense>} />
+          <Route path="/condiciones-de-uso" element={<Suspense fallback={<AppLoader fullPage />}><TermsOfUse /></Suspense>} />
 
           {/* Rutas protegidas */}
           <Route path="/*" element={
