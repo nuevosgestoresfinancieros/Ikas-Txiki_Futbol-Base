@@ -272,6 +272,44 @@
     box-shadow: 0 6px 20px rgba(14, 53, 84, 0.3) !important;
 }
 
+.assistant-trigger-avatar {
+    width: 28px;
+    height: 28px;
+    flex: 0 0 auto;
+    border: 1px solid rgba(255, 255, 255, 0.65);
+    border-radius: 9999px;
+    object-fit: cover;
+    object-position: top center;
+    background: #fff;
+}
+
+.assistant-welcome {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.assistant-welcome-mascot {
+    width: 76px;
+    height: 114px;
+    flex: 0 0 auto;
+    object-fit: contain;
+}
+
+@media (min-width: 640px) {
+    .assistant-welcome {
+        flex-direction: row;
+        align-items: center;
+        gap: 1rem;
+    }
+
+    .assistant-welcome-mascot {
+        width: 88px;
+        height: 132px;
+    }
+}
+
 .app-authenticated .rgpd-banner {
     bottom: calc(70px + env(safe-area-inset-bottom));
 }

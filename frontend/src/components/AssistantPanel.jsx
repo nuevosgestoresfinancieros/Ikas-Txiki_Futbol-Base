@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Compass, ExternalLink, HelpCircle, Loader2, Send, ShieldCheck, X } from "lucide-react";
+import { Compass, ExternalLink, HelpCircle, Loader2, Send, ShieldCheck, X } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import api from "@/api";
 import { useI18n } from "@/i18n";
@@ -144,7 +144,11 @@ const AssistantPanel = ({ user }) => {
         aria-label={t("assistantCibermedida")}
         ref={triggerRef}
       >
-        <Bot className="h-4 w-4" aria-hidden="true" />
+        <img
+          src="/mascota-ikastxiki.png"
+          alt="Mascota de Ikastxiki"
+          className="assistant-trigger-avatar"
+        />
         <span>{t("assistantCibermedida")}</span>
       </Button>
       <Sheet open={open} onOpenChange={handleOpenChange}>
@@ -156,7 +160,11 @@ const AssistantPanel = ({ user }) => {
         >
           <SheetHeader className="border-b bg-slate-50 p-5 text-left">
             <SheetTitle ref={panelTitleRef} tabIndex="-1" className="flex items-center gap-2">
-              <Bot className="h-5 w-5 text-primary" aria-hidden="true" />
+              <img
+                src="/mascota-ikastxiki.png"
+                alt="Mascota de Ikastxiki"
+                className="h-8 w-8 rounded-full border border-primary/20 object-cover object-top"
+              />
               {t("assistantTitle")}
             </SheetTitle>
             <SheetDescription>{t("assistantDescription")}</SheetDescription>
@@ -181,6 +189,19 @@ const AssistantPanel = ({ user }) => {
               <h3 id="assistant-help-title" className="mb-2 flex items-center gap-2 font-semibold">
                 <HelpCircle className="h-4 w-4" aria-hidden="true" />{t("assistantGeneralHelp")}
               </h3>
+              {!history.length && (
+                <div className="assistant-welcome mb-4 rounded-xl border border-primary/15 bg-primary/5 p-3 sm:p-4">
+                  <img
+                    src="/mascota-ikastxiki.png"
+                    alt="Mascota de Ikastxiki"
+                    className="assistant-welcome-mascot"
+                  />
+                  <div className="text-center sm:text-left">
+                    <p className="font-semibold text-slate-900">{t("assistantWelcomeTitle")}</p>
+                    <p className="mt-1 text-sm leading-6 text-slate-600">{t("assistantWelcomeDescription")}</p>
+                  </div>
+                </div>
+              )}
               <div className="mb-3 flex flex-wrap gap-2">
                 {questions.map((question) => (
                   <button key={question} type="button" onClick={() => ask(question)} className="rounded-full border px-3 py-2 text-left text-xs font-medium hover:bg-slate-50">
@@ -192,9 +213,16 @@ const AssistantPanel = ({ user }) => {
                 {history.map((item, index) => (
                   <div key={`${item.role}-${index}`} className={`rounded-xl p-3 text-sm ${item.role === "user" ? "ml-8 bg-primary text-primary-foreground" : "mr-4 border bg-slate-50"}`}>
                     {item.role === "assistant" && (
-                      <span className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-slate-500">
-                        {item.channel === "external" ? t("assistantGeneralChannel") : t("assistantInternalChannel")}
-                      </span>
+                      <div className="mb-1 flex items-center gap-2">
+                        <img
+                          src="/mascota-ikastxiki.png"
+                          alt="Mascota de Ikastxiki"
+                          className="h-6 w-6 rounded-full border border-primary/20 object-cover object-top"
+                        />
+                        <span className="block text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                          {item.channel === "external" ? t("assistantGeneralChannel") : t("assistantInternalChannel")}
+                        </span>
+                      </div>
                     )}
                     <p className="whitespace-pre-wrap break-words">{item.text}</p>
                     {item.privacyNotice && item.privacyNotice !== "provider_not_configured" && (

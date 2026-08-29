@@ -88,6 +88,10 @@ test("assistant identity and essential labels are complete in ES and EU", () => 
   expect(translations.es.assistantPrivacyWarning).toBeTruthy();
   expect(translations.eu.assistantPrivacyWarning).toBeTruthy();
   expect(translations.es.assistantModule_stats).toBe("Estadísticas");
+  expect(translations.es.assistantWelcomeTitle).toBe("Hola, soy la mascota de Ikastxiki.");
+  expect(translations.es.assistantWelcomeDescription).toBe("Estoy aquí para ayudarte con la gestión del club.");
+  expect(translations.eu.assistantWelcomeTitle).toBeTruthy();
+  expect(translations.eu.assistantWelcomeDescription).toBeTruthy();
   expect(translations.eu.assistantModule_stats).toBe("Estatistikak");
 });
 
@@ -106,6 +110,9 @@ test("component source keeps accessible and explicit confirmation controls", () 
   expect(source).toContain("safeAssistantModules");
   expect(source).toContain("<SheetDescription>{t(\"assistantDescription\")}</SheetDescription>");
   expect(source).not.toContain('aria-describedby=\"assistant-description\"');
+  expect(source).toContain('src="/mascota-ikastxiki.png"');
+  expect(source).toContain('alt="Mascota de Ikastxiki"');
+  expect(source).toContain("!history.length");
   expect(source).not.toContain('id=\"assistant-description\"');
   expect(source).not.toContain("dangerouslySetInnerHTML");
 });
