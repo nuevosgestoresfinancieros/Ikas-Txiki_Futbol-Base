@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Home, Plus, Pencil, Trash2, Phone, Mail } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
@@ -14,12 +15,19 @@ const empty = { preferencia_comunicacion: "email" };
 const Families = () => {
   const canCreate = usePermission("families", "create");
   const { t } = useI18n();
+  const [params] = useSearchParams();
   const [families, setFamilies] = useState([]);
   const [dialog, setDialog] = useState(false);
   const [form, setForm] = useState(empty);
+  const openedSearchResult = useRef("");
 
   const load = async () => setFamilies((await api.get("/families")).data);
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    const familyId = params.get("ficha");
+    const family = families.find((item) => item.id === familyId);
+    if (family && openedSearchResult.current !== familyId) { openedSearchResult.current = familyId; setForm(family); setDialog(true); }
+  }, [families, params]);
 
   const set = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
   const openNew = () => { setForm(empty); setDialog(true); };

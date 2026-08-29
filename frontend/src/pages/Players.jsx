@@ -70,6 +70,12 @@ const Players = () => {
     if (params.get("new") && canCreate) { openNew(); params.delete("new"); setParams(params); }
     // eslint-disable-next-line
   }, []);
+  useEffect(() => {
+    const playerId = params.get("ficha");
+    const player = players.find((item) => item.id === playerId);
+    if (player && !dialog) openEdit(player);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [players, params]);
 
   const openNew = () => { setEditing(null); setDialog(true); };
   const openEdit = (p) => { setEditing(p); setDialog(true); };

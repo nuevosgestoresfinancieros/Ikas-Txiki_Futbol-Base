@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Shield, Plus, Pencil, Trash2, Users, UserRound, Hash, MapPin, CalendarDays } from "lucide-react";
 import { toast } from "sonner";
@@ -31,6 +31,7 @@ const Teams = () => {
   const [selectedTeam, setSelectedTeam] = useState(null);
   const [loadingSquad, setLoadingSquad] = useState(false);
   const [form, setForm] = useState(empty);
+  const openedSearchResult = useRef("");
 
   const load = async () => setTeams((await api.get("/teams")).data);
   useEffect(() => {
@@ -64,6 +65,12 @@ const Teams = () => {
       setLoadingSquad(false);
     }
   };
+  useEffect(() => {
+    const teamId = params.get("ficha");
+    const team = teams.find((item) => item.id === teamId);
+    if (team && openedSearchResult.current !== teamId) { openedSearchResult.current = teamId; openSquad(team); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [teams, params]);
   const seasonOptions = useMemo(() => unique([...(settings.temporadas || []), ...teams.map((team) => team.temporada)]), [settings.temporadas, teams]);
   const fieldOptions = useMemo(() => unique([...(settings.campos || []), ...teams.map((team) => team.campo)]), [settings.campos, teams]);
   const coachOptions = useMemo(() => unique([...(settings.entrenadores || []), ...teams.flatMap((team) => [team.entrenador, team.segundo_entrenador])]), [settings.entrenadores, teams]);
