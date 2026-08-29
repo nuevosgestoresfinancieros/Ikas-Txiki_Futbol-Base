@@ -84,3 +84,26 @@ export const safeUsernameSuggestion = (firstName, lastName) => {
     .toLocaleLowerCase().replace(/[^a-z0-9_-]/g, "").replace(/_+/g, "_").replace(/^_|_$/g, "");
   return source === "admin" ? "" : source;
 };
+
+const USER_FIELD_LABELS = { username: "Nombre de usuario", email: "Correo electrónico", first_name: "Nombre", last_name: "Apellidos", phone: "Teléfono", assigned_team_ids: "Equipos asignados", assigned_category_ids: "Categorías asignadas" };
+const SENSITIVE_DETAIL = /(?:token|contrase(?:ñ|n)a|password|secret|bearer|authorization|api[_ -]?key|\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b)/i;
+const safeBackendDetail = (detail) => typeof detail === "string" && detail.length <= 240 && !SENSITIVE_DETAIL.test(detail) ? detail.trim() : null;
+export const userSaveFeedback = (requestError) => {
+  const status = requestError?.response?.status;
+  const detail = requestError?.response?.data?.detail;
+  if (status === 409 && detail === "El correo ya está asociado a otra cuenta") return { kind: "error", field: "email", message: "No se ha podido guardar: el correo electrónico ya está asociado a otra cuenta." };
+  if (status === 409 && detail === "El nombre de usuario ya existe") return { kind: "error", field: "username", message: "No se ha podido guardar: el nombre de usuario ya existe." };
+  if (Array.isArray(detail) && detail.length) {
+    const issue = detail[0] || {};
+    const location = Array.isArray(issue.loc) ? issue.loc.filter((part) => part !== "body").at(-1) : null;
+    const field = typeof location === "string" ? location : null;
+    const reason = safeBackendDetail(issue.msg) || "valor no válido";
+    return { kind: "error", field, message: `No se ha podido guardar: ${USER_FIELD_LABELS[field] || "Un campo"}: ${reason}.` };
+  }
+  const safeDetail = safeBackendDetail(detail);
+  if (status === 422 && safeDetail && /equipo|equipos|NO APLICA/i.test(safeDetail)) return { kind: "error", field: "assigned_team_ids", message: `No se ha podido guardar: Equipos asignados: ${safeDetail}.` };
+  if ((status === 400 || status === 403 || status === 422) && safeDetail) return { kind: "error", field: null, message: `No se ha podido guardar: ${safeDetail}.` };
+  return { kind: "error", field: null, message: "No se ha podido guardar el usuario. Comprueba la conexión e inténtalo de nuevo." };
+};
+export const userSaveSuccessFeedback = (response) => ({ kind: "success", message: response?.invitation_token ? "Usuario creado correctamente. La invitación se ha generado, pero no se ha enviado por correo." : "Usuario creado correctamente." });
+export const userFeedbackStep = (field) => (["username", "email", "first_name", "last_name", "phone"].includes(field) ? 1 : ["assigned_team_ids", "assigned_category_ids"].includes(field) ? 3 : field ? 4 : null);

@@ -9,7 +9,8 @@ import { useI18n } from "@/i18n";
 import BulkAccountProvisioning from "./BulkAccountProvisioning";
 import {
   USER_STATUSES, accessState, allPasswordChecksPass, normalizedStatus, normalizedTeamOptions, passwordChecks,
-  safeUsernameSuggestion, userCounters, userDisplayName, userRoleLabelKey, wizardLinkComplete,
+  safeUsernameSuggestion, userCounters, userDisplayName, userFeedbackStep, userRoleLabelKey, userSaveFeedback,
+  userSaveSuccessFeedback, wizardLinkComplete,
 } from "./userAdministrationView";
 
 const emptyForm = {
@@ -53,6 +54,8 @@ export default function Users() {
   const [filters, setFilters] = useState({ search: "", role: "", status: "", teamId: "" });
   const [page, setPage] = useState(1);
   const [serverMeta, setServerMeta] = useState(null);
+  const [saveFeedback, setSaveFeedback] = useState(null);
+  const [saveProcessing, setSaveProcessing] = useState(false);
 
   const load = async () => {
     setLoading(true); setError(false);
@@ -79,19 +82,19 @@ export default function Users() {
   const checks = passwordChecks(form.password);
   const update = (key, value) => setForm((current) => ({ ...current, [key]: value }));
   const manualSteps = [1, 3, 4];
-  const close = () => { setDialog(false); setEditingId(null); setCreationType(null); setForm(emptyForm); setShowPassword(false); setWizardStep(1); };
-  const openCreate = () => { setEditingId(null); setCreationType(null); setForm(emptyForm); setWizardStep(1); setDialog(true); };
+  const close = () => { setDialog(false); setEditingId(null); setCreationType(null); setForm(emptyForm); setShowPassword(false); setWizardStep(1); setSaveFeedback(null); };
+  const openCreate = () => { setEditingId(null); setCreationType(null); setForm(emptyForm); setWizardStep(1); setSaveFeedback(null); setDialog(true); };
   const chooseCreationType = (role) => {
     setCreationType(role);
     setForm({ ...emptyForm, role });
-    setWizardStep(1);
+    setWizardStep(1); setSaveFeedback(null);
   };
   const openEdit = (user) => {
     if (user.read_only) return;
     setEditingId(user.id);
     setCreationType(user.role);
     setForm({ ...emptyForm, ...user, password: "", password_confirmation: "", player_id: user.player_id || "", family_id: user.family_id || "" });
-    setWizardStep(1); setDialog(true);
+    setWizardStep(1); setSaveFeedback(null); setDialog(true);
   };
   const toggleTeam = (teamId) => update("assigned_team_ids", form.assigned_team_ids.includes(teamId)
     ? form.assigned_team_ids.filter((id) => id !== teamId) : [...form.assigned_team_ids, teamId]);
@@ -100,8 +103,10 @@ export default function Users() {
 
   const save = async (event) => {
     event.preventDefault();
+    if (saveProcessing) return;
     if (!wizardLinkComplete(form) && form.account_status === "active") return;
     if (!editingId && form.access_method === "password" && (!allPasswordChecksPass(form.password) || form.password !== form.password_confirmation)) return;
+    setSaveProcessing(true); setSaveFeedback(null);
     try {
       const payload = { ...form, player_id: form.player_id || null, family_id: form.family_id || null };
       if (!editingId && form.access_method !== "password") { payload.password = null; payload.password_confirmation = null; }
@@ -110,16 +115,17 @@ export default function Users() {
         await api.put(`/users/${editingId}`, payload);
       } else {
         const response = await api.post("/users", payload);
-        const secret = response.data.temporary_password || response.data.invitation_token;
-        if (secret) {
-          setSecurity({ user: response.data, read_only: false, invitation_status: response.data.invitation_token ? "pending" : "none" });
-          setRevealedSecret({ value: secret, kind: response.data.temporary_password ? "password" : "invitation" });
-        }
+        setSaveFeedback(userSaveSuccessFeedback(response.data));
       }
-      toast({ title: t("userSaved") }); close(); await load();
+      if (editingId) setSaveFeedback(userSaveSuccessFeedback());
+      toast({ title: t("userSaved") }); await load();
     } catch (requestError) {
-      toast({ title: requestError.response?.data?.detail || t("saveError"), variant: "destructive" });
-    }
+      const feedback = userSaveFeedback(requestError);
+      setSaveFeedback(feedback);
+      const step = userFeedbackStep(feedback.field);
+      if (step) setWizardStep(step);
+      toast({ title: feedback.message, variant: "destructive" });
+    } finally { setSaveProcessing(false); }
   };
 
   const showEffectivePermissions = async (user) => {
@@ -238,16 +244,19 @@ export default function Users() {
               </button>)}
             </div>
             <Button type="button" variant="outline" onClick={close}>{t("cancel")}</Button>
-          </section> : !editingId && ["family", "player"].includes(creationType) ? <BulkAccountProvisioning type={creationType} onCancel={close} onCompleted={load} /> : <form className="space-y-5" onSubmit={save}>
+          </section> : !editingId && ["family", "player"].includes(creationType) ? <BulkAccountProvisioning type={creationType} onCancel={close} onCompleted={load} /> : <form className="space-y-5" onSubmit={save} noValidate>
+            {saveFeedback && <div role="alert" aria-live="assertive" className={`flex items-start justify-between gap-3 rounded-xl border p-4 text-sm font-semibold ${saveFeedback.kind === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-red-200 bg-red-50 text-red-900"}`}>
+              <p>{saveFeedback.message}</p><button type="button" onClick={() => setSaveFeedback(null)} className="shrink-0 rounded p-1 text-current focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current" aria-label="Cerrar mensaje">×</button>
+            </div>}
             <section className="rounded-2xl border border-sky-100 bg-sky-50 p-4">
               <p className="text-xs font-bold uppercase tracking-wide text-sky-700">{t("userType")}</p>
               {editingId ? <Select label={t("role")} value={form.role} onChange={(role) => update("role", role)}>{["admin", "coordinator", "coach", "family", "player"].map((role) => <option key={role} value={role}>{t(`role_${role}`)}</option>)}</Select> : <p className="mt-1 font-bold text-sky-950">{t(`role_${form.role}`)}</p>}
             </section>
             <ol className="grid grid-cols-3 gap-2" aria-label={t("wizardProgress")}>{manualSteps.map((step, index) => <li key={step} className={`rounded-xl px-2 py-2 text-center text-xs font-bold ${wizardStep === step ? "bg-primary text-white" : "bg-slate-100 text-slate-600"}`}>{index + 1}. {t(`userStep_${step}`)}</li>)}</ol>
-            {wizardStep === 1 && <section className="grid gap-4 sm:grid-cols-2"><label className="text-sm font-semibold">{t("firstName")}<Input className="mt-1.5" value={form.first_name} onChange={(e) => update("first_name", e.target.value)} required /></label><label className="text-sm font-semibold">{t("lastName")}<Input className="mt-1.5" value={form.last_name} onChange={(e) => update("last_name", e.target.value)} required /></label><label className="text-sm font-semibold">{t("username")}<div className="mt-1.5 flex gap-2"><Input disabled={Boolean(editingId)} value={form.username} onChange={(e) => update("username", e.target.value)} required /><Button type="button" variant="outline" disabled={Boolean(editingId)} onClick={() => update("username", safeUsernameSuggestion(form.first_name, form.last_name))}>{t("suggest")}</Button></div></label><label className="text-sm font-semibold">{t("email")}<Input className="mt-1.5" type="email" value={form.email || ""} onChange={(e) => update("email", e.target.value)} /></label><label className="text-sm font-semibold">{t("phone")}<Input className="mt-1.5" value={form.phone || ""} onChange={(e) => update("phone", e.target.value)} /></label><Select label={t("language")} value={form.language} onChange={(language) => update("language", language)}><option value="es">Castellano</option><option value="eu">Euskara</option></Select></section>}
-            {wizardStep === 3 && <section className="space-y-4">{(form.role === "coordinator" || form.role === "coach") && <fieldset><legend className="text-sm font-semibold">{t("assignedTeams")} · {form.assigned_team_ids.length}</legend><div className="mt-2 grid gap-3 sm:grid-cols-2"><Input placeholder={t("searchTeams")} value={teamFilters.search} onChange={(event) => setTeamFilters((value) => ({ ...value, search: event.target.value }))} /><Select label={t("season")} value={teamFilters.season} onChange={(season) => setTeamFilters((value) => ({ ...value, season }))}><option value="">{t("all")}</option>{seasons.map((season) => <option key={season} value={season}>{season}</option>)}</Select></div><div className="mt-3 flex flex-wrap gap-2"><Button type="button" variant="outline" onClick={() => update("assigned_team_ids", [...new Set([...form.assigned_team_ids, ...visibleTeams.map((team) => team.id)])])}>{t("selectVisible")}</Button><Button type="button" variant="outline" onClick={() => update("assigned_team_ids", [])}>{t("clearSelection")}</Button></div><div className="mt-3 grid max-h-72 gap-2 overflow-y-auto sm:grid-cols-2">{visibleTeams.map((team) => <label key={team.id} className="flex min-h-11 items-center gap-2 rounded-xl border p-3 text-sm"><input type="checkbox" checked={form.assigned_team_ids.includes(team.id)} onChange={() => toggleTeam(team.id)} /><span>{team.nombre}<small className="block text-slate-500">{[team.categoria, team.modalidad, team.temporada].filter(Boolean).join(" · ")}</small></span></label>)}</div></fieldset>}{form.role === "coordinator" && <fieldset><legend className="text-sm font-semibold">{t("assignedCategories")}</legend><div className="mt-2 grid gap-2 sm:grid-cols-2">{categories.filter((category) => String(category).toLocaleUpperCase() !== "NO APLICA").map((category) => <label key={category} className="flex min-h-11 items-center gap-2 rounded-xl border p-3 text-sm"><input type="checkbox" checked={form.assigned_category_ids.includes(category)} onChange={() => toggleCategory(category)} />{category}</label>)}</div></fieldset>}{form.role === "player" && <Select label={t("linkedPlayer")} value={form.player_id} onChange={(playerId) => update("player_id", playerId)}><option value="">—</option>{players.map((player) => <option key={player.id} value={player.id}>{player.nombre} {player.apellidos}</option>)}</Select>}{form.role === "family" && <Select label={t("linkedFamily")} value={form.family_id} onChange={(familyId) => update("family_id", familyId)}><option value="">—</option>{families.map((family) => <option key={family.id} value={family.id}>{family.progenitor1_nombre || family.contacto_principal || t("family")}</option>)}</Select>}{!wizardLinkComplete(form) && <p className="rounded-xl bg-amber-50 p-3 text-sm font-semibold text-amber-900">{t("incompleteLinkWarning")}</p>}</section>}
+            {wizardStep === 1 && <section className="grid gap-4 sm:grid-cols-2"><label className="text-sm font-semibold">{t("firstName")}<Input className={`mt-1.5 ${saveFeedback?.field === "first_name" ? "border-red-500" : ""}`} aria-invalid={saveFeedback?.field === "first_name"} value={form.first_name} onChange={(e) => update("first_name", e.target.value)} required /></label><label className="text-sm font-semibold">{t("lastName")}<Input className={`mt-1.5 ${saveFeedback?.field === "last_name" ? "border-red-500" : ""}`} aria-invalid={saveFeedback?.field === "last_name"} value={form.last_name} onChange={(e) => update("last_name", e.target.value)} required /></label><label className="text-sm font-semibold">{t("username")}<div className="mt-1.5 flex gap-2"><Input className={saveFeedback?.field === "username" ? "border-red-500" : ""} aria-invalid={saveFeedback?.field === "username"} disabled={Boolean(editingId)} value={form.username} onChange={(e) => update("username", e.target.value)} required /><Button type="button" variant="outline" disabled={Boolean(editingId)} onClick={() => update("username", safeUsernameSuggestion(form.first_name, form.last_name))}>{t("suggest")}</Button></div></label><label className="text-sm font-semibold">{t("email")}<Input className={`mt-1.5 ${saveFeedback?.field === "email" ? "border-red-500" : ""}`} aria-invalid={saveFeedback?.field === "email"} type="email" value={form.email || ""} onChange={(e) => update("email", e.target.value)} /></label><label className="text-sm font-semibold">{t("phone")}<Input className={`mt-1.5 ${saveFeedback?.field === "phone" ? "border-red-500" : ""}`} aria-invalid={saveFeedback?.field === "phone"} value={form.phone || ""} onChange={(e) => update("phone", e.target.value)} /></label><Select label={t("language")} value={form.language} onChange={(language) => update("language", language)}><option value="es">Castellano</option><option value="eu">Euskara</option></Select></section>}
+            {wizardStep === 3 && <section className="space-y-4">{(form.role === "coordinator" || form.role === "coach") && <fieldset className={saveFeedback?.field === "assigned_team_ids" ? "rounded-xl border-2 border-red-500 p-3" : ""} aria-invalid={saveFeedback?.field === "assigned_team_ids"}><legend className="text-sm font-semibold">{t("assignedTeams")} · {form.assigned_team_ids.length}</legend><div className="mt-2 grid gap-3 sm:grid-cols-2"><Input placeholder={t("searchTeams")} value={teamFilters.search} onChange={(event) => setTeamFilters((value) => ({ ...value, search: event.target.value }))} /><Select label={t("season")} value={teamFilters.season} onChange={(season) => setTeamFilters((value) => ({ ...value, season }))}><option value="">{t("all")}</option>{seasons.map((season) => <option key={season} value={season}>{season}</option>)}</Select></div><div className="mt-3 flex flex-wrap gap-2"><Button type="button" variant="outline" onClick={() => update("assigned_team_ids", [...new Set([...form.assigned_team_ids, ...visibleTeams.map((team) => team.id)])])}>{t("selectVisible")}</Button><Button type="button" variant="outline" onClick={() => update("assigned_team_ids", [])}>{t("clearSelection")}</Button></div><div className="mt-3 grid max-h-72 gap-2 overflow-y-auto sm:grid-cols-2">{visibleTeams.map((team) => <label key={team.id} className="flex min-h-11 items-center gap-2 rounded-xl border p-3 text-sm"><input type="checkbox" checked={form.assigned_team_ids.includes(team.id)} onChange={() => toggleTeam(team.id)} /><span>{team.nombre}<small className="block text-slate-500">{[team.categoria, team.modalidad, team.temporada].filter(Boolean).join(" · ")}</small></span></label>)}</div></fieldset>}{form.role === "coordinator" && <fieldset><legend className="text-sm font-semibold">{t("assignedCategories")}</legend><div className="mt-2 grid gap-2 sm:grid-cols-2">{categories.filter((category) => String(category).toLocaleUpperCase() !== "NO APLICA").map((category) => <label key={category} className="flex min-h-11 items-center gap-2 rounded-xl border p-3 text-sm"><input type="checkbox" checked={form.assigned_category_ids.includes(category)} onChange={() => toggleCategory(category)} />{category}</label>)}</div></fieldset>}{form.role === "player" && <Select label={t("linkedPlayer")} value={form.player_id} onChange={(playerId) => update("player_id", playerId)}><option value="">—</option>{players.map((player) => <option key={player.id} value={player.id}>{player.nombre} {player.apellidos}</option>)}</Select>}{form.role === "family" && <Select label={t("linkedFamily")} value={form.family_id} onChange={(familyId) => update("family_id", familyId)}><option value="">—</option>{families.map((family) => <option key={family.id} value={family.id}>{family.progenitor1_nombre || family.contacto_principal || t("family")}</option>)}</Select>}{!wizardLinkComplete(form) && <p className="rounded-xl bg-amber-50 p-3 text-sm font-semibold text-amber-900">{t("incompleteLinkWarning")}</p>}</section>}
             {wizardStep === 4 && <section className="space-y-4"><div className="grid gap-4 sm:grid-cols-2"><Select label={t("status")} value={form.account_status} onChange={(status) => update("account_status", status)}>{USER_STATUSES.filter((status) => status !== "incomplete_link").map((status) => <option key={status} value={status}>{t(`accountStatus_${status}`)}</option>)}</Select>{!editingId && <Select label={t("accessMethod")} value={form.access_method} onChange={(access_method) => update("access_method", access_method)}><option value="password">{t("accessPassword")}</option><option value="temporary_password">{t("accessTemporary")}</option><option value="invitation">{t("accessInvitation")}</option><option value="pending">{t("accessPending")}</option></Select>}</div>{!editingId && form.access_method === "password" && <section className="rounded-2xl bg-slate-50 p-4"><div className="grid gap-4 sm:grid-cols-2">{["password", "password_confirmation"].map((field) => <label key={field} className="text-sm font-semibold">{t(field === "password" ? "password" : "confirmPassword")}<span className="relative mt-1.5 block"><Input type={showPassword ? "text" : "password"} value={form[field]} onChange={(e) => update(field, e.target.value)} required /><button type="button" className="absolute right-2 top-2 rounded-lg p-1 text-slate-600" onClick={() => setShowPassword((value) => !value)} aria-label={t(showPassword ? "hidePassword" : "showPassword")}>{showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}</button></span></label>)}</div><div className="mt-3 grid gap-1 text-xs sm:grid-cols-2">{Object.entries(checks).map(([key, valid]) => <span key={key} className={valid ? "text-emerald-700" : "text-slate-500"}>• {t(`password_${key}`)}</span>)}</div></section>}<div className="rounded-2xl border p-4 text-sm"><strong>{t("summary")}</strong><p>{userDisplayName(form)} · {t(`role_${form.role}`)} · {t(`accountStatus_${form.account_status}`)}</p><p>{t("selectedTeams")}: {form.assigned_team_ids.length}</p></div></section>}
-            <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between"><Button type="button" variant="outline" onClick={wizardStep === manualSteps[0] ? close : () => setWizardStep(manualSteps[manualSteps.indexOf(wizardStep) - 1])}>{wizardStep === manualSteps[0] ? t("cancel") : t("previous")}</Button>{wizardStep !== manualSteps[manualSteps.length - 1] ? <Button type="button" onClick={() => setWizardStep(manualSteps[manualSteps.indexOf(wizardStep) + 1])}>{t("next")}</Button> : <Button type="submit" disabled={(!wizardLinkComplete(form) && form.account_status === "active") || (!editingId && form.access_method === "password" && (!allPasswordChecksPass(form.password) || form.password !== form.password_confirmation))}><KeyRound className="h-4 w-4" />{t("save")}</Button>}</div>
+            <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between"><Button type="button" variant="outline" disabled={saveProcessing} onClick={wizardStep === manualSteps[0] ? close : () => setWizardStep(manualSteps[manualSteps.indexOf(wizardStep) - 1])}>{wizardStep === manualSteps[0] ? t("cancel") : t("previous")}</Button>{wizardStep !== manualSteps[manualSteps.length - 1] ? <Button type="button" disabled={saveProcessing} onClick={() => setWizardStep(manualSteps[manualSteps.indexOf(wizardStep) + 1])}>{t("next")}</Button> : <Button type="submit" disabled={saveProcessing || (!wizardLinkComplete(form) && form.account_status === "active") || (!editingId && form.access_method === "password" && (!allPasswordChecksPass(form.password) || form.password !== form.password_confirmation))}><KeyRound className="h-4 w-4" />{saveProcessing ? "Guardando…" : t("save")}</Button>}</div>
           </form>
           }
         </DialogContent>

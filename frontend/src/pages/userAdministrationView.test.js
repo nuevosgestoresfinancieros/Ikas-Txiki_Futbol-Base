@@ -1,7 +1,8 @@
 import { translations } from "../i18n";
 import {
   accessState, allPasswordChecksPass, filterUsers, normalizedStatus, normalizedTeamOptions, passwordChecks,
-  safeUsernameSuggestion, userCounters, userDisplayName, userRoleLabelKey, wizardLinkComplete,
+  safeUsernameSuggestion, userCounters, userDisplayName, userFeedbackStep, userRoleLabelKey, userSaveFeedback,
+  userSaveSuccessFeedback, wizardLinkComplete,
 } from "./userAdministrationView";
 
 const users = [
@@ -65,6 +66,42 @@ test("normalizes the advanced team selector and excludes NO APLICA and duplicate
 test("suggests a safe normalized username but never admin", () => {
   expect(safeUsernameSuggestion("Áne", "Prueba López")).toBe("ane_pruebalopez");
   expect(safeUsernameSuggestion("admin", "")).toBe("");
+});
+
+test("explains an email conflict without exposing the other account", () => {
+  expect(userSaveFeedback({ response: { status: 409, data: { detail: "El correo ya está asociado a otra cuenta" } } })).toEqual({
+    kind: "error", field: "email", message: "No se ha podido guardar: el correo electrónico ya está asociado a otra cuenta.",
+  });
+});
+
+test("explains a username conflict and focuses the username step", () => {
+  const feedback = userSaveFeedback({ response: { status: 409, data: { detail: "El nombre de usuario ya existe" } } });
+  expect(feedback).toEqual({ kind: "error", field: "username", message: "No se ha podido guardar: el nombre de usuario ya existe." });
+  expect(userFeedbackStep(feedback.field)).toBe(1);
+});
+
+test("keeps safe backend validation detail and associates it to its field", () => {
+  const feedback = userSaveFeedback({ response: { status: 422, data: { detail: [{ loc: ["body", "email"], msg: "no es una dirección de correo válida" }] } } });
+  expect(feedback).toEqual({ kind: "error", field: "email", message: "No se ha podido guardar: Correo electrónico: no es una dirección de correo válida." });
+  expect(userFeedbackStep(feedback.field)).toBe(1);
+});
+
+test("explains invalid team assignments without returning backend secrets", () => {
+  expect(userSaveFeedback({ response: { status: 422, data: { detail: "Uno o varios equipos no existen" } } })).toEqual({
+    kind: "error", field: "assigned_team_ids", message: "No se ha podido guardar: Equipos asignados: Uno o varios equipos no existen.",
+  });
+  expect(userSaveFeedback({ response: { status: 422, data: { detail: "token=confidencial" } } }).message).toBe("No se ha podido guardar el usuario. Comprueba la conexión e inténtalo de nuevo.");
+});
+
+test("reports successful creation, including a generated but unsent invitation", () => {
+  expect(userSaveSuccessFeedback()).toEqual({ kind: "success", message: "Usuario creado correctamente." });
+  expect(userSaveSuccessFeedback({ invitation_token: "never-rendered" })).toEqual({ kind: "success", message: "Usuario creado correctamente. La invitación se ha generado, pero no se ha enviado por correo." });
+});
+
+test("uses the safe generic message for a network error", () => {
+  expect(userSaveFeedback(new Error("Network Error"))).toEqual({
+    kind: "error", field: null, message: "No se ha podido guardar el usuario. Comprueba la conexión e inténtalo de nuevo.",
+  });
 });
 
 
