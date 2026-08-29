@@ -251,3 +251,52 @@ def test_concurrent_change_is_detected_before_consuming_proposal(monkeypatch):
         server.current_user_context.reset(context)
     assert conflict.value.status_code == 409
     assert proposal.used is False
+
+
+def test_operational_context_is_aggregated_scoped_and_minimized():
+    summary = {
+        "autorizaciones_pendientes": 3,
+        "convocatorias_pendientes": {"total": 2, "players": ["never-returned"]},
+        "comunicaciones_fallidas": 1,
+        "comunicaciones_pendientes": 1,
+        "alertas_asistencia": [{"player_name": "never-returned"}],
+        "pagos_pendientes": 4,
+        "siguiente_actividad": {"nombre": "never-returned"},
+    }
+    admin_items = server._assistant_context_items(summary, actor("admin"), "/pagos")
+    assert len(admin_items) == 3
+    assert admin_items[0]["kind"] == "payments"
+    assert all(set(item) == {"id", "kind", "count", "priority", "text_key", "route"} for item in admin_items)
+    forbidden = {"nombre", "email", "telefono", "iban", "dni", "token", "players", "player_name"}
+    assert not any(forbidden & set(item) for item in admin_items)
+
+
+def test_operational_context_excludes_not_permitted_notices_for_role():
+    summary = {
+        "autorizaciones_pendientes": 1, "convocatorias_pendientes": {"total": 1},
+        "comunicaciones_fallidas": 1, "comunicaciones_pendientes": 0,
+        "alertas_asistencia": [{}], "pagos_pendientes": 1, "siguiente_actividad": {"id": "never-returned"},
+    }
+    coach_kinds = {item["kind"] for item in server._assistant_context_items(summary, actor("coach"), "/entrenamientos")}
+    family_kinds = {item["kind"] for item in server._assistant_context_items(summary, actor("family"), "/pagos")}
+    assert "payments" not in coach_kinds
+    assert "authorizations" not in coach_kinds
+    assert "attendance" in coach_kinds
+    assert "attendance" not in family_kinds
+
+
+def test_operational_context_endpoint_reuses_dashboard_and_rejects_invalid_route(monkeypatch):
+    monkeypatch.setattr(server, "dashboard", AsyncMock(return_value={
+        "autorizaciones_pendientes": 0, "convocatorias_pendientes": {"total": 0},
+        "comunicaciones_fallidas": 0, "comunicaciones_pendientes": 0,
+        "alertas_asistencia": [], "pagos_pendientes": 0, "siguiente_actividad": None,
+    }))
+    context = server.current_user_context.set(actor("family"))
+    try:
+        result = run(server.assistant_context("/pagos"))
+        assert result == {"items": [], "empty": True}
+        with pytest.raises(HTTPException) as invalid:
+            run(server.assistant_context("https://outside.invalid"))
+    finally:
+        server.current_user_context.reset(context)
+    assert invalid.value.status_code == 422

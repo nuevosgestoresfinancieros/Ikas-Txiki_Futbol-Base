@@ -94,7 +94,7 @@ from match_report_service import (
 from health_service import deployment_version
 from assistant_knowledge import KNOWLEDGE_VERSION, available_modules
 from assistant_service import (
-    ACTION_DEFINITIONS, ExternalAssistantProvider, ProposalStore, answer_help,
+    ACTION_DEFINITIONS, ExternalAssistantProvider, ProposalStore, SAFE_ROUTES, answer_help,
     public_proposal, session_fingerprint,
 )
 from user_admin_service import (
@@ -8091,6 +8091,62 @@ def _assistant_clean_data(intent: str, data: Mapping[str, Any]) -> dict:
     if unknown:
         raise HTTPException(status_code=422, detail="La propuesta contiene campos no permitidos")
     return {key: value for key, value in data.items() if key in allowed}
+
+
+ASSISTANT_CONTEXT_ROUTE_PRIORITY = {
+    "/autorizaciones": ("authorizations",),
+    "/convocatorias": ("callups",),
+    "/comunicacion": ("communications",),
+    "/entrenamientos": ("attendance", "activity"),
+    "/calendario": ("activity",),
+    "/pagos": ("payments",),
+}
+
+
+def _assistant_context_items(summary: Mapping[str, Any], actor: Mapping[str, Any], route: str) -> list[dict]:
+    """Proyección agregada del dashboard; no expone registros ni datos personales."""
+    candidates = []
+
+    def add(kind: str, count: int, resource: str, text_key: str, target_route: str, priority: str) -> None:
+        if count and has_permission(actor, resource, "read"):
+            candidates.append({
+                "id": kind, "kind": kind, "count": min(max(int(count), 0), 9999),
+                "priority": priority, "text_key": text_key, "route": target_route,
+            })
+
+    add("authorizations", summary.get("autorizaciones_pendientes", 0), "authorizations",
+        "authorizations_pending", "/autorizaciones", "high")
+    add("callups", (summary.get("convocatorias_pendientes") or {}).get("total", 0), "callups",
+        "callups_pending", "/convocatorias", "high")
+    add("communications", int(summary.get("comunicaciones_fallidas", 0) or 0) + int(summary.get("comunicaciones_pendientes", 0) or 0),
+        "communications", "communications_attention", "/comunicacion", "high")
+    add("attendance", len(summary.get("alertas_asistencia") or []), "attendance",
+        "attendance_alerts", "/entrenamientos", "normal")
+    add("payments", summary.get("pagos_pendientes", 0), "payments",
+        "payments_pending", "/pagos", "normal")
+    if summary.get("siguiente_actividad") and has_permission(actor, "calendar", "read"):
+        candidates.append({
+            "id": "activity", "kind": "activity", "count": 0, "priority": "normal",
+            "text_key": "next_activity", "route": "/calendario",
+        })
+
+    preferred = ASSISTANT_CONTEXT_ROUTE_PRIORITY.get(route, ())
+    priority_order = {kind: index for index, kind in enumerate(preferred)}
+    severity = {"high": 0, "normal": 1}
+    return sorted(candidates, key=lambda item: (priority_order.get(item["kind"], 99), severity[item["priority"]], item["kind"]))[:3]
+
+
+@api_router.get("/assistant/context")
+async def assistant_context(route: str = "/"):
+    """Avisos operativos agregados, de lectura y limitados al ámbito del actor."""
+    actor = current_user_context.get() or {}
+    enforce_permission(actor, "assistant", "read")
+    if route not in SAFE_ROUTES:
+        raise HTTPException(status_code=422, detail="Ruta de contexto no permitida")
+    _assistant_rate_limit(actor)
+    summary = await dashboard()
+    items = _assistant_context_items(summary, actor, route)
+    return {"items": items, "empty": not items}
 
 
 @api_router.get("/assistant/capabilities")

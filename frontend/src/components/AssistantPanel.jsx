@@ -3,15 +3,23 @@ import { Compass, ExternalLink, HelpCircle, Loader2, Send, ShieldCheck, X } from
 import { Link, useLocation } from "react-router-dom";
 import api from "@/api";
 import { useI18n } from "@/i18n";
+import { can, ROUTE_RESOURCES } from "@/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import {
-  actionLabelKey, canCreateProposal, normalizeGuidedValue,
-  currentAssistantModule, safeAssistantLinks, safeAssistantModules, suggestedQuestions,
+  actionLabelKey, assistantReviewLabel, canCreateProposal, normalizeGuidedValue, visibleAssistantReviewItems,
+  currentAssistantModule, dailyAssistantContext, permittedDailyAssistantLinks, safeAssistantLinks, safeAssistantModules, suggestedQuestions,
 } from "@/components/assistantView";
+
+const dailyRouteModuleIds = {
+  "/usuarios": "users", "/familias": "families", "/jugadores": "players",
+  "/comunicacion": "communications", "/autorizaciones": "authorizations", "/pagos": "payments",
+  "/entrenamientos": "trainings", "/informes": "reports", "/configuracion": "settings",
+  "/equipos": "teams", "/calendario": "calendar", "/estadisticas": "stats",
+};
 
 const AssistantPanel = ({ user }) => {
   const { lang, t } = useI18n();
@@ -26,6 +34,10 @@ const AssistantPanel = ({ user }) => {
   const [values, setValues] = useState({});
   const [targetId, setTargetId] = useState("");
   const [proposal, setProposal] = useState(null);
+  const [reviewContext, setReviewContext] = useState(null);
+  const [reviewError, setReviewError] = useState(false);
+  const [reviewLoading, setReviewLoading] = useState(false);
+  const [hiddenReviewIds, setHiddenReviewIds] = useState(() => new Set());
   const panelTitleRef = useRef(null);
   const triggerRef = useRef(null);
 
@@ -38,6 +50,15 @@ const AssistantPanel = ({ user }) => {
   const currentModule = useMemo(
     () => currentAssistantModule(location.pathname, modules),
     [location.pathname, modules],
+  );
+  const dailyContext = useMemo(() => dailyAssistantContext(location.pathname), [location.pathname]);
+  const dailyLinks = useMemo(
+    () => permittedDailyAssistantLinks(dailyContext, (route) => can(user, ROUTE_RESOURCES[route])),
+    [dailyContext, user],
+  );
+  const reviewItems = useMemo(
+    () => visibleAssistantReviewItems(reviewContext?.items, hiddenReviewIds),
+    [reviewContext, hiddenReviewIds],
   );
 
   useEffect(() => {
@@ -56,6 +77,18 @@ const AssistantPanel = ({ user }) => {
     setValues({});
     setTargetId("");
   }, [intent]);
+
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    setReviewLoading(true);
+    setReviewError(false);
+    api.get("/assistant/context", { params: { route: location.pathname } })
+      .then((response) => { if (active) setReviewContext(response.data); })
+      .catch(() => { if (active) setReviewError(true); })
+      .finally(() => { if (active) setReviewLoading(false); });
+    return () => { active = false; };
+  }, [open, location.pathname]);
 
   const ask = async (question = message) => {
     const clean = String(question || "").trim();
@@ -183,6 +216,59 @@ const AssistantPanel = ({ user }) => {
                 {currentModule ? t(`assistantModule_${currentModule.id}`) : t("assistantModule_unknown")}
                 {user?.role ? ` · ${t(`role_${user.role}`)}` : ""}
               </p>
+            </section>
+
+            {dailyContext && (
+              <section className="mb-6 rounded-xl border border-primary/15 bg-primary/5 p-4" aria-labelledby="assistant-orientation-title">
+                <h3 id="assistant-orientation-title" className="flex items-center gap-2 font-semibold">
+                  <Compass className="h-4 w-4 text-primary" aria-hidden="true" />{t("assistantOrientation")}
+                </h3>
+                <p className="mt-2 text-sm leading-6 text-slate-700">{t(dailyContext.welcomeKey)}</p>
+                {!!dailyLinks.length && (
+                  <>
+                    <h4 className="mt-4 text-sm font-semibold text-slate-800">{t("assistantQuickLinks")}</h4>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                      {dailyLinks.map((link) => (
+                        <Link key={link} to={link} onClick={() => handleOpenChange(false)} className="flex min-h-11 items-center justify-between rounded-lg border bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50">
+                          {t(`assistantModule_${dailyRouteModuleIds[link]}`)}
+                          <ExternalLink className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
+                        </Link>
+                      ))}
+                    </div>
+                  </>
+                )}
+                <h4 className="mt-4 text-sm font-semibold text-slate-800">{t("assistantQuickGuide")}</h4>
+                <ol className="mt-2 list-decimal space-y-1 pl-5 text-sm leading-6 text-slate-700">
+                  {dailyContext.guideKeys.map((key) => <li key={key}>{t(key)}</li>)}
+                </ol>
+                <Link to={location.pathname} onClick={() => handleOpenChange(false)} className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-primary underline">
+                  {t("assistantOpenCurrentModule")} <ExternalLink className="h-3 w-3" aria-hidden="true" />
+                </Link>
+              </section>
+            )}
+            <section className="mb-6 rounded-xl border bg-slate-50 p-4" aria-labelledby="assistant-review-title">
+              <h3 id="assistant-review-title" className="flex items-center gap-2 font-semibold">
+                <ShieldCheck className="h-4 w-4 text-primary" aria-hidden="true" />{t("assistantReviewTitle")}
+              </h3>
+              {reviewLoading && <p className="mt-2 text-sm text-slate-600" role="status">{t("assistantReviewLoading")}</p>}
+              {reviewError && <p className="mt-2 text-sm text-red-700" role="alert">{t("assistantReviewError")}</p>}
+              {!reviewLoading && !reviewError && reviewContext?.empty && (
+                <p className="mt-2 text-sm text-slate-600">{t("assistantReviewEmpty")}</p>
+              )}
+              {!!reviewItems.length && (
+                <ul className="mt-3 space-y-2">
+                  {reviewItems.map((item) => (
+                    <li key={item.id} className="flex items-center gap-2 rounded-lg border bg-white p-3">
+                      <Link to={item.route} onClick={() => handleOpenChange(false)} className="min-w-0 flex-1 text-sm font-medium text-primary underline">
+                        {assistantReviewLabel(item, t)}
+                      </Link>
+                      <Button type="button" variant="ghost" size="icon" className="shrink-0" aria-label={t("assistantHideReview")} onClick={() => setHiddenReviewIds((current) => new Set([...current, item.id]))}>
+                        <X className="h-4 w-4" aria-hidden="true" />
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </section>
 
             <section aria-labelledby="assistant-help-title">

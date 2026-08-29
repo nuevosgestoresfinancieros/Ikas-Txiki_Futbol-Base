@@ -1,6 +1,6 @@
 import {
-  SAFE_ASSISTANT_ROUTES, actionLabelKey, canCreateProposal,
-  currentAssistantModule, normalizeGuidedValue, safeAssistantLinks,
+  SAFE_ASSISTANT_ROUTES, actionLabelKey, assistantReviewLabel, canCreateProposal,
+  currentAssistantModule, dailyAssistantContext, normalizeGuidedValue, permittedDailyAssistantLinks, safeAssistantLinks, safeAssistantReviewItems, visibleAssistantReviewItems,
   safeAssistantModules, suggestedQuestions,
 } from "./assistantView";
 import { translations } from "../i18n";
@@ -60,12 +60,38 @@ test("preview stays disabled until every required field exists", () => {
   const update = { required: ["target_id"] };
   expect(canCreateProposal(create, {}, "")).toBe(false);
   expect(canCreateProposal(create, { nombre: "Ficticio" }, "")).toBe(true);
+
   expect(canCreateProposal(update, {}, "")).toBe(false);
   expect(canCreateProposal(update, {}, "player-fictional")).toBe(true);
 });
 
+test("daily context remains static and only exposes permitted internal links", () => {
+  const players = dailyAssistantContext("/jugadores");
+  expect(players.welcomeKey).toBe("assistantDailyWelcome_players");
+  expect(players.guideKeys).toHaveLength(3);
+  expect(permittedDailyAssistantLinks(players, (route) => route !== "/familias"))
+    .toEqual(["/jugadores", "/equipos"]);
+  expect(dailyAssistantContext("/partidos")).toBeNull();
+});
+
 test("action labels use stable translation keys", () => {
   expect(actionLabelKey("player.assign_team")).toBe("assistantAction_player_assign_team");
+});
+
+test("review items are capped, safe, hideable for the session, and have safe empty/error UI", () => {
+  const items = [
+    { id: "a", text_key: "authorizations_pending", route: "/autorizaciones", count: 3, priority: "high", nombre: "never" },
+    { id: "b", text_key: "callups_pending", route: "/convocatorias", count: 2 },
+    { id: "c", text_key: "communications_attention", route: "/comunicacion", count: 1 },
+    { id: "d", text_key: "payments_pending", route: "/pagos", count: 1 },
+    { id: "unsafe", text_key: "unknown", route: "https://outside.invalid", count: 1 },
+  ];
+  expect(safeAssistantReviewItems(items)).toHaveLength(3);
+  expect(visibleAssistantReviewItems(items, new Set(["b"])).map((item) => item.id)).toEqual(["a", "c"]);
+  expect(assistantReviewLabel({ text_key: "next_activity", count: 0 }, t)).toBe("assistantReview_next_activity");
+  const source = require("fs").readFileSync(require.resolve("./AssistantPanel.jsx"), "utf8");
+  expect(source).toContain("assistantReviewEmpty");
+  expect(source).toContain("assistantReviewError");
 });
 
 test("Cibermedida badge remains an external corporate link", () => {
