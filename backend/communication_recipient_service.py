@@ -106,7 +106,10 @@ def usable_account(user: dict[str, Any]) -> tuple[bool, str | None]:
 
 def recipient_summary(users: list[dict], email_count: int, *, team_count: int = 0,
                       player_count: int = 0, family_count: int = 0,
-                      extra_exclusions: Mapping[str, int] | None = None) -> dict:
+                      extra_exclusions: Mapping[str, int] | None = None,
+                      families_found: int | None = None, families_selected: int | None = None,
+                      duplicate_families_removed: int = 0,
+                      authorized_contacts: int | None = None) -> dict:
     unique: dict[str, dict] = {}
     exclusions: dict[str, int] = {}
     duplicate_count = 0
@@ -129,8 +132,12 @@ def recipient_summary(users: list[dict], email_count: int, *, team_count: int = 
         "teams": team_count,
         "players": player_count,
         "families": family_count,
+        "families_found": family_count if families_found is None else families_found,
+        "families_selected": family_count if families_selected is None else families_selected,
+        "duplicate_families_removed": duplicate_families_removed,
         "active_accounts": len(unique),
         "available_emails": email_count,
+        "authorized_contacts": email_count if authorized_contacts is None else authorized_contacts,
         "pending_accounts": sum(1 for user in users if user.get("account_status") == "pending_activation"),
         "incomplete_links": exclusions.get("incomplete_link", 0),
         "duplicate_accounts": duplicate_count,

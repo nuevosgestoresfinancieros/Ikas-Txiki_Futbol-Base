@@ -6,12 +6,13 @@ import api from "@/api";
 import { PermissionGate, usePermission } from "@/auth";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { PageHeader, EmptyState } from "@/components/shared";
 import { Field, Area, SelectField } from "@/components/form";
 import { canSendCommunication, communicationFailureNeedsAuthorizationHelp, communicationSendConfirmation, isCommunicationSending } from "./communicationsView";
 
-const empty = { destinatario_tipo: "equipo", canal: "email", prioridad: "normal" };
+const empty = { destinatario_tipo: "equipo", canal: "email", prioridad: "normal", audience_mode: "all", selected_family_ids: [] };
 
 const Communications = () => {
   const canCreate = usePermission("communications", "create");
@@ -21,6 +22,8 @@ const Communications = () => {
   const [teams, setTeams] = useState([]);
   const [categories, setCategories] = useState([]);
   const [players, setPlayers] = useState([]);
+  const [scopeFamilies, setScopeFamilies] = useState([]);
+  const [familySearch, setFamilySearch] = useState("");
   const [providers, setProviders] = useState({});
   const [recipientPreview, setRecipientPreview] = useState(null);
   const [previewError, setPreviewError] = useState("");
@@ -51,6 +54,14 @@ const Communications = () => {
       setPreviewError(error.response?.data?.detail || t("recipientPreviewError"));
     }
   };
+  const loadScopeFamilies = async (type, id) => {
+    setScopeFamilies([]); setFamilySearch("");
+    if (!id) return;
+    try {
+      const response = await api.post("/communications/recipients/families", { destinatario_tipo: type, destinatario_id: id, canal: form.canal, audience_mode: "all" });
+      setScopeFamilies(response.data.families || []);
+    } catch (error) { setPreviewError(error.response?.data?.detail || t("recipientPreviewError")); }
+  };
   const save = async () => {
     let nombre = "";
     if (form.destinatario_tipo === "equipo") nombre = teams.find(x=>x.id===form.destinatario_id)?.nombre || "";
@@ -67,7 +78,8 @@ const Communications = () => {
     try {
       const preview = await api.get(`/communications/${item.id}/send-preview`);
       if (!preview.data.can_send) throw new Error(t("communicationAlreadySent"));
-      const recipientCount = preview.data.summary?.available_emails || 0;
+      const recipientCount = preview.data.summary?.authorized_contacts || 0;
+      if (!recipientCount) { setSendError("No hay contactos autorizados. Revisa las Autorizaciones antes de enviar."); return; }
       if (!window.confirm(communicationSendConfirmation(t, recipientCount))) return;
       await api.post(`/communications/${item.id}/send`);
       toast.success(t("communicationSent"));
@@ -143,11 +155,12 @@ const Communications = () => {
           <DialogHeader><DialogTitle className="font-heading">{t("communications")}</DialogTitle><DialogDescription>{t("communicationDialogDescription")}</DialogDescription></DialogHeader>
           <div className="space-y-4 pt-2">
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <SelectField label={t("recipientType")} value={form.destinatario_tipo} onChange={(v)=>{set("destinatario_tipo")(v);set("destinatario_id")("");}}
+              <SelectField label={t("recipientType")} value={form.destinatario_tipo} onChange={(v)=>{set("destinatario_tipo")(v);set("destinatario_id")("");set("audience_mode")("all");set("selected_family_ids")([]);setScopeFamilies([]);}}
                 options={[{value:"equipo",label:t("byTeam")},{value:"categoria",label:t("byCategory")},{value:"individual",label:t("individual")}]} testid="comm-tipo" />
-              <SelectField label={t("recipientType")} value={form.destinatario_id} onChange={set("destinatario_id")} options={destOptions} testid="comm-dest" />
+              <SelectField label={t("recipientType")} value={form.destinatario_id} onChange={(v)=>{set("destinatario_id")(v);set("audience_mode")("all");set("selected_family_ids")([]);loadScopeFamilies(form.destinatario_tipo, v);}} options={destOptions} testid="comm-dest" />
               <SelectField label={t("channel")} value={form.canal} onChange={set("canal")} options={channelOptions} testid="comm-canal" />
             </div>
+            {form.destinatario_id && <div className="rounded-xl border border-slate-200 p-4" data-testid="family-audience-selector"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="font-semibold text-slate-900">{t("families")}</p><p className="text-sm text-slate-500">{(form.audience_mode === "all" ? scopeFamilies.length : (form.selected_family_ids || []).length) + " familias seleccionadas"}</p></div><div className="flex gap-2"><Button type="button" size="sm" variant="outline" onClick={()=>setForm(f=>({...f,audience_mode:"selected",selected_family_ids:scopeFamilies.map(x=>x.id)}))}>Seleccionar todas</Button><Button type="button" size="sm" variant="outline" onClick={()=>setForm(f=>({...f,audience_mode:"selected",selected_family_ids:[]}))}>Quitar selección</Button></div></div><div className="mt-3 flex gap-2"><Button type="button" size="sm" variant={form.audience_mode === "all" ? "default" : "outline"} onClick={()=>set("audience_mode")("all")}>Todas las familias</Button><Button type="button" size="sm" variant={form.audience_mode === "selected" ? "default" : "outline"} onClick={()=>set("audience_mode")("selected")}>Seleccionar familias</Button></div>{form.audience_mode === "selected" && <><input className="mt-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" value={familySearch} onChange={e=>setFamilySearch(e.target.value)} placeholder="Buscar familias" aria-label="Buscar familias" /><div className="mt-3 max-h-48 space-y-2 overflow-y-auto">{scopeFamilies.filter(f=>String(f.name + " " + (f.players || []).join(" ")).toLowerCase().includes(familySearch.toLowerCase())).map(f=>{const checked=(form.selected_family_ids || []).includes(f.id); return <label key={f.id} className="flex cursor-pointer items-start gap-3 rounded-lg p-2 hover:bg-slate-50"><Checkbox checked={checked} onCheckedChange={(value)=>setForm(current=>({...current,audience_mode:"selected",selected_family_ids:value?[...(current.selected_family_ids || []),f.id].filter((id,index,list)=>list.indexOf(id)===index):(current.selected_family_ids || []).filter(id=>id!==f.id)}))}/><span className="text-sm"><span className="font-medium">{f.name}</span>{f.players?.length ? <span className="block text-xs text-slate-500">{f.players.join(", ")}</span> : null}</span></label>})}</div></>}</div>}
             <SelectField label={t("priority")} value={form.prioridad || "normal"} onChange={set("prioridad")} options={["low","normal","high","urgent"].map((value)=>({value,label:t(`priority_${value}`)}))} testid="comm-priority" />
             <Field label={t("subject")} value={form.asunto} onChange={set("asunto")} testid="comm-asunto" />
             <Area label={t("message")} value={form.mensaje} onChange={set("mensaje")} testid="comm-mensaje" rows={5} />
@@ -155,7 +168,7 @@ const Communications = () => {
             <div className="rounded-xl border border-slate-200 p-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="font-semibold text-slate-900">{t("recipientPreview")}</p><p className="text-sm text-slate-500">{t("recipientPreviewHelp")}</p></div><Button type="button" variant="outline" onClick={previewRecipients} disabled={!form.destinatario_id}>{t("preview")}</Button></div>
               {previewError && <p className="mt-3 text-sm font-semibold text-red-700" role="alert">{previewError}</p>}
-              {recipientPreview && <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3" aria-live="polite">{[["teams", "teams"], ["players", "players"], ["families", "families"], ["activeAccounts", "active_accounts"], ["availableEmails", "available_emails"]].map(([label, key]) => <div key={key} className="rounded-xl bg-slate-50 p-3"><p className="text-xl font-bold">{recipientPreview.summary[key]}</p><p className="text-xs text-slate-500">{t(label)}</p></div>)}<div className="col-span-2 rounded-xl bg-amber-50 p-3 sm:col-span-1"><p className="text-xl font-bold">{recipientPreview.summary.excluded.reduce((sum, item) => sum + item.count, 0)}</p><p className="text-xs text-amber-800">{t("excludedRecipients")}</p></div></div>}
+              {recipientPreview && <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3" aria-live="polite">{[["Equipos incluidos", "teams"], ["Jugadores relacionados", "players"], ["Familias encontradas", "families_found"], ["Familias seleccionadas", "families_selected"], ["Familias duplicadas eliminadas", "duplicate_families_removed"], ["Cuentas activas", "active_accounts"], ["Contactos autorizados", "authorized_contacts"], ["Correos disponibles", "available_emails"]].map(([label, key]) => <div key={key} className="rounded-xl bg-slate-50 p-3"><p className="text-xl font-bold">{recipientPreview.summary[key]}</p><p className="text-xs text-slate-500">{t(label)}</p></div>)}<div className="col-span-2 rounded-xl bg-amber-50 p-3 sm:col-span-1"><p className="text-xl font-bold">{recipientPreview.summary.excluded.reduce((sum, item) => sum + item.count, 0)}</p><p className="text-xs text-amber-800">{t("excludedRecipients")}</p></div></div>}
             </div>
           </div>
           <DialogFooter>

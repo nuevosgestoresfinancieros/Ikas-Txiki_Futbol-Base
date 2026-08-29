@@ -47,3 +47,13 @@ def test_public_security_and_audit_never_contain_secrets():
     assert public["must_change_password"] and "digest" not in str(public)
     audit = safe_security_audit("password_reset")
     assert audit == {"action": "password_reset", "sensitive_values_recorded": False}
+
+
+def test_public_security_exposes_authoritative_access_state_without_credentials():
+    activated = security_public({"account_status": "active", "active": True, "password_hash": "stored-hash"})
+    pending = security_public({"account_status": "pending_activation", "active": False, "password_hash": "stored-hash"})
+    blocked = security_public({"account_status": "suspended", "active": False})
+    assert activated["access_state"] == "active"
+    assert pending["access_state"] == "pending_activation"
+    assert blocked["access_state"] == "blocked"
+    assert "password_hash" not in activated

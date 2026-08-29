@@ -1,6 +1,6 @@
 import { translations } from "../i18n";
 import {
-  allPasswordChecksPass, filterUsers, normalizedStatus, normalizedTeamOptions, passwordChecks,
+  accessState, allPasswordChecksPass, filterUsers, normalizedStatus, normalizedTeamOptions, passwordChecks,
   safeUsernameSuggestion, userCounters, userDisplayName, userRoleLabelKey, wizardLinkComplete,
 } from "./userAdministrationView";
 
@@ -65,4 +65,16 @@ test("normalizes the advanced team selector and excludes NO APLICA and duplicate
 test("suggests a safe normalized username but never admin", () => {
   expect(safeUsernameSuggestion("Áne", "Prueba López")).toBe("ane_pruebalopez");
   expect(safeUsernameSuggestion("admin", "")).toBe("");
+});
+
+
+test("uses the backend access state without inferring it from account fields", () => {
+  expect(accessState({ access_state: "pending_activation", account_status: "active" })).toBe("pending_activation");
+});
+
+test("contains the labels needed to present account details without exposing a password", () => {
+  ["resetPassword", "passwordResetRequested", "passwordHidden", "emailAddress", "roleAndAccess", "accountStatusLabel"].forEach((key) => {
+    expect(translations.es[key]).toBeTruthy();
+    expect(translations.eu[key]).toBeTruthy();
+  });
 });

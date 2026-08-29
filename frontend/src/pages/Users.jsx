@@ -8,7 +8,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useI18n } from "@/i18n";
 import BulkAccountProvisioning from "./BulkAccountProvisioning";
 import {
-  USER_STATUSES, allPasswordChecksPass, normalizedStatus, normalizedTeamOptions, passwordChecks,
+  USER_STATUSES, accessState, allPasswordChecksPass, normalizedStatus, normalizedTeamOptions, passwordChecks,
   safeUsernameSuggestion, userCounters, userDisplayName, userRoleLabelKey, wizardLinkComplete,
 } from "./userAdministrationView";
 
@@ -29,7 +29,7 @@ const Select = ({ label, value, onChange, children, testid }) => (
 );
 
 export default function Users() {
-  const { t } = useI18n();
+  const { lang, t } = useI18n();
   const { toast } = useToast();
   const [users, setUsers] = useState([]);
   const [teams, setTeams] = useState([]);
@@ -141,6 +141,18 @@ export default function Users() {
       setPermanentDeletionCapability(capabilityResponse.data);
     } catch { toast({ title: t("loadError"), variant: "destructive" }); }
   };
+  const requestPasswordReset = async (user) => {
+    if (user.read_only || !user.username) return;
+    try {
+      await api.post("/auth/recovery/request", { identifier: user.username });
+      toast({ title: t("passwordResetRequested") });
+    } catch {
+      toast({ title: t("saveError"), variant: "destructive" });
+    }
+  };
+  const formatLastAccess = (value) => new Intl.DateTimeFormat(lang === "eu" ? "eu-ES" : "es-ES", {
+    dateStyle: "long", timeStyle: "short",
+  }).format(new Date(value));
   const securityAction = async (path, method = "post", confirmation = "confirmSensitiveAction") => {
     // Reenviar una invitación es idempotente para el administrador: mantiene
     // auditoría y rota el enlace, pero no necesita un diálogo bloqueante.
@@ -192,10 +204,23 @@ export default function Users() {
           : error ? <div className="flex flex-col items-center gap-3 py-12 text-center"><p className="text-slate-600">{t("loadError")}</p><Button variant="outline" onClick={load}><RefreshCw className="h-4 w-4" />{t("retry")}</Button></div>
           : visibleUsers.length === 0 ? <div className="py-12 text-center text-slate-500">{t("noUsersFiltered")}</div>
           : <><div className="grid gap-3" data-testid="users-list">{paginatedUsers.map((user) => (
-            <article key={user.id} className="rounded-2xl border border-slate-200 bg-white p-4 transition-shadow hover:shadow-md">
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="font-bold text-slate-900">{userDisplayName(user)}</h2><span className="rounded-full bg-sky-50 px-2.5 py-1 text-xs font-bold text-sky-800">{t(userRoleLabelKey(user))}</span><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">{t(`accountStatus_${normalizedStatus(user)}`)}</span></div><p className="mt-1 break-all text-sm text-slate-500">{user.system_account ? `${t("systemAdministrator")} · ${t("configuredOnServer")}` : [user.username, user.email].filter(Boolean).join(" · ")}</p><p className="mt-1 text-xs text-slate-500">{t("lastAccess")}: {user.last_access_at ? new Date(user.last_access_at).toLocaleString() : t("never")}</p></div>
-                <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => showProfile(user)}><UserCog className="h-4 w-4" />{t("viewProfile")}</Button><Button variant="outline" onClick={() => showEffectivePermissions(user)}><ShieldCheck className="h-4 w-4" />{t("effectivePermissions")}</Button><Button variant="outline" onClick={() => showSecurity(user)}><LockKeyhole className="h-4 w-4" />{t("security")}</Button>{!user.read_only && <Button variant="outline" onClick={() => openEdit(user)}><UserCog className="h-4 w-4" />{t("edit")}</Button>}</div>
+            <article key={user.id} className="rounded-2xl border border-slate-200 bg-white p-5 transition-shadow hover:shadow-md">
+              <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0 flex-1">
+                  <h2 className="text-lg font-bold text-slate-900">{userDisplayName(user)}</h2>
+                  <div className="mt-2 flex flex-wrap gap-2" aria-label={t("roleAndAccess")}>
+                    <span className="rounded-full bg-sky-50 px-2.5 py-1 text-xs font-bold text-sky-800">{t(userRoleLabelKey(user))}</span>
+                    <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${accessState(user) === "active" ? "bg-emerald-100 text-emerald-800" : accessState(user) === "pending_activation" ? "bg-amber-100 text-amber-900" : "bg-red-100 text-red-800"}`}>{t(`accessState_${accessState(user)}`)}</span>
+                    {normalizedStatus(user) !== accessState(user) && <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">{t("accountStatusLabel")}: {t(`accountStatus_${normalizedStatus(user)}`)}</span>}
+                  </div>
+                  <dl className="mt-5 grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
+                    <div className="min-w-0"><dt className="font-semibold text-slate-500">{t("username")}:</dt><dd className="mt-1 break-all text-slate-900">{user.username || t("notAvailable")}</dd></div>
+                    <div className="min-w-0"><dt className="font-semibold text-slate-500">{t("emailAddress")}:</dt><dd className="mt-1 break-all text-slate-900">{user.email || t("notAvailable")}</dd></div>
+                    <div className="min-w-0"><dt className="font-semibold text-slate-500">{t("password")}:</dt><dd className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-slate-900"><span aria-label={t("passwordHidden")}>••••••••••••</span><Button variant="link" size="sm" className="h-auto px-0 py-0" disabled={user.read_only || !user.username} title={user.read_only ? t("systemSecurityReadOnly") : undefined} onClick={() => requestPasswordReset(user)}>{t("resetPassword")}</Button></dd></div>
+                    {user.last_access_at && <div className="min-w-0"><dt className="font-semibold text-slate-500">{t("lastAccess")}:</dt><dd className="mt-1 text-slate-900"><time dateTime={user.last_access_at}>{formatLastAccess(user.last_access_at)}</time></dd></div>}
+                  </dl>
+                </div>
+                <div className="flex flex-wrap gap-2 lg:max-w-md lg:justify-end"><Button variant="outline" onClick={() => showProfile(user)}><UserCog className="h-4 w-4" />{t("viewProfile")}</Button><Button variant="outline" onClick={() => showEffectivePermissions(user)}><ShieldCheck className="h-4 w-4" />{t("effectivePermissions")}</Button><Button variant="outline" onClick={() => showSecurity(user)}><LockKeyhole className="h-4 w-4" />{t("security")}</Button>{!user.read_only && <Button variant="outline" onClick={() => openEdit(user)}><UserCog className="h-4 w-4" />{t("edit")}</Button>}</div>
               </div>
             </article>
           ))}</div>{pageCount > 1 && <nav className="mt-4 flex items-center justify-between" aria-label={t("pagination")}><Button variant="outline" disabled={page === 1} onClick={() => setPage((value) => value - 1)}>{t("previous")}</Button><span className="text-sm text-slate-500">{page} / {pageCount}</span><Button variant="outline" disabled={page === pageCount} onClick={() => setPage((value) => value + 1)}>{t("next")}</Button></nav>}</>}
@@ -238,6 +263,7 @@ export default function Users() {
 
       <Dialog open={Boolean(security)} onOpenChange={(open) => { if (!open) { setSecurity(null); setRevealedSecret(null); setPermanentDeletionCapability(null); } }}>
         <DialogContent className="max-h-[92vh] max-w-2xl overflow-y-auto"><DialogHeader><DialogTitle>{t("accessSecurity")}</DialogTitle><DialogDescription>{t("accessSecurityDescription")}</DialogDescription></DialogHeader>{security && <div className="space-y-5">
+          <section className="rounded-xl border border-sky-100 bg-sky-50 p-4" aria-label={t("accessStatus")}><h3 className="font-bold text-sky-950">{t("accessStatus")}</h3><dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2"><div><dt className="font-semibold text-slate-500">{t("username")}</dt><dd className="mt-1 font-bold text-slate-900">{security.user.system_account ? t("configuredOnServer") : security.user.username}</dd></div><div><dt className="font-semibold text-slate-500">{t("currentStatus")}</dt><dd className="mt-1 font-bold text-slate-900">{t(`accessState_${accessState(security)}`)}</dd></div>{security.last_access_at ? <div><dt className="font-semibold text-slate-500">{t("lastAccess")}</dt><dd className="mt-1 text-slate-900">{new Date(security.last_access_at).toLocaleString()}</dd></div> : security.last_activation_at ? <div><dt className="font-semibold text-slate-500">{t("lastActivation")}</dt><dd className="mt-1 text-slate-900">{new Date(security.last_activation_at).toLocaleString()}</dd></div> : null}</dl></section>
           <div className="grid gap-3 sm:grid-cols-2"><div className="rounded-xl bg-slate-50 p-4"><p className="text-xs font-semibold text-slate-500">{t("securityStatus")}</p><p className="mt-1 font-bold">{security.locked ? t("temporarilyLocked") : t("accessAvailable")}</p></div><div className="rounded-xl bg-slate-50 p-4"><p className="text-xs font-semibold text-slate-500">{t("invitation")}</p><p className="mt-1 font-bold">{t(`invitationStatus_${security.invitation_status || "none"}`)}</p></div></div>
           {revealedSecret && <div className="rounded-2xl border-2 border-amber-300 bg-amber-50 p-4" role="alert"><p className="font-bold text-amber-950">{t("shownOnlyOnce")}</p><code className="mt-2 block break-all rounded-lg bg-white p-3 text-sm">{revealedSecret.value}</code><Button className="mt-3" variant="outline" onClick={() => setRevealedSecret(null)}>{t("understoodHideSecret")}</Button></div>}
           {security.read_only ? <p className="rounded-xl bg-sky-50 p-4 text-sm text-sky-900">{t("systemSecurityReadOnly")}</p> : <div className="grid gap-3 sm:grid-cols-2">

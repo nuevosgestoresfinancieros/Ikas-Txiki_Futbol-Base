@@ -3,6 +3,11 @@ export const USER_STATUSES = ["active", "pending_activation", "suspended", "deac
 export const normalizedStatus = (user) =>
   user.account_status || (user.active === false ? "deactivated" : "active");
 
+// `access_state` is calculated and returned by the backend. Do not infer it
+// from invitation, password, or lock fields in the administrative interface.
+export const accessState = (user) => user.access_state || "blocked";
+
+
 export const userDisplayName = (user) => {
   const name = [user.first_name, user.last_name].filter(Boolean).join(" ").trim();
   return name || user.username || "—";

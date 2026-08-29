@@ -50,9 +50,18 @@ class Collection:
         identifiers = (((query or {}).get("id") or {}).get("$in"))
         if identifiers is not None:
             rows = [row for row in rows if row.get("id") in identifiers]
-        team_ids = (((query or {}).get("equipo_id") or {}).get("$in"))
+        team_filter = (query or {}).get("equipo_id")
+        team_ids = (team_filter or {}).get("$in") if isinstance(team_filter, dict) else None
         if team_ids is not None:
             rows = [row for row in rows if row.get("equipo_id") in team_ids]
+        elif team_filter is not None:
+            rows = [row for row in rows if row.get("equipo_id") == team_filter]
+        family_filter = (query or {}).get("familia_id")
+        family_ids = (family_filter or {}).get("$in") if isinstance(family_filter, dict) else None
+        if family_ids is not None:
+            rows = [row for row in rows if row.get("familia_id") in family_ids]
+        elif family_filter is not None:
+            rows = [row for row in rows if row.get("familia_id") == family_filter]
         return Cursor(rows)
 
     async def find_one(self, query=None, projection=None):
@@ -464,3 +473,87 @@ def test_delivery_audit_contains_no_content_or_recipient(monkeypatch):
     event = database.internal_events.insert_one.await_args.args[0]
     assert event["communication_id"] == "communication-fixture"
     assert not ({"message", "email", "recipient", "destinations", "content"} & set(event))
+
+
+def family_audience_db():
+    return SimpleNamespace(
+        teams=Collection([
+            {"id": "team-a", "nombre": "A", "categoria": "Cat"},
+            {"id": "team-b", "nombre": "B", "categoria": "Cat"},
+        ]),
+        players=Collection([
+            {"id": "a1", "equipo_id": "team-a", "familia_id": "f1", "email_formulario": "one@example.test", "communication_consents": {"email": "yes"}},
+            {"id": "a2", "equipo_id": "team-a", "familia_id": "f1", "email_formulario": "one@example.test", "communication_consents": {"email": "yes"}},
+            {"id": "a3", "equipo_id": "team-a", "familia_id": "f2", "email_formulario": "two@example.test", "communication_consents": {"email": "yes"}},
+            {"id": "b1", "equipo_id": "team-b", "familia_id": "f1", "email_formulario": "one@example.test", "communication_consents": {"email": "yes"}},
+            {"id": "b2", "equipo_id": "team-b", "familia_id": "f3", "email_formulario": "three@example.test", "communication_consents": {"email": "yes"}},
+        ]),
+        families=Collection([
+            {"id": "f1", "contacto_principal": "Familia Uno", "communication_consents": {"email": "yes"}},
+            {"id": "f2", "contacto_principal": "Familia Dos", "communication_consents": {"email": "yes"}},
+            {"id": "f3", "contacto_principal": "Familia Tres", "communication_consents": {"email": "yes"}},
+        ]), users=Collection([]), internal_events=Collection([]),
+    )
+
+
+def test_selected_family_ids_support_one_many_all_and_legacy_all():
+    data = {"audience_mode": "selected", "selected_family_ids": ["f2"]}
+    assert server.selected_communication_families(data, ["f1", "f2"]) == ["f2"]
+    data["selected_family_ids"] = ["f2", "f1"]
+    assert server.selected_communication_families(data, ["f1", "f2"]) == ["f1", "f2"]
+    assert server.selected_communication_families({"audience_mode": "all"}, ["f1", "f2"]) == ["f1", "f2"]
+    assert server.selected_communication_families({}, ["f1", "f2"]) == ["f1", "f2"]
+
+
+def test_selected_family_ids_outside_authorized_scope_are_rejected():
+    with pytest.raises(Exception) as error:
+        server.selected_communication_families({"audience_mode": "selected", "selected_family_ids": ["other"]}, ["f1"])
+    assert error.value.status_code == 403
+
+
+@pytest.mark.parametrize("consent,expected", [("yes", ["contact@example.test"]), (None, []), ("no", [])])
+def test_family_contact_consent_granted_missing_and_revoked(consent, expected):
+    document = {"value": "contact@example.test", "communication_consents": {}}
+    if consent is not None:
+        document["communication_consents"]["email"] = consent
+    contacts, _ = consented_contacts([document], "email")
+    assert contacts == expected
+
+
+def test_family_with_several_children_is_deduplicated_before_delivery():
+    contacts, _ = consented_contacts([
+        {"value": "one@example.test", "communication_consents": {"email": "yes"}},
+        {"value": "one@example.test", "communication_consents": {"email": "yes"}},
+    ], "email")
+    assert contacts == ["one@example.test"]
+
+
+def test_zero_contacts_never_calls_provider(monkeypatch):
+    dispatch = MagicMock()
+    monkeypatch.setattr(server, "dispatch_email", dispatch)
+    logs = asyncio.run(server.communication_delivery_logs({"canal": "email"}, []))
+    assert logs[0]["error"] == "recipient_missing"
+    dispatch.assert_not_called()
+
+
+def test_family_selector_rows_are_sanitized(monkeypatch):
+    database = family_audience_db()
+    monkeypatch.setattr(server, "db", database)
+    rows = run_with_user({"role": "admin"}, server.communication_family_rows({
+        "destinatario_tipo": "equipo", "destinatario_id": "team-a",
+    }))
+    assert {item["id"] for item in rows["families"]} == {"f1", "f2"}
+    assert "example.test" not in str(rows)
+    assert "email" not in str(rows).casefold()
+
+
+@pytest.mark.parametrize("role", ["admin", "coordinator", "coach"])
+def test_staff_roles_keep_communication_create_permission(role):
+    server.enforce_permission({"role": role, "active": True}, "communications", "create")
+
+
+@pytest.mark.parametrize("role", ["family", "player"])
+def test_family_and_player_have_no_communication_create_or_send_permission(role):
+    with pytest.raises(Exception) as error:
+        server.enforce_permission({"role": role, "active": True}, "communications", "create")
+    assert error.value.status_code == 403

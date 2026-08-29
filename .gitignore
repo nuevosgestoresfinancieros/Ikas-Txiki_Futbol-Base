@@ -136,3 +136,5 @@ frontend/build.failed-*/
 frontend/build.previous-*/
 frontend/build.validation-*/
 frontend/build.backup-*
+
+.release-backups/

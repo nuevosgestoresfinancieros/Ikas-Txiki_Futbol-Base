@@ -35,7 +35,7 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from datetime import datetime, timezone, date, timedelta
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
-from openpyxl.worksheet.table import Table, TableStyleInfo
+from openpyxl.worksheet.table import Table as ExcelTable, TableStyleInfo
 from openpyxl.utils import get_column_letter
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
@@ -1076,7 +1076,7 @@ async def get_users(
     search: str = "", role: str = "", status: str = "", team_id: str = "",
     last_access: str = "", sort_by: str = "username", sort_dir: str = "asc",
 ):
-    users = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(5000)
+    users = await db.users.find({}, {"_id": 0}).to_list(5000)
     public = [system_admin_public(), *[secured_public_user(user) for user in users]]
     if page is None:
         return sorted(public, key=lambda item: normalized_key(item.get("username") or item.get("first_name")))
@@ -1125,7 +1125,7 @@ async def get_effective_permissions(user_id: str):
     if user_id == "environment-admin":
         user = {"id": user_id, "role": "admin", "active": True, "system_account": True}
     else:
-        user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+        user = await db.users.find_one({"id": user_id}, {"_id": 0})
     if not user:
         raise HTTPException(status_code=404, detail="No encontrado")
     role = user.get("role", "player")
@@ -1144,7 +1144,7 @@ async def get_user_administration_profile(user_id: str):
                 "permissions": {resource: sorted(actions) for resource, actions in ROLE_PERMISSIONS["admin"].items()},
                 "scope": effective_scope(system), "activity": [], "sessions": {"individual_tracking": False},
                 "communications": {"count": 0}, "read_only": True}
-    user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0, "invitation": 0,
+    user = await db.users.find_one({"id": user_id}, {"_id": 0, "invitation": 0,
                                                          "recovery": 0, "previous_invitation": 0})
     if not user:
         raise HTTPException(status_code=404, detail="No encontrado")
@@ -1167,7 +1167,7 @@ async def get_user_administration_profile(user_id: str):
 async def get_user(user_id: str):
     if user_id == "environment-admin":
         return system_admin_public()
-    user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    user = await db.users.find_one({"id": user_id}, {"_id": 0})
     if not user:
         raise HTTPException(status_code=404, detail="No encontrado")
     return secured_public_user(user)
@@ -1278,7 +1278,7 @@ async def mutable_security_user(user_id: str) -> dict:
 @api_router.get("/users/{user_id}/security")
 async def get_user_security(user_id: str):
     if user_id == "environment-admin":
-        return {**security_public({}), "system_account": True, "read_only": True}
+        return {**security_public({"system_account": True, "account_status": "active", "active": True}), "system_account": True, "read_only": True}
     return security_public(await mutable_security_user(user_id))
 
 
@@ -6144,6 +6144,8 @@ class Communication(BaseModel):
     enviado: bool = False
     fecha_envio: Optional[str] = None
     prioridad: str = "normal"
+    audience_mode: str = "all"  # legacy records without it are all families in scope
+    selected_family_ids: list[str] = Field(default_factory=list)
 
     @field_validator("canal")
     @classmethod
@@ -6157,6 +6159,13 @@ class Communication(BaseModel):
     def validate_recipient_type(cls, value: str):
         if value not in {"equipo", "categoria", "individual"}:
             raise ValueError("Destinatario no válido")
+        return value
+
+    @field_validator("audience_mode")
+    @classmethod
+    def validate_audience_mode(cls, value: str):
+        if value not in {"all", "selected"}:
+            raise ValueError("Modo de audiencia no válido")
         return value
 
     @field_validator("prioridad")
@@ -6220,6 +6229,19 @@ def _contact_candidates(document: Mapping[str, Any], channel: str) -> list[dict]
     return [{**dict(document), "value": document.get(field)} for field in fields if document.get(field)]
 
 
+def selected_communication_families(data: Mapping[str, Any], family_ids: list[str]) -> list[str]:
+    """Apply the persisted family audience without trusting client supplied IDs."""
+    available = sorted(set(ids(family_ids)))
+    if data.get("audience_mode", "all") != "selected":
+        return available
+    requested = sorted({str(value).strip() for value in (data.get("selected_family_ids") or []) if str(value).strip()})
+    if not requested:
+        raise HTTPException(status_code=422, detail="Selecciona al menos una familia")
+    if not set(requested).issubset(available):
+        raise HTTPException(status_code=403, detail="La selección de familias no pertenece al ámbito autorizado")
+    return requested
+
+
 async def communication_targets(data: dict, user: Optional[Mapping[str, Any]] = None,
                                 *, validate_scope: bool = True
                                 ) -> tuple[list[dict], list[str], dict[str, int]]:
@@ -6244,7 +6266,9 @@ async def communication_targets(data: dict, user: Optional[Mapping[str, Any]] = 
             family_ids = [target_id]
     if player_ids:
         family_ids = sorted(set(family_ids + ids(await db.players.distinct("familia_id", {"id": {"$in": player_ids}}))))
-    users_all = await notification_users(team_ids, player_ids, family_ids)
+    families_found = len(family_ids)
+    family_ids = selected_communication_families(data, family_ids)
+    users_all = await notification_users(family_ids=family_ids)
     users = [candidate for candidate in users_all if usable_account(candidate)[0]]
     contacts: list[dict] = []
     for user_row in users:
@@ -6262,7 +6286,7 @@ async def communication_targets(data: dict, user: Optional[Mapping[str, Any]] = 
         "progenitor1_telefono": 1, "progenitor2_telefono": 1,
         "communication_consents": 1, "consents": 1, "historical.consents": 1,
     }
-    async for player in db.players.find({"id": {"$in": player_ids}}, player_projection):
+    async for player in db.players.find({"id": {"$in": player_ids}, "familia_id": {"$in": family_ids}}, player_projection):
         player_contacts = _contact_candidates(player, channel)
         if communication_record_active(player):
             contacts.extend(player_contacts)
@@ -6320,7 +6344,9 @@ async def communication_target_context(data: dict, user: Optional[Mapping[str, A
             resolved_name = family.get("progenitor1_nombre") or family.get("contacto_principal") or resolved_name
     if player_ids:
         family_ids = sorted(set(family_ids + ids(await db.players.distinct("familia_id", {"id": {"$in": player_ids}}))))
-    users_all = await notification_users(team_ids, player_ids, family_ids)
+    families_found = len(family_ids)
+    family_ids = selected_communication_families(data, family_ids)
+    users_all = await notification_users(family_ids=family_ids)
     _, destinations, consent_exclusions = await communication_targets(
         data, user, validate_scope=validate_scope,
     )
@@ -6333,9 +6359,50 @@ async def communication_target_context(data: dict, user: Optional[Mapping[str, A
         "resolved_name": resolved_name,
         "summary": recipient_summary(
             users_all, len(destinations), team_count=len(team_ids), player_count=len(player_ids),
-            family_count=len(family_ids), extra_exclusions=consent_exclusions,
+            family_count=len(family_ids), families_found=families_found, families_selected=len(family_ids),
+            duplicate_families_removed=max(0, len(player_ids) - families_found),
+            authorized_contacts=len(destinations), extra_exclusions=consent_exclusions,
         ),
     }
+
+
+async def communication_family_rows(data: Mapping[str, Any], user: Optional[Mapping[str, Any]] = None) -> dict:
+    """Return only non-sensitive family labels and linked-player context for selection."""
+    user = user or current_user_context.get() or {}
+    await validate_communication_scope(data, user)
+    target_type, target_id = data.get("destinatario_tipo"), data.get("destinatario_id")
+    team_ids: list[str] = []
+    player_query: dict[str, Any] = {}
+    direct_family_ids: list[str] = []
+    if target_type == "equipo":
+        team_ids, player_query = [target_id], {"equipo_id": target_id}
+    elif target_type == "categoria":
+        team_ids = ids(await db.teams.distinct("id", {"categoria": target_id}))
+        player_query = {"equipo_id": {"$in": team_ids}}
+    elif target_type == "individual":
+        player = await db.players.find_one({"id": target_id}, {"_id": 0, "id": 1, "familia_id": 1})
+        if player:
+            player_query = {"id": target_id}
+        else:
+            # Family-targeted historical communications remain supported.
+            direct_family_ids = [target_id]
+            player_query = {"familia_id": target_id}
+    players = await db.players.find(player_query, {"_id": 0, "id": 1, "nombre": 1, "apellidos": 1, "familia_id": 1, "equipo_id": 1}).to_list(5000)
+    family_ids = sorted(set(direct_family_ids + ids([player.get("familia_id") for player in players])))
+    families = await db.families.find({"id": {"$in": family_ids}}, {"_id": 0, "id": 1, "contacto_principal": 1, "progenitor1_nombre": 1, "progenitor2_nombre": 1}).to_list(5000)
+    labels = {family["id"]: (family.get("contacto_principal") or family.get("progenitor1_nombre") or family.get("progenitor2_nombre") or "Familia") for family in families}
+    rows = []
+    for family_id in family_ids:
+        if family_id not in labels:
+            continue
+        linked = [" ".join(part for part in (player.get("nombre"), player.get("apellidos")) if part) for player in players if player.get("familia_id") == family_id]
+        rows.append({"id": family_id, "name": labels[family_id], "players": linked})
+    return {"teams": len(team_ids), "players": len(players), "families": rows}
+
+
+@api_router.post("/communications/recipients/families")
+async def list_communication_recipient_families(comm: Communication):
+    return await communication_family_rows(comm.model_dump())
 
 
 @api_router.post("/communications/recipients/preview")
@@ -7503,7 +7570,7 @@ def _style_excel_sheet(writer, sheet_name: str, freeze: str = "A4", tab_color: s
             cell.border = Border(bottom=thin)
         if ws.max_row > 3 and ws.max_column > 1:
             ref = f"A3:{get_column_letter(ws.max_column)}{ws.max_row}"
-            table = Table(displayName=table_name or re.sub(r"[^A-Za-z0-9_]", "", sheet_name)[:20] or "Tabla", ref=ref)
+            table = ExcelTable(displayName=table_name or re.sub(r"[^A-Za-z0-9_]", "", sheet_name)[:20] or "Tabla", ref=ref)
             table.tableStyleInfo = TableStyleInfo(
                 name="TableStyleMedium2",
                 showFirstColumn=False,

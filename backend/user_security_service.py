@@ -71,12 +71,27 @@ def security_public(user: Mapping[str, Any]) -> dict:
     locked_until = parse_time(user.get("locked_until"))
     locked = bool(locked_until and locked_until > utcnow())
     invitation = user.get("invitation") or {}
+    account_status = str(user.get("account_status") or ("active" if user.get("active", True) else "deactivated"))
+    if locked:
+        access_state = "blocked"
+    elif account_status == "pending_activation":
+        access_state = "pending_activation"
+    elif account_status == "active" and user.get("active", True) and (user.get("password_hash") or user.get("system_account")):
+        access_state = "active"
+    else:
+        access_state = "blocked"
     return {
+        # This is the server's authoritative, presentation-safe access state.
+        # `password_hash` is never returned, only used to avoid calling an
+        # account active when it cannot authenticate.
+        "access_state": access_state,
         "must_change_password": bool(user.get("must_change_password", False)),
         "locked": locked, "locked_until": user.get("locked_until") if locked else None,
         "session_version": int(user.get("session_version", 0)),
         "invitation_status": invitation_status(invitation),
         "invitation_expires_at": invitation.get("expires_at"),
+        "last_activation_at": invitation.get("used_at"),
+        "last_access_at": user.get("last_access_at"),
         "last_password_change_at": user.get("last_password_change_at"),
         "sessions_revoked_at": user.get("sessions_revoked_at"),
     }
