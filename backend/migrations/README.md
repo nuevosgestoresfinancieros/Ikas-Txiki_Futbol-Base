@@ -124,3 +124,20 @@ se bloquea sin hacer cambios: ese caso exige revisión administrativa.
 ../venv/bin/python migrations/008_consolidate_families_by_email.py \
   --apply --confirm CONSOLIDATE-FAMILIES-BY-EMAIL
 ```
+
+## Infraestructura de accesos familiares
+
+`009_family_access_provisioning.py` audita de forma agregada las cuentas
+familiares y los correos normalizados. Por defecto es estrictamente de lectura.
+No etiqueta, reasigna ni modifica documentos históricos y no envía correos.
+
+```bash
+../venv/bin/python migrations/009_family_access_provisioning.py
+```
+
+La aplicación crea únicamente índices/colecciones auxiliares y deja el modo
+global en `manual`. Requiere autorización posterior explícita:
+
+```bash
+../venv/bin/python migrations/009_family_access_provisioning.py --apply \
+  --confirm PREPARE-FAMILY-ACCESS-INFRASTRUCTURE

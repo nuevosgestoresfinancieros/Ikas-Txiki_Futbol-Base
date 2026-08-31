@@ -114,6 +114,13 @@ from user_security_service import (
     generate_temporary_password, invitation_status, issue_token, legacy_session_allowed,
     parse_time, safe_security_audit, security_public, token_digest, token_is_usable, utcnow,
 )
+from family_access_service import (
+    ACCESS_MODE_AUTOMATIC, campaign_action, campaign_preflight, confirm_campaign,
+    enqueue_family, get_mode as get_family_access_mode,
+    list_campaigns as list_family_access_campaigns, manual_invitation,
+    process_one_job, public_accesses, set_mode as set_family_access_mode,
+)
+from family_access_api import build_family_access_router
 
 
 ROOT_DIR = Path(__file__).parent
@@ -1536,9 +1543,13 @@ class Family(BaseModel):
     progenitor1_telefono: Optional[str] = None
     progenitor1_email: Optional[str] = None
     progenitor2_nombre: Optional[str] = None
+    progenitor1_crear_acceso: bool = False
+    progenitor1_email_confirmado: bool = False
     progenitor2_telefono: Optional[str] = None
     progenitor2_email: Optional[str] = None
     domicilio: Optional[str] = None
+    progenitor2_crear_acceso: bool = False
+    progenitor2_email_confirmado: bool = False
     contacto_principal: Optional[str] = None
     preferencia_comunicacion: Optional[str] = "email"  # email, telefono, telegram
     observaciones: Optional[str] = None
@@ -1620,7 +1631,14 @@ async def _link_player_family_on_create(player: dict) -> Optional[str]:
 
 @api_router.post("/families")
 async def create_family(family: Family):
-    return await insert_doc("families", family.model_dump())
+    saved = await insert_doc("families", family.model_dump())
+    actor = current_user_context.get() or {}
+    mode = await get_family_access_mode(db)
+    provisioning = []
+    if actor.get("role") == "admin" and mode["mode"] == ACCESS_MODE_AUTOMATIC:
+        provisioning = await enqueue_family(db, saved, actor, "family_save")
+    saved["access_provisioning"] = {"mode": mode["mode"], "results": provisioning}
+    return saved
 
 
 @api_router.get("/families")
@@ -1641,7 +1659,14 @@ async def get_family(family_id: str):
 
 @api_router.put("/families/{family_id}")
 async def edit_family(family_id: str, family: Family):
-    return await update_doc("families", family_id, family.model_dump())
+    saved = await update_doc("families", family_id, family.model_dump())
+    actor = current_user_context.get() or {}
+    mode = await get_family_access_mode(db)
+    provisioning = []
+    if actor.get("role") == "admin" and mode["mode"] == ACCESS_MODE_AUTOMATIC:
+        provisioning = await enqueue_family(db, saved, actor, "family_save")
+    saved["access_provisioning"] = {"mode": mode["mode"], "results": provisioning}
+    return saved
 
 
 @api_router.delete("/families/{family_id}")
@@ -6574,6 +6599,9 @@ class Settings(BaseModel):
     cuota_base: Optional[float] = 0
     descuento_hermano: Optional[float] = 0
     attendance_alert_threshold: int = Field(default=3, ge=1, le=20)
+    family_access_provisioning: dict = Field(default_factory=lambda: {
+        "mode": "manual", "updated_at": None, "updated_by_user_id": None,
+    })
     modalities: List[ModalityDefinition] = Field(default_factory=lambda: catalog_from_settings({}))
 
     @field_validator("modalities")
@@ -8344,6 +8372,16 @@ async def assistant_cancel_proposal(proposal_id: str, request: Request):
     return {"ok": True, "cancelled": proposal.cancelled}
 
 
+app.include_router(build_family_access_router(
+    db=db,
+    actor_getter=lambda: current_user_context.get(),
+    secret=JWT_SECRET,
+    password_hasher=pwd_context.hash,
+    dispatcher=dispatch_email,
+    public_url=_public_app_url,
+    temporary_password=generate_user_temporary_password,
+    lock_access=lock_user_access,
+), dependencies=[Depends(authorize_request)])
 app.include_router(api_router, dependencies=[Depends(authorize_request)])
 
 cors_origins = os.environ.get('CORS_ORIGINS', 'https://ikasfutbase.cibermedida.es').split(',')

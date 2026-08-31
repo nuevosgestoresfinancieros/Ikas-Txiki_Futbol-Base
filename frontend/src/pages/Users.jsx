@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Eye, EyeOff, KeyRound, Link2, LockKeyhole, LogOut, Plus, RefreshCw, Search, ShieldCheck, UnlockKeyhole, UserCog, UserX } from "lucide-react";
 import api from "@/api";
 import { Button } from "@/components/ui/button";
@@ -30,6 +31,8 @@ const Select = ({ label, value, onChange, children, testid }) => (
 );
 
 export default function Users() {
+  const [searchParams] = useSearchParams();
+  const openedAccount = useRef("");
   const { lang, t } = useI18n();
   const { toast } = useToast();
   const [users, setUsers] = useState([]);
@@ -139,6 +142,7 @@ export default function Users() {
   };
 
   const showSecurity = async (user) => {
+
     try {
       const [securityResponse, capabilityResponse] = await Promise.all([
         api.get(`/users/${user.id}/security`), api.get("/users/permanent-deletion-capability"),
@@ -147,6 +151,14 @@ export default function Users() {
       setPermanentDeletionCapability(capabilityResponse.data);
     } catch { toast({ title: t("loadError"), variant: "destructive" }); }
   };
+  useEffect(() => {
+    const userId = searchParams.get("cuenta");
+    if (!userId || openedAccount.current === userId) return;
+    openedAccount.current = userId;
+    api.get(`/users/${encodeURIComponent(userId)}`).then(({ data }) => showProfile(data))
+      .catch(() => toast({ title: t("loadError"), variant: "destructive" }));
+  }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const requestPasswordReset = async (user) => {
     if (user.read_only || !user.username) return;
     try {

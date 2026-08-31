@@ -7,6 +7,8 @@ import { PermissionGate, usePermission } from "@/auth";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { FamilyAccessAdministration, FamilyAccesses } from "@/components/families/FamilyAccesses";
+import FamilyCampaignOperations from "@/components/families/FamilyCampaignOperations";
 import { PageHeader, EmptyState } from "@/components/shared";
 import { Field, Area, SelectField } from "@/components/form";
 
@@ -14,6 +16,7 @@ const empty = { preferencia_comunicacion: "email" };
 
 const Families = () => {
   const canCreate = usePermission("families", "create");
+  const canAdminAccess = usePermission("users", "administer");
   const { t } = useI18n();
   const [params] = useSearchParams();
   const [families, setFamilies] = useState([]);
@@ -48,6 +51,8 @@ const Families = () => {
     <div data-testid="families-page">
       <PageHeader title={t("families")} icon={Home}
         action={canCreate ? <Button data-testid="add-family-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("add")}</Button> : null} />
+      {canAdminAccess && <FamilyAccessAdministration />}
+      {canAdminAccess && <FamilyCampaignOperations />}
 
       {families.length === 0 ? (
         <EmptyState icon={Home} message={t("noData")} action={canCreate ? <Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("add")}</Button> : null} />
@@ -88,13 +93,13 @@ const Families = () => {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <Field label={t("name")} value={form.progenitor1_nombre} onChange={set("progenitor1_nombre")} testid="fam-p1-nombre" />
               <Field label={t("phone")} value={form.progenitor1_telefono} onChange={set("progenitor1_telefono")} testid="fam-p1-tel" />
-              <Field label={t("email")} value={form.progenitor1_email} onChange={set("progenitor1_email")} testid="fam-p1-email" />
+              <Field label={t("email")} value={form.progenitor1_email} onChange={(value) => setForm((current) => ({ ...current, progenitor1_email: value, progenitor1_email_confirmado: false }))} testid="fam-p1-email" />
             </div>
             <p className="text-xs font-bold uppercase tracking-widest text-slate-400">{t("parent2")}</p>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <Field label={t("name")} value={form.progenitor2_nombre} onChange={set("progenitor2_nombre")} testid="fam-p2-nombre" />
               <Field label={t("phone")} value={form.progenitor2_telefono} onChange={set("progenitor2_telefono")} testid="fam-p2-tel" />
-              <Field label={t("email")} value={form.progenitor2_email} onChange={set("progenitor2_email")} testid="fam-p2-email" />
+              <Field label={t("email")} value={form.progenitor2_email} onChange={(value) => setForm((current) => ({ ...current, progenitor2_email: value, progenitor2_email_confirmado: false }))} testid="fam-p2-email" />
             </div>
             <Field label={t("address")} value={form.domicilio} onChange={set("domicilio")} testid="fam-domicilio" />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -103,6 +108,7 @@ const Families = () => {
             </div>
             <Area label={t("notes")} value={form.observaciones} onChange={set("observaciones")} testid="fam-obs" />
           </div>
+          <FamilyAccesses form={form} setField={(key, value) => setForm((current) => ({ ...current, [key]: value }))} enabled={canAdminAccess} />
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialog(false)}>{t("cancel")}</Button>
             <Button onClick={save} data-testid="family-save-btn" className="h-11 px-6">{t("save")}</Button>
