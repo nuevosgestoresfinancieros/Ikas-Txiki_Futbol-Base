@@ -174,22 +174,22 @@ const AssistantPanel = ({ user }) => {
         className="assistant-trigger"
         onClick={() => setOpen(true)}
         aria-haspopup="dialog"
-        aria-label={t("assistantCibermedida")}
+        aria-label={t("assistantIdentity")}
         ref={triggerRef}
       >
         <img
           src="/mascota-ikastxiki.png"
           alt="Mascota de Ikastxiki"
-          className="assistant-trigger-avatar"
+          className="assistant-trigger-avatar assistant-mascot--animated"
         />
-        <span>{t("assistantCibermedida")}</span>
+        <span>{t("assistantIdentity")}</span>
       </Button>
       <Sheet open={open} onOpenChange={handleOpenChange}>
         <SheetContent
           side="right"
           closeLabel={t("close")}
           className="flex h-[100dvh] w-screen max-w-none flex-col gap-0 overflow-hidden p-0 sm:w-[min(100vw,30rem)]"
-          aria-label={t("assistantTitle")}
+          aria-label={t("assistantIdentity")}
         >
           <SheetHeader className="border-b bg-slate-50 p-5 text-left">
             <SheetTitle ref={panelTitleRef} tabIndex="-1" className="flex items-center gap-2">
@@ -280,7 +280,7 @@ const AssistantPanel = ({ user }) => {
                   <img
                     src="/mascota-ikastxiki.png"
                     alt="Mascota de Ikastxiki"
-                    className="assistant-welcome-mascot"
+                    className="assistant-welcome-mascot assistant-mascot--animated"
                   />
                   <div className="text-center sm:text-left">
                     <p className="font-semibold text-slate-900">{t("assistantWelcomeTitle")}</p>

@@ -106,11 +106,11 @@ test("Cibermedida badge remains an external corporate link", () => {
   expect(html).toContain('class="cibermedida-badge-label"');
 });
 
-test("assistant identity and essential labels are complete in ES and EU", () => {
-  expect(translations.es.assistantCibermedida).toBe("Asistente Cibermedida");
-  expect(translations.es.assistantTitle).toContain("Cibermedida");
-  expect(translations.eu.assistantCibermedida).toContain("Cibermedida");
-  expect(translations.eu.assistantTitle).toContain("Cibermedida");
+test("Laguntxi identity and essential labels are complete in ES and EU", () => {
+  expect(translations.es.assistantIdentity).toBe("Laguntxi · Asistente de Ikastxiki");
+  expect(translations.es.assistantTitle).toBe("Laguntxi · Asistente de Ikastxiki");
+  expect(translations.eu.assistantIdentity).toBe("Laguntxi · Ikas‑Txikiko laguntzailea");
+  expect(translations.eu.assistantTitle).toBe("Laguntxi · Ikas‑Txikiko laguntzailea");
   expect(translations.es.assistantPrivacyWarning).toBeTruthy();
   expect(translations.eu.assistantPrivacyWarning).toBeTruthy();
   expect(translations.es.assistantModule_stats).toBe("Estadísticas");
@@ -138,6 +138,7 @@ test("component source keeps accessible and explicit confirmation controls", () 
   expect(source).not.toContain('aria-describedby=\"assistant-description\"');
   expect(source).toContain('src="/mascota-ikastxiki.png"');
   expect(source).toContain('alt="Mascota de Ikastxiki"');
+  expect(source).toContain("assistant-mascot--animated");
   expect(source).toContain("!history.length");
   expect(source).not.toContain('id=\"assistant-description\"');
   expect(source).not.toContain("dangerouslySetInnerHTML");
@@ -161,11 +162,11 @@ test("Radix associates the assistant title and description without warnings and 
     return (
       <>
         <button ref={trigger} type="button" onClick={() => changeOpen(true)}>
-          Asistente Cibermedida
+          Laguntxi · Asistente de Ikastxiki
         </button>
         <Sheet open={open} onOpenChange={changeOpen}>
           <SheetContent closeLabel="Cerrar">
-            <SheetTitle>Asistente Ikas‑Txiki — Cibermedida</SheetTitle>
+            <SheetTitle>Laguntxi · Asistente de Ikastxiki</SheetTitle>
             <SheetDescription>Ayuda contextual y gestión guiada con confirmación.</SheetDescription>
           </SheetContent>
         </Sheet>
@@ -181,7 +182,7 @@ test("Radix associates the assistant title and description without warnings and 
   expect(dialog.getAttribute("aria-labelledby")).toBeTruthy();
   expect(dialog.getAttribute("aria-describedby")).toBeTruthy();
   expect(document.getElementById(dialog.getAttribute("aria-labelledby")).textContent)
-    .toBe("Asistente Ikas‑Txiki — Cibermedida");
+    .toBe("Laguntxi · Asistente de Ikastxiki");
   expect(document.getElementById(dialog.getAttribute("aria-describedby")).textContent)
     .toBe("Ayuda contextual y gestión guiada con confirmación.");
 
@@ -198,4 +199,15 @@ test("Radix associates the assistant title and description without warnings and 
   error.mockRestore();
   container.remove();
   delete global.IS_REACT_ACT_ENVIRONMENT;
+});
+
+test("mascot animation is subtle and disabled for reduced motion", () => {
+  const fs = require("fs");
+  const path = require("path");
+  const css = fs.readFileSync(path.resolve(__dirname, "../index.css"), "utf8");
+  expect(css).toContain(".assistant-mascot--animated");
+  expect(css).toContain("assistant-mascot-greeting");
+  expect(css).toContain("translateY(-3px) scale(1.018)");
+  expect(css).toContain("@media (prefers-reduced-motion: reduce)");
+  expect(css).toContain(".assistant-mascot--animated { animation: none !important; }");
 });
