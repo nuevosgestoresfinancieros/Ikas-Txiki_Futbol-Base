@@ -1,4 +1,9 @@
-import { translations } from "../i18n";
+import React from "react";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import { I18nProvider, translations } from "../i18n";
+jest.mock("react-router-dom", () => ({ useSearchParams: () => [new URLSearchParams()] }), { virtual: true });
+import { UsersPermissionsGuide } from "./Users";
 import {
   accessState, allPasswordChecksPass, filterUsers, normalizedStatus, normalizedTeamOptions, passwordChecks,
   safeUsernameSuggestion, userCounters, userDisplayName, userFeedbackStep, userRoleLabelKey, userSaveFeedback,
@@ -11,6 +16,23 @@ const users = [
   { id: "family", first_name: "Familia", username: "family.test", role: "family", account_status: "suspended", family_id: "family-a" },
   { id: "legacy", username: "legacy.test", role: "player", active: false },
 ];
+
+test("renders an expanded, accessible users and permissions guide that can be collapsed", async () => {
+  global.IS_REACT_ACT_ENVIRONMENT = true;
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  await act(async () => root.render(<I18nProvider><UsersPermissionsGuide /></I18nProvider>));
+  const button = host.querySelector("button[aria-controls=\"users-permissions-guide-content\"]");
+  expect(button).toBeTruthy();
+  expect(button.getAttribute("aria-expanded")).toBe("true");
+  expect(host.textContent).toContain("No se muestran contraseñas, tokens ni enlaces de activación.");
+  expect(host.textContent).toContain("Enviar o reenviar la invitación solo cuando corresponda.");
+  await act(async () => button.click());
+  expect(button.getAttribute("aria-expanded")).toBe("false");
+  expect(host.querySelector("#users-permissions-guide-content")).toBeNull();
+  await act(async () => root.unmount());
+  global.IS_REACT_ACT_ENVIRONMENT = false;
+});
 
 test("filters users by search, role, status and team without changing source data", () => {
   expect(filterUsers(users, { search: "ficticio", role: "coach", status: "active", teamId: "team-a" })).toEqual([users[1]]);
@@ -40,7 +62,7 @@ test("requires a strong confirmed-password shape", () => {
 });
 
 test("contains complete Spanish and Basque administration translations", () => {
-  ["createUser", "effectivePermissions", "accountStatus_suspended", "configuredOnServer", "recipientPreview", "excludedRecipients", "passwordMismatch", "permanentDeleteUser", "permanentDeletionChecking"].forEach((key) => {
+  ["createUser", "effectivePermissions", "accountStatus_suspended", "configuredOnServer", "recipientPreview", "excludedRecipients", "passwordMismatch", "permanentDeleteUser", "permanentDeletionChecking", "usersPermissionsGuideTitle", "usersPermissionsGuideSafetyNotice", "usersPermissionsGuideStepFour"].forEach((key) => {
     expect(translations.es[key]).toBeTruthy();
     expect(translations.eu[key]).toBeTruthy();
   });

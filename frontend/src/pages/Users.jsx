@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Eye, EyeOff, KeyRound, Link2, LockKeyhole, LogOut, Plus, RefreshCw, Search, ShieldCheck, UnlockKeyhole, UserCog, UserX } from "lucide-react";
+import { Eye, EyeOff, KeyRound, Link2, LockKeyhole, LogOut, Plus, RefreshCw, Search, ShieldAlert, ShieldCheck, UnlockKeyhole, UserCog, UserX } from "lucide-react";
 import api from "@/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -29,6 +29,22 @@ const Select = ({ label, value, onChange, children, testid }) => (
     </select>
   </label>
 );
+
+export function UsersPermissionsGuide() {
+  const { t } = useI18n();
+  const [guideOpen, setGuideOpen] = useState(true);
+  const steps = ["usersPermissionsGuideStepOne", "usersPermissionsGuideStepTwo", "usersPermissionsGuideStepThree", "usersPermissionsGuideStepFour"];
+  return <aside className="rounded-xl border border-sky-200 bg-sky-50 text-slate-800" aria-labelledby="users-permissions-guide-title" data-testid="users-permissions-guide">
+    <Button type="button" variant="ghost" className="flex min-h-11 w-full justify-between rounded-xl px-4 text-left font-bold text-[#0E3554] focus-visible:ring-2 focus-visible:ring-sky-700 focus-visible:ring-offset-2" aria-expanded={guideOpen} aria-controls="users-permissions-guide-content" onClick={() => setGuideOpen((open) => !open)}>
+      <span id="users-permissions-guide-title">{t("usersPermissionsGuideTitle")}</span><span aria-hidden="true">{guideOpen ? "−" : "+"}</span>
+    </Button>
+    {guideOpen && <div id="users-permissions-guide-content" className="space-y-4 border-t border-sky-200 p-4 text-sm">
+      <ul className="list-disc space-y-2 pl-5">{["usersPermissionsGuideAccount", "usersPermissionsGuideSecrets", "usersPermissionsGuideStatuses", "usersPermissionsGuidePending", "usersPermissionsGuideManagement", "usersPermissionsGuideFamilies", "usersPermissionsGuideDistinctEmails", "usersPermissionsGuidePlayerEmail"].map((key) => <li key={key}>{t(key)}</li>)}</ul>
+      <ol className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4" aria-label={t("usersPermissionsGuideFlowLabel")}>{steps.map((key, index) => <li key={key} className="flex gap-2 rounded-lg bg-white p-3"><span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-sky-700 text-xs font-bold text-white">{index + 1}</span><span>{t(key)}</span></li>)}</ol>
+      <p className="rounded-lg border border-amber-300 bg-amber-50 p-3 font-semibold text-amber-950"><ShieldAlert className="mr-2 inline h-4 w-4" />{t("usersPermissionsGuideSafetyNotice")}</p>
+    </div>}
+  </aside>;
+}
 
 export default function Users() {
   const [searchParams] = useSearchParams();
@@ -201,8 +217,11 @@ export default function Users() {
     <div className="space-y-6" data-testid="users-page">
       <header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3"><div className="rounded-2xl bg-primary/10 p-3 text-primary"><ShieldCheck className="h-6 w-6" /></div><div><h1 className="page-title">{t("usersAndPermissions")}</h1><p className="page-subtitle">{t("usersIntro")}</p></div></div>
-        <Button onClick={openCreate} className="min-h-11" data-testid="create-user"><Plus className="h-4 w-4" />{t("createUser")}</Button>
       </header>
+
+      <UsersPermissionsGuide />
+
+      <div><Button onClick={openCreate} className="min-h-11" data-testid="create-user"><Plus className="h-4 w-4" />{t("createUser")}</Button></div>
 
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-6" aria-label={t("accountCounters")}>
         {[["total", counters.total], ["active", counters.active], ["pendingActivation", counters.pending], ["blocked", counters.blocked], ["deactivated", counters.deactivated], ["incompleteLink", counters.incomplete]].map(([key, value]) => (
