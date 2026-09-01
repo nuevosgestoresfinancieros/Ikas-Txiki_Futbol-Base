@@ -1,4 +1,10 @@
 export const USER_STATUSES = ["active", "pending_activation", "suspended", "deactivated", "incomplete_link"];
+export const USER_VIEWS = ["active", "archived"];
+
+export const userView = (user) => {
+  const status = normalizedStatus(user);
+  return ["active", "pending_activation"].includes(status) && !user.archived_at ? "active" : "archived";
+};
 
 export const normalizedStatus = (user) =>
   user.account_status || (user.active === false ? "deactivated" : "active");
@@ -24,7 +30,8 @@ export const filterUsers = (users, filters) => {
   return users.filter((user) => {
     const haystack = [user.first_name, user.last_name, user.username, user.email]
       .filter(Boolean).join(" ").toLocaleLowerCase();
-    return (!needle || haystack.includes(needle))
+    return (!filters.view || userView(user) === filters.view)
+      && (!needle || haystack.includes(needle))
       && (!filters.role || user.role === filters.role)
       && (!filters.status || normalizedStatus(user) === filters.status)
       && (!filters.teamId || (user.assigned_team_ids || []).includes(filters.teamId));

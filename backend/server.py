@@ -99,7 +99,7 @@ from assistant_service import (
 )
 from user_admin_service import (
     ACCOUNT_STATUSES, account_status, effective_scope, link_is_complete, normalized_key, normalized_text,
-    safe_audit_detail, security_state, status_is_active, user_search_text, validate_password_strength,
+    safe_audit_detail, security_state, status_is_active, user_search_text, user_view, validate_password_strength,
 )
 from communication_recipient_service import (
     communication_record_active, consented_contacts, recipient_summary, usable_account,
@@ -121,6 +121,8 @@ from family_access_service import (
     process_one_job, public_accesses, set_mode as set_family_access_mode,
 )
 from family_access_api import build_family_access_router
+from selected_family_batch import provision as provision_selected_family_batch
+from family_duplicate_service import candidates as family_duplicate_candidates, merge as merge_families, revert as revert_family_merge
 
 
 ROOT_DIR = Path(__file__).parent
@@ -658,6 +660,9 @@ async def ensure_data_scope(coll: str, data: dict) -> None:
 
 
 async def list_docs(coll: str, query: dict = None):
+    # Las fichas fusionadas permanecen recuperables, pero no participan en los flujos operativos ordinarios.
+    if coll == "families":
+        query = merge_query(query, {"merged_into": {"$exists": False}})
     scoped = merge_query(query, await scope_for_collection(coll))
     cursor = db[coll].find(scoped, {"_id": 0}).sort("created_at", -1)
     return await cursor.to_list(5000)
@@ -1080,7 +1085,7 @@ async def create_user(user: UserCreate):
 @api_router.get("/users")
 async def get_users(
     page: Optional[int] = Query(default=None, ge=1), page_size: int = Query(default=25, ge=1, le=100),
-    search: str = "", role: str = "", status: str = "", team_id: str = "",
+    search: str = "", role: str = "", status: str = "", team_id: str = "", view: str = "active",
     last_access: str = "", sort_by: str = "username", sort_dir: str = "asc",
 ):
     users = await db.users.find({}, {"_id": 0}).to_list(5000)
@@ -1095,6 +1100,10 @@ async def get_users(
         "deactivated": sum(account_status(user) == "deactivated" for user in public),
         "incomplete": sum(not link_is_complete(user) for user in public),
     }
+    # La vista diaria conserva las cuentas activas y pendientes; las cuentas
+    # bloqueadas, suspendidas o dadas de baja se consultan aparte.
+    if view in {"active", "archived"}:
+        public = [user for user in public if user_view(user) == view]
     if role:
         public = [user for user in public if user.get("role") == role]
     if status:
@@ -1631,13 +1640,11 @@ async def _link_player_family_on_create(player: dict) -> Optional[str]:
 
 @api_router.post("/families")
 async def create_family(family: Family):
-    saved = await insert_doc("families", family.model_dump())
-    actor = current_user_context.get() or {}
-    mode = await get_family_access_mode(db)
-    provisioning = []
-    if actor.get("role") == "admin" and mode["mode"] == ACCESS_MODE_AUTOMATIC:
-        provisioning = await enqueue_family(db, saved, actor, "family_save")
-    saved["access_provisioning"] = {"mode": mode["mode"], "results": provisioning}
+    data = family.model_dump()
+    for key in ("progenitor1_email", "progenitor2_email"):
+        data[key] = normalized_key(data.get(key)) or None
+    saved = await insert_doc("families", data)
+    saved["access_provisioning"] = {"mode": "manual", "results": []}
     return saved
 
 
@@ -1652,6 +1659,60 @@ async def get_families():
     return fams
 
 
+class FamilyMergeRequest(BaseModel):
+    primary_family_id: str = Field(min_length=1)
+    duplicate_family_id: str = Field(min_length=1)
+    reason: str = Field(min_length=3, max_length=500)
+
+
+def _require_family_merge_admin() -> dict:
+    actor = current_user_context.get() or {}
+    if actor.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Solo administración puede revisar o fusionar familias")
+    return actor
+
+
+@api_router.get("/families/duplicates/candidates")
+async def get_family_duplicate_candidates():
+    _require_family_merge_admin()
+    families = await db.families.find({}, {"_id": 0}).to_list(5000)
+    players = await db.players.find({}, {"_id": 0, "id": 1, "nombre": 1, "apellidos": 1, "familia_id": 1}).to_list(5000)
+    users = await db.users.find({"role": "family"}, {"_id": 0, "username": 1, "account_status": 1, "active": 1, "family_id": 1}).to_list(5000)
+    candidates = [item for item in family_duplicate_candidates(families, players, users) if item.get("confidence") == "high" and item.get("merge_allowed") is True]
+    return {"candidates": candidates, "count": len(candidates)}
+
+
+@api_router.get("/families/duplicates/history")
+async def get_family_merge_history():
+    _require_family_merge_admin()
+    rows = await db.family_merge_history.find({}, {"_id": 0, "before": 0}).sort("created_at", -1).to_list(5000)
+    return {"merges": rows}
+
+
+@api_router.post("/families/duplicates/merge")
+async def confirm_family_merge(request: FamilyMergeRequest):
+    actor = _require_family_merge_admin()
+    try:
+        return await merge_families(db, request.primary_family_id, request.duplicate_family_id, actor, request.reason)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error))
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+
+
+@api_router.post("/families/duplicates/history/{merge_id}/revert")
+async def revert_confirmed_family_merge(merge_id: str):
+    actor = _require_family_merge_admin()
+    try:
+        return await revert_family_merge(db, merge_id, actor)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error))
+
+
 @api_router.get("/families/{family_id}")
 async def get_family(family_id: str):
     return await get_doc("families", family_id)
@@ -1659,13 +1720,13 @@ async def get_family(family_id: str):
 
 @api_router.put("/families/{family_id}")
 async def edit_family(family_id: str, family: Family):
-    saved = await update_doc("families", family_id, family.model_dump())
-    actor = current_user_context.get() or {}
-    mode = await get_family_access_mode(db)
-    provisioning = []
-    if actor.get("role") == "admin" and mode["mode"] == ACCESS_MODE_AUTOMATIC:
-        provisioning = await enqueue_family(db, saved, actor, "family_save")
-    saved["access_provisioning"] = {"mode": mode["mode"], "results": provisioning}
+    data = family.model_dump()
+    for key in ("progenitor1_email", "progenitor2_email"):
+        data[key] = normalized_key(data.get(key)) or None
+    saved = await update_doc("families", family_id, data)
+    access = await get_family_access_mode(db)
+    results = await enqueue_family(db, saved, _require_family_access_admin(), "family-save") if access["mode"] == ACCESS_MODE_AUTOMATIC else []
+    saved["access_provisioning"] = {"mode": access["mode"], "results": results}
     return saved
 
 
@@ -1685,6 +1746,16 @@ def _family_access_email(family: dict) -> str | None:
         if value and "@" in value:
             return value
     return None
+
+
+def _family_access_emails(family: dict) -> list[str]:
+    """Return distinct, valid parent addresses in stable slot order."""
+    result = []
+    for key in ("progenitor1_email", "progenitor2_email"):
+        value = normalized_key(family.get(key))
+        if value and re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", value) and value not in result:
+            result.append(value)
+    return result
 
 
 def _family_access_display_name(family: dict, children: list[dict]) -> str:
@@ -1781,86 +1852,37 @@ async def get_family_accesses():
     families = await list_docs("families")
     players = await list_docs("players")
     users = await db.users.find({"role": "family"}, {"_id": 0, "password_hash": 0}).to_list(5000)
-    users_by_family = {user.get("family_id"): user for user in users if user.get("family_id")}
+    users_by_family = {}
+    for user in users:
+        users_by_family.setdefault(user.get("family_id"), []).append(user)
     rows = []
     for family in families:
-        user = users_by_family.get(family.get("id"))
-        email = _family_access_email(family)
+        family_users = users_by_family.get(family.get("id"), [])
+        emails = _family_access_emails(family)
         children = [player for player in players if player.get("familia_id") == family.get("id")]
-        # The bulk flow can only send an invitation to a real address.  Do not
-        # make administrators sift through historical records without one.
-        if not email:
-            continue
-        state = "active" if user and account_status(user) == "active" else (
-            invitation_status((user or {}).get("invitation")) if user else "ready"
-        )
+        states = ["active" if account_status(user) == "active" else invitation_status(user.get("invitation")) for user in family_users]
         rows.append({
             "family_id": family.get("id"), "family_name": _family_access_display_name(family, children),
-            "email": email, "children": [{"id": child.get("id"), "name": f"{child.get('nombre', '')} {child.get('apellidos', '')}".strip()} for child in children],
-            "user_id": (user or {}).get("id"), "username": (user or {}).get("username"),
-            "status": state, "invitation_expires_at": ((user or {}).get("invitation") or {}).get("expires_at"),
+            "emails": emails, "valid_email_count": len(emails), "children": [{"id": child.get("id"), "name": f"{child.get('nombre', '')} {child.get('apellidos', '')}".strip()} for child in children],
+            "statuses": states,
         })
     return sorted(rows, key=lambda row: normalized_key(row["family_name"]))
 
 
 @api_router.post("/account-provisioning/families/invitations")
 async def send_family_access_invitations(request: FamilyAccessInvitationRequest):
-    _require_family_access_admin()
+    actor = _require_family_access_admin()
     family_ids = sorted(set(ids(request.family_ids)))
     families = await db.families.find({"id": {"$in": family_ids}}, {"_id": 0}).to_list(len(family_ids))
-    found = {family.get("id") for family in families}
-    if found != set(family_ids):
+    if {family.get("id") for family in families} != set(family_ids):
         raise HTTPException(status_code=404, detail="Una o varias familias no existen")
-    results = []
-    for family in families:
-        email = _family_access_email(family)
-        if not email:
-            results.append({"family_id": family["id"], "status": "skipped", "reason": "missing_email"})
-            continue
-        children = ids(await db.players.distinct("id", {"familia_id": family["id"]}))
-        existing = await db.users.find_one({"role": "family", "family_id": family["id"]}, {"_id": 0})
-        email_owner = await db.users.find_one({"email_normalized": email}, {"_id": 0, "id": 1, "family_id": 1})
-        if email_owner and email_owner.get("family_id") != family["id"]:
-            results.append({"family_id": family["id"], "status": "skipped", "reason": "email_already_associated"})
-            continue
-        if existing and account_status(existing) == "active":
-            results.append({"family_id": family["id"], "status": "skipped", "reason": "already_active"})
-            continue
-        plain, invitation = issue_token(JWT_SECRET, ttl_minutes=0, ttl_hours=INVITATION_TTL_HOURS)
-        if existing:
-            await db.users.update_one({"id": existing["id"]}, {"$set": {
-                "email": email, "email_normalized": email, "linked_player_ids": children,
-                "invitation": invitation, "account_status": "pending_activation", "active": False, "updated_at": now_iso(),
-            }})
-            target = {**existing, "email": email}
-            action = "family_invitation_resent"
-        else:
-            username = await _family_access_username(family)
-            target = {
-                "id": new_id(), "username": username, "username_normalized": normalized_key(username),
-                "first_name": normalized_text(family.get("progenitor1_nombre") or family.get("contacto_principal") or "Familia"),
-                "last_name": "", "email": email, "email_normalized": email, "phone": family.get("progenitor1_telefono"),
-                "role": "family", "family_id": family["id"], "linked_player_ids": children,
-                "assigned_team_ids": [], "assigned_category_ids": [], "player_id": None,
-                "language": "es", "notification_preferences": NotificationPreferences().model_dump(),
-                "password_hash": pwd_context.hash(generate_temporary_password()), "invitation": invitation,
-                "account_status": "pending_activation", "active": False, "must_change_password": False,
-                "session_version": 0, "failed_login_count": 0, "locked_until": None,
-                "created_at": now_iso(), "updated_at": now_iso(), "last_access_at": None,
-            }
-            await db.users.insert_one(dict(target))
-            action = "family_invitation_created"
-        link = _activation_link(plain)
-        delivery = dispatch_email(
-            email, "Activa tu acceso a Ikas-Txiki",
-            _invitation_email_body(target["username"], "familiar"),
-            action_url=link, action_label=target["username"], template="account_activation",
-        )
-        delivery.update({"type": "family_access_invitation", "family_id": family["id"], "user_id": target["id"]})
-        await db.delivery_logs.insert_one(delivery)
-        await record_user_audit(action, target, ["family_id", "email", "linked_player_ids"])
-        results.append({"family_id": family["id"], "status": delivery["status"], "reason": delivery.get("error")})
-    return {"ok": True, "results": results, "sent": sum(item["status"] == "sent" for item in results)}
+    # This endpoint is the explicit administrator action. It intentionally
+    # bypasses the global campaign delivery switch, never broadens its scope,
+    # and is idempotent on retries.
+    return await provision_selected_family_batch(
+        db, families, actor, JWT_SECRET, pwd_context.hash, dispatch_email,
+        PUBLIC_APP_URL,
+    )
 
 
 class PlayerAccessInvitationRequest(BaseModel):

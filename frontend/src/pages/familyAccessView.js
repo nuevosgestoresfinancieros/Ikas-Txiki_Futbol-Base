@@ -5,6 +5,8 @@ export const FAMILY_ACCESS_STATES = {
   pending_activation: { label: "Pendiente de activación", tone: "amber" },
   invitation_expired: { label: "Invitación caducada", tone: "amber" },
   active: { label: "Activa", tone: "emerald" },
+  inactive: { label: "Inactiva", tone: "red" },
+  archived: { label: "Archivada", tone: "red" },
   blocked: { label: "Bloqueada", tone: "red" },
   missing_email: { label: "Sin correo", tone: "amber" },
   email_unconfirmed: { label: "Correo no confirmado", tone: "amber" },

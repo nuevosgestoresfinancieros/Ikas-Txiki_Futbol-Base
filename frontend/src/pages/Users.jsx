@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
-import { Eye, EyeOff, KeyRound, Link2, LockKeyhole, LogOut, Plus, RefreshCw, Search, ShieldAlert, ShieldCheck, UnlockKeyhole, UserCog, UserX } from "lucide-react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { Eye, EyeOff, KeyRound, Link2, LockKeyhole, LogOut, Plus, RefreshCw, Search, ShieldAlert, ShieldCheck, UnlockKeyhole, UserCog, UserRoundPlus, UserX } from "lucide-react";
 import api from "@/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -48,6 +48,7 @@ export function UsersPermissionsGuide() {
 
 export default function Users() {
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const openedAccount = useRef("");
   const { lang, t } = useI18n();
   const { toast } = useToast();
@@ -70,7 +71,7 @@ export default function Users() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
-  const [filters, setFilters] = useState({ search: "", role: "", status: "", teamId: "" });
+  const [filters, setFilters] = useState({ view: "active", search: "", role: "", status: "", teamId: "" });
   const [page, setPage] = useState(1);
   const [serverMeta, setServerMeta] = useState(null);
   const [saveFeedback, setSaveFeedback] = useState(null);
@@ -81,7 +82,7 @@ export default function Users() {
     try {
       const [u, options] = await Promise.all([api.get("/users", { params: {
         page, page_size: 20, search: filters.search, role: filters.role,
-        status: filters.status, team_id: filters.teamId,
+        status: filters.status, team_id: filters.teamId, view: filters.view,
       } }), api.get("/users/options")]);
       setUsers(u.data.items); setServerMeta(u.data); setTeams(options.data.teams); setPlayers(options.data.players); setFamilies(options.data.families);
     } catch (requestError) {
@@ -230,6 +231,9 @@ export default function Users() {
       </section>
 
       <section className="surface-card space-y-4 p-4">
+        <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-4" role="tablist" aria-label={t("userViews")}>
+          {["active", "archived"].map((view) => <Button key={view} type="button" role="tab" aria-selected={filters.view === view} variant={filters.view === view ? "default" : "outline"} onClick={() => setFilters((current) => ({ ...current, view }))}>{t(view === "active" ? "activeAndPendingUsers" : "archivedUsers")}</Button>)}
+        </div>
         <div className="grid gap-3 md:grid-cols-4">
           <label className="relative md:col-span-1"><span className="sr-only">{t("searchUsers")}</span><Search className="pointer-events-none absolute left-3 top-3.5 h-4 w-4 text-slate-400" /><Input className="pl-9" placeholder={t("searchUsers")} value={filters.search} onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))} /></label>
           <Select label={t("role")} value={filters.role} onChange={(role) => setFilters((f) => ({ ...f, role }))}><option value="">{t("all")}</option>{["admin", "coordinator", "coach", "family", "player"].map((role) => <option key={role} value={role}>{t(`role_${role}`)}</option>)}</Select>
@@ -257,7 +261,7 @@ export default function Users() {
                     {user.last_access_at && <div className="min-w-0"><dt className="font-semibold text-slate-500">{t("lastAccess")}:</dt><dd className="mt-1 text-slate-900"><time dateTime={user.last_access_at}>{formatLastAccess(user.last_access_at)}</time></dd></div>}
                   </dl>
                 </div>
-                <div className="flex flex-wrap gap-2 lg:max-w-md lg:justify-end"><Button variant="outline" onClick={() => showProfile(user)}><UserCog className="h-4 w-4" />{t("viewProfile")}</Button><Button variant="outline" onClick={() => showEffectivePermissions(user)}><ShieldCheck className="h-4 w-4" />{t("effectivePermissions")}</Button><Button variant="outline" onClick={() => showSecurity(user)}><LockKeyhole className="h-4 w-4" />{t("security")}</Button>{!user.read_only && <Button variant="outline" onClick={() => openEdit(user)}><UserCog className="h-4 w-4" />{t("edit")}</Button>}</div>
+                <div className="flex flex-wrap gap-2 lg:max-w-md lg:justify-end">{user.role === "family" && user.family_id && <Button variant="outline" onClick={() => navigate(`/familias?ficha=${encodeURIComponent(user.family_id)}`)}><UserRoundPlus className="h-4 w-4" />{t("createFamilyAccesses")}</Button>}<Button variant="outline" onClick={() => showProfile(user)}><UserCog className="h-4 w-4" />{t("viewProfile")}</Button><Button variant="outline" onClick={() => showEffectivePermissions(user)}><ShieldCheck className="h-4 w-4" />{t("effectivePermissions")}</Button><Button variant="outline" onClick={() => showSecurity(user)}><LockKeyhole className="h-4 w-4" />{t("security")}</Button>{!user.read_only && <Button variant="outline" onClick={() => openEdit(user)}><UserCog className="h-4 w-4" />{t("edit")}</Button>}</div>
               </div>
             </article>
           ))}</div>{pageCount > 1 && <nav className="mt-4 flex items-center justify-between" aria-label={t("pagination")}><Button variant="outline" disabled={page === 1} onClick={() => setPage((value) => value - 1)}>{t("previous")}</Button><span className="text-sm text-slate-500">{page} / {pageCount}</span><Button variant="outline" disabled={page === pageCount} onClick={() => setPage((value) => value + 1)}>{t("next")}</Button></nav>}</>}

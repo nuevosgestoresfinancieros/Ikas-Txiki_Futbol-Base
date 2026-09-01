@@ -7,10 +7,12 @@ import pytest
 
 import server
 from communication_recipient_service import recipient_summary
-from user_admin_service import link_is_complete, security_state, user_search_text
+from user_admin_service import link_is_complete, security_state, user_search_text, user_view
 
 
 def test_phase3_search_security_and_link_helpers_are_backward_compatible():
+    assert user_view({"account_status": "pending_activation"}) == "active"
+    assert user_view({"account_status": "suspended"}) == "archived"
     assert "ane prueba" in user_search_text({"first_name": "  Ane ", "last_name": "Prueba"})
     assert link_is_complete({"role": "admin"})
     assert not link_is_complete({"role": "coach", "assigned_team_ids": []})

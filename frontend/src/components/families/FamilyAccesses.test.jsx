@@ -33,7 +33,7 @@ test("renders two independent accessible cards without secret material", async (
   expect(host.textContent).toContain("Pendiente de activación");
   expect(host.textContent).toContain("Ver cuenta");
   expect(host.textContent).not.toMatch(new RegExp("token|hash|https?://", "i"));
-  expect(host.querySelectorAll("[aria-label^='Crear acceso para progenitor']")).toHaveLength(2);
+  expect(host.textContent).toContain("Los accesos se crean únicamente allí");
   await act(async () => root.unmount());
 });
 

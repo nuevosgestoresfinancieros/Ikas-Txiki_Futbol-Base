@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { FamilyAccessAdministration, FamilyAccesses } from "@/components/families/FamilyAccesses";
 import FamilyCampaignOperations from "@/components/families/FamilyCampaignOperations";
+import FamilyDuplicateReview from "@/components/families/FamilyDuplicateReview";
 import { PageHeader, EmptyState } from "@/components/shared";
 import { Field, Area, SelectField } from "@/components/form";
 
@@ -53,6 +54,7 @@ const Families = () => {
         action={canCreate ? <Button data-testid="add-family-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("add")}</Button> : null} />
       {canAdminAccess && <FamilyAccessAdministration />}
       {canAdminAccess && <FamilyCampaignOperations />}
+      {canAdminAccess && <FamilyDuplicateReview />}
 
       {families.length === 0 ? (
         <EmptyState icon={Home} message={t("noData")} action={canCreate ? <Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("add")}</Button> : null} />

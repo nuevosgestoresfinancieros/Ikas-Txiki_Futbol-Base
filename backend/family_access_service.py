@@ -21,7 +21,7 @@ from uuid import uuid4
 from pymongo import ReturnDocument
 
 from pymongo.errors import DuplicateKeyError
-from user_admin_service import account_status, normalized_key, normalized_text
+from user_admin_service import account_status, family_access_state, normalized_key, normalized_text
 from user_security_service import (
     INVITATION_TTL_HOURS, generate_temporary_password, invitation_status,
     issue_token, parse_time, token_is_usable,
@@ -118,15 +118,10 @@ def classify_parent(
     if equivalent:
         user = equivalent[0]
         result = {**base, "user_id": user.get("id")}
-        if _blocked(user):
-            return {**result, "state": "blocked"}
-        if account_status(user) == "active" and user.get("active", True):
-            return {**result, "state": "active"}
-        if _pending(user):
-            return {**result, "state": "pending_activation"}
-        if account_status(user) == "pending_activation":
-            return {**result, "state": "invitation_expired"}
-        return {**result, "state": "blocked"}
+        state = family_access_state(user)
+        if state == "pending_activation" and not _pending(user):
+            state = "invitation_expired"
+        return {**result, "state": state}
     if not parent["requested"]:
         return base
     if not parent["email"]:
@@ -162,7 +157,7 @@ def public_access(decision: Mapping[str, Any], user: Mapping[str, Any] | None = 
         "slot": decision.get("slot"), "name": decision.get("name") or "",
         "email": decision.get("email"), "requested": bool(decision.get("requested")),
         "email_confirmed": bool(decision.get("email_confirmed")), "state": state,
-        "user_id": user_id, "invitation_status": invitation_status((user or {}).get("invitation")),
+        "user_id": user_id, "username": (user or {}).get("username") if user_id else None, "invitation_status": invitation_status((user or {}).get("invitation")),
         "allowed_actions": actions,
     }
 

@@ -22,7 +22,7 @@ beforeEach(() => {
     { family_id: "family-1", family_name: "Familia Uno", email: "uno@example.test", children: [{ id: "player-1", name: "Jugador Uno" }], status: "ready" },
     { family_id: "family-2", family_name: "Familia Dos", email: null, children: [], status: "missing_email" },
   ] });
-  api.post.mockResolvedValue({ data: { sent: 1, results: [{ family_id: "family-1", status: "sent" }] } });
+  api.post.mockResolvedValue({ data: { summary: { accounts_created: 2, invitations_sent: 2, existing_accesses: 0, families_for_review: 0 } } });
 });
 
 afterEach(() => {
@@ -31,29 +31,16 @@ afterEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = false;
 });
 
-test("requires final confirmation before creating and sending selected family accounts", async () => {
-  const container = document.createElement("div");
-  document.body.appendChild(container);
-  const root = createRoot(container);
-  await act(async () => root.render(<I18nProvider><BulkAccountProvisioning type="family" onCancel={jest.fn()} /></I18nProvider>));
-  await flush();
-
-  const checkboxes = container.querySelectorAll('input[type="checkbox"]');
-  expect(checkboxes).toHaveLength(2);
-  expect(checkboxes[1].disabled).toBe(true);
-  expect(container.textContent).toContain("1 hijos inscritos: Jugador Uno");
-  await act(async () => checkboxes[0].click());
-  expect(api.post).not.toHaveBeenCalled();
-
-  const review = [...container.querySelectorAll("button")].find((button) => button.textContent.includes("Revisar selección"));
-  await act(async () => review.click());
-  expect(api.post).not.toHaveBeenCalled();
-  expect(container.textContent).toContain("Confirmación final");
-
-  const confirm = [...container.querySelectorAll("button")].find((button) => button.textContent.includes("Confirmar, crear y enviar"));
-  await act(async () => confirm.click());
-  await flush();
-  expect(api.post).toHaveBeenCalledWith("/account-provisioning/families/invitations", { family_ids: ["family-1"] });
-  expect(container.textContent).toContain("Proceso completado");
-  await act(async () => root.unmount());
+test("processes multiple selected families directly and only shows aggregate result", async () => {
+  api.get.mockResolvedValue({ data: [
+    { family_id: "family-1", family_name: "Familia Uno", email: "uno@example.test" },
+    { family_id: "family-2", family_name: "Familia Dos", email: null },
+  ] });
+  const container = document.createElement("div"); document.body.appendChild(container); const root = createRoot(container);
+  await act(async () => root.render(<I18nProvider><BulkAccountProvisioning type="family" onCancel={jest.fn()} /></I18nProvider>)); await flush();
+  const boxes = container.querySelectorAll('input[type="checkbox"]'); expect(boxes).toHaveLength(2);
+  await act(async () => { boxes[0].click(); boxes[1].click(); });
+  const create = [...container.querySelectorAll("button")].find((button) => button.textContent.includes("Crear accesos (2 familias)")); await act(async () => create.click()); await flush();
+  expect(api.post).toHaveBeenCalledWith("/account-provisioning/families/invitations", { family_ids: ["family-1", "family-2"] });
+  expect(container.textContent).toContain("Cuentas creadas"); expect(container.textContent).not.toContain("Confirmación final"); await act(async () => root.unmount());
 });

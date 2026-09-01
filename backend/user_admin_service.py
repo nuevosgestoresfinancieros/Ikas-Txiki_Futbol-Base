@@ -15,6 +15,8 @@ from fastapi import HTTPException
 ACCOUNT_STATUSES = {
     "pending_activation", "active", "suspended", "deactivated", "incomplete_link",
 }
+ACTIVE_USER_STATUSES = {"active", "pending_activation"}
+ARCHIVED_USER_STATUSES = ACCOUNT_STATUSES - ACTIVE_USER_STATUSES
 COMMON_PASSWORDS = {
     "password", "password123", "contraseña", "qwerty123", "admin123",
     "ikas-txiki", "ikastxiki", "123456789012",
@@ -75,6 +77,26 @@ def account_status(user: Mapping[str, Any]) -> str:
     if explicit in ACCOUNT_STATUSES:
         return explicit
     return "active" if user.get("active", True) else "deactivated"
+
+
+def user_view(user: Mapping[str, Any]) -> str:
+    """Administrative bucket; inactive or blocked accounts never leak into daily work."""
+    return "active" if account_status(user) in ACTIVE_USER_STATUSES and not user.get("archived_at") else "archived"
+
+
+def family_access_state(user: Mapping[str, Any] | None) -> str:
+    if not user:
+        return "no_access"
+    status = account_status(user)
+    if user.get("archived_at"):
+        return "archived"
+    if status == "active" and user.get("active", True):
+        return "active"
+    if status == "pending_activation":
+        return "pending_activation"
+    if status == "deactivated":
+        return "inactive"
+    return "blocked"
 
 
 def status_is_active(status: str) -> bool:

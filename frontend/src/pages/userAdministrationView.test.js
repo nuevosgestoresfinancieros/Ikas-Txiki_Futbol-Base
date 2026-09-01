@@ -2,10 +2,10 @@ import React from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { I18nProvider, translations } from "../i18n";
-jest.mock("react-router-dom", () => ({ useSearchParams: () => [new URLSearchParams()] }), { virtual: true });
+jest.mock("react-router-dom", () => ({ useNavigate: () => jest.fn(), useSearchParams: () => [new URLSearchParams()] }), { virtual: true });
 import { UsersPermissionsGuide } from "./Users";
 import {
-  accessState, allPasswordChecksPass, filterUsers, normalizedStatus, normalizedTeamOptions, passwordChecks,
+  accessState, allPasswordChecksPass, filterUsers, normalizedStatus, normalizedTeamOptions, passwordChecks, userView,
   safeUsernameSuggestion, userCounters, userDisplayName, userFeedbackStep, userRoleLabelKey, userSaveFeedback,
   userSaveSuccessFeedback, wizardLinkComplete,
 } from "./userAdministrationView";
@@ -41,6 +41,8 @@ test("filters users by search, role, status and team without changing source dat
 });
 
 test("keeps legacy users compatible and counts every account state", () => {
+  expect(userView({ account_status: "pending_activation" })).toBe("active");
+  expect(userView({ account_status: "suspended" })).toBe("archived");
   expect(normalizedStatus(users[3])).toBe("deactivated");
   expect(userCounters(users)).toEqual({ total: 4, active: 2, pending: 0, suspended: 1, deactivated: 1, incomplete: 0 });
 });

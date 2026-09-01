@@ -1,62 +1,19 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, CheckCircle2, Clock3, Eye, KeyRound, LockKeyhole, Mail, RefreshCw, ShieldAlert, ShieldCheck, Users } from "lucide-react";
+import { CheckCircle2, Clock3, Eye, ShieldAlert, ShieldCheck, Users } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import api from "@/api";
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
 import { useI18n } from "@/i18n";
 import { accessState, safeAccessError, stateClasses } from "@/pages/familyAccessView";
 
 const iconFor = (state) => state === "active" ? CheckCircle2 : state === "pending_activation" ? Clock3 : ["blocked", "duplicate_email", "email_conflict", "ambiguous_existing_account"].includes(state) ? ShieldAlert : ShieldCheck;
-
-function AccessCard({ slot, form, setField, card, reload }) {
-  const navigate = useNavigate();
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("");
-  const [secret, setSecret] = useState("");
-  const prefix = `progenitor${slot}`;
-  const state = accessState(card?.state || "no_access");
-  const Icon = iconFor(card?.state);
-  const action = async (kind) => {
-    const config = {
-      generate_invitation: ["invitation", "ENVIAR INVITACIÓN"],
-      resend_invitation: ["invitation/resend", "REENVIAR INVITACIÓN"],
-      temporary_password: ["temporary-password", "GENERAR CONTRASEÑA TEMPORAL"],
-      block: ["block", "BLOQUEAR ACCESO"],
-    }[kind];
-    if (!config) return;
-    const confirmation = window.prompt(`Escribe exactamente: ${config[1]}`);
-    if (confirmation !== config[1]) return;
-    setBusy(true); setMessage(""); setSecret("");
-    try {
-      const { data } = await api.post(`/family-access/families/${form.id}/${slot}/${config[0]}`, { confirmation });
-      if (data.temporary_password && data.show_once) setSecret(data.temporary_password);
-      setMessage(kind === "block" ? "Acceso bloqueado correctamente." : kind === "temporary_password" ? "Contraseña temporal generada. Solo se muestra una vez." : "Invitación procesada correctamente.");
-      await reload();
-    } catch (error) { setMessage(safeAccessError(error)); }
-    finally { setBusy(false); }
-  };
-  return <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm" data-testid={`family-access-${slot}`}>
-    <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-wider text-slate-500">Progenitor/a {slot}</p><h4 className="mt-1 font-heading font-bold text-slate-950">{form[`${prefix}_nombre`] || "Sin nombre"}</h4><p className="mt-1 break-all text-sm text-slate-600">{form[`${prefix}_email`] || "Sin correo electrónico"}</p></div><span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-bold ${stateClasses(state.tone)}`}><Icon className="h-4 w-4" />{state.label}</span></div>
-    <div className="mt-4 space-y-3"><label className="flex min-h-11 items-center justify-between gap-4 rounded-xl bg-slate-50 px-3 py-2 text-sm font-semibold"><span>Crear acceso a la aplicación</span><Switch checked={Boolean(form[`${prefix}_crear_acceso`])} onCheckedChange={(value) => setField(`${prefix}_crear_acceso`, value)} aria-label={`Crear acceso para progenitor ${slot}`} /></label><label className="flex min-h-11 items-center gap-3 rounded-xl bg-slate-50 px-3 py-2 text-sm font-semibold"><input type="checkbox" checked={Boolean(form[`${prefix}_email_confirmado`])} onChange={(event) => setField(`${prefix}_email_confirmado`, event.target.checked)} /><span>Correo revisado y confirmado</span></label></div>
-    {card?.state === "duplicate_email" && <p className="mt-3 text-sm text-red-800">Cada progenitor necesita un correo individual para disponer de un acceso independiente.</p>}
-    {card?.state === "email_conflict" && <p className="mt-3 text-sm text-red-800">El correo ya está asociado a otra cuenta. No se muestran datos de esa cuenta.</p>}
-    {secret && <div role="alert" className="mt-3 rounded-xl border-2 border-amber-300 bg-amber-50 p-3"><strong>Se muestra una sola vez</strong><code className="mt-2 block break-all rounded bg-white p-2">{secret}</code><Button type="button" variant="outline" className="mt-2" onClick={() => setSecret("")}>Ocultar</Button></div>}
-    {message && <p role="status" aria-live="polite" className="mt-3 text-sm font-semibold text-slate-700">{message}</p>}
-    {form.id && <div className="mt-4 flex flex-wrap gap-2">{(card?.allowed_actions || []).includes("generate_invitation") && <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => action("generate_invitation")}><Mail className="h-4 w-4" />Generar invitación</Button>}{(card?.allowed_actions || []).includes("resend_invitation") && <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => action("resend_invitation")}><RefreshCw className="h-4 w-4" />Reenviar</Button>}{(card?.allowed_actions || []).includes("temporary_password") && <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => action("temporary_password")}><KeyRound className="h-4 w-4" />Contraseña temporal</Button>}{(card?.allowed_actions || []).includes("block") && <Button type="button" size="sm" variant="outline" disabled={busy} onClick={() => action("block")}><LockKeyhole className="h-4 w-4" />Bloquear</Button>}{card?.user_id && <Button type="button" size="sm" variant="outline" onClick={() => navigate(`/usuarios?cuenta=${encodeURIComponent(card.user_id)}`)}><Eye className="h-4 w-4" />Ver cuenta</Button>}</div>}
-  </article>;
-}
+function AccessCard({ slot, form, card, setField }) { const navigate = useNavigate(); const prefix = `progenitor${slot}`; const state = accessState(card?.state || "no_access"); const Icon = iconFor(card?.state); const email = String(form[`${prefix}_email`] || "").trim(); const other = String(form[`progenitor${slot === 1 ? 2 : 1}_email`] || "").trim(); const existing = !!card?.user_id; const reason = existing ? "Esta cuenta se gestiona desde Usuarios y permisos → Seguridad." : !email ? "Añade un correo para poder preparar un acceso." : !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? "El correo no es válido." : email.toLowerCase() === other.toLowerCase() ? "El correo está repetido en la familia." : ""; return <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm" data-testid={`family-access-${slot}`}><div className="flex justify-between gap-3"><div><p className="text-xs font-bold uppercase text-slate-500">Progenitor/a {slot}</p><h4 className="mt-1 font-heading font-bold">{form[`${prefix}_nombre`] || "Sin nombre"}</h4><p className="mt-1 break-all text-sm text-slate-600">{form[`${prefix}_email`] || "Sin correo electrónico"}</p></div><span className={`inline-flex h-fit items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-bold ${stateClasses(state.tone)}`}><Icon className="h-4 w-4" />{state.label}</span></div><label className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm"><span><strong>Dar acceso a la aplicación</strong><small className="mt-1 block text-slate-600">{reason || "Solo prepara futuras altas; no modifica cuentas existentes."}</small></span><input type="checkbox" checked={!!form[`${prefix}_crear_acceso`]} disabled={!!reason} onChange={(event) => setField?.(`${prefix}_crear_acceso`, event.target.checked)} aria-label={`Dar acceso a la aplicación a progenitor ${slot}`} /></label>{existing && <Button type="button" size="sm" variant="outline" className="mt-4" onClick={() => navigate(`/usuarios?cuenta=${encodeURIComponent(card.user_id)}`)}><Eye className="h-4 w-4" />Ver cuenta</Button>}</article>; }
 
 export function FamilyAccesses({ form, setField, enabled }) {
   const [cards, setCards] = useState([]);
-  const reload = async () => {
-    if (!form.id || !enabled) return setCards([]);
-    try { setCards((await api.get(`/family-access/families/${form.id}`)).data.accesses || []); }
-    catch { setCards([]); }
-  };
-  useEffect(() => { reload(); }, [form.id, enabled]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!form.id || !enabled) { setCards([]); return; } api.get(`/family-access/families/${form.id}`).then(({ data }) => setCards(data.accesses || [])).catch(() => setCards([])); }, [form.id, enabled]);
   if (!enabled) return null;
-  return <section className="rounded-2xl border border-sky-100 bg-[#F5F8FC] p-4" aria-labelledby="family-access-title"><div className="mb-4 flex gap-3"><Users className="h-6 w-6 text-[#1B5C8F]" /><div><h3 id="family-access-title" className="font-heading text-lg font-extrabold text-[#0E3554]">Accesos familiares</h3><p className="text-sm text-slate-600">Cada progenitor dispone de credenciales, invitación y sesiones independientes.</p></div></div><div className="grid gap-4 lg:grid-cols-2">{[1, 2].map((slot) => <AccessCard key={slot} slot={slot} form={form} setField={setField} card={cards.find((item) => item.slot === slot)} reload={reload} />)}</div><p className="mt-3 flex gap-2 text-xs text-slate-600"><AlertTriangle className="h-4 w-4 shrink-0" />Guardar con modo automático puede encolar invitaciones elegibles. Los conflictos pasan a revisión sin envío.</p></section>;
+  return <section className="rounded-2xl border border-sky-100 bg-[#F5F8FC] p-4" aria-labelledby="family-access-title"><div className="mb-4 flex gap-3"><Users className="h-6 w-6 text-[#1B5C8F]" /><div><h3 id="family-access-title" className="font-heading text-lg font-extrabold text-[#0E3554]">Accesos familiares</h3><p className="text-sm text-slate-600">Información sincronizada desde Usuarios y permisos. Los accesos se crean únicamente allí.</p></div></div><div className="grid gap-4 lg:grid-cols-2">{[1, 2].map((slot) => <AccessCard key={slot} slot={slot} form={form} setField={setField} card={cards.find((item) => item.slot === slot)} />)}</div></section>;
 }
 
 export function FamilyAccessAdministration() {
