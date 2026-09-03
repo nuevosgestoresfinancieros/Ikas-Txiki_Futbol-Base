@@ -31,7 +31,7 @@ const deliveryStatusLabel = (status, t) => ({
   delivered_unknown: t("familyInvitationDeliveryUnknown"),
 }[status] || status);
 
-function AccessCard({ slot, form, card, setField, isPersisted, busy, onRequest }) {
+function AccessCard({ slot, form, card, setField, isPersisted, busy, saving, onRequest, onSave, onConfirmAndSave }) {
   const { t } = useI18n();
   const navigate = useNavigate();
   const prefix = `progenitor${slot}`;
@@ -72,16 +72,17 @@ function AccessCard({ slot, form, card, setField, isPersisted, busy, onRequest }
     <label className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm"><span><strong>{t("familyGrantAccess")}</strong><small className="mt-1 block text-slate-600">{actionReason || t("familyInvitationFutureOnly")}</small></span><input type="checkbox" checked={requested} disabled={existing} onChange={(event) => setField?.(`${prefix}_crear_acceso`, event.target.checked)} aria-label={`${t("familyGrantAccess")} ${slot}`} /></label>
     {card?.invitation_delivery?.status === "sent" && card?.state === "pending_activation" && <p className="mt-3 rounded-xl border border-sky-200 bg-sky-50 p-3 text-sm font-semibold text-sky-950">{t("familyInvitationSentPending")}</p>}
     {card?.invitation_delivery?.status && card.invitation_delivery.status !== "sent" && <p role="alert" className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm font-semibold text-amber-950">{t("familyInvitationDeliveryPrefix")} {deliveryStatusLabel(card.invitation_delivery.status, t)}: {card.invitation_delivery.error_detail || card.invitation_delivery.error || t("familyInvitationUnknownReason")}</p>}
-    {actionType && <div className="mt-4 space-y-2"><Button type="button" size="sm" variant={actionType === "resend" ? "outline" : "default"} className="w-full sm:w-auto" disabled={!actionEnabled || busy} onClick={() => onRequest({ slot, resend: actionType === "resend", email })} data-testid={`${actionType === "resend" ? "resend" : "send"}-family-invitation-${slot}`}><span className="inline-flex items-center gap-2">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : actionType === "resend" ? <RefreshCw className="h-4 w-4" /> : <Send className="h-4 w-4" />}{actionLabel}</span></Button>{!actionEnabled && actionReason && <p className="text-xs font-semibold text-slate-500">{actionReason}</p>}</div>}
+    {actionType && <div className="mt-4 space-y-2"><Button type="button" size="sm" variant={actionType === "resend" ? "outline" : "default"} className="w-full sm:w-auto" disabled={!actionEnabled || busy || saving} onClick={() => onRequest({ slot, resend: actionType === "resend", email })} data-testid={`${actionType === "resend" ? "resend" : "send"}-family-invitation-${slot}`}><span className="inline-flex items-center gap-2">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : actionType === "resend" ? <RefreshCw className="h-4 w-4" /> : <Send className="h-4 w-4" />}{actionLabel}</span></Button>{!actionEnabled && actionReason && <p className="text-xs font-semibold text-slate-500">{actionReason}</p>}{!isPersisted && onSave && <Button type="button" size="sm" variant="outline" className="w-full sm:w-auto" disabled={busy || saving} onClick={() => onSave(slot)} data-testid={`save-family-before-invitation-${slot}`}><span className="inline-flex items-center gap-2">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}{t("familyInvitationSaveAndContinue")}</span></Button>}{isPersisted && !emailConfirmed && validEmail && requested && onConfirmAndSave && <Button type="button" size="sm" variant="outline" className="w-full sm:w-auto" disabled={busy || saving} onClick={() => onConfirmAndSave(slot)} data-testid={`confirm-family-email-before-invitation-${slot}`}><span className="inline-flex items-center gap-2">{saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />}{t("familyInvitationConfirmAndSave")}</span></Button>}</div>}
     {existing && <Button type="button" size="sm" variant="outline" className="mt-4" onClick={() => navigate(`/usuarios?cuenta=${encodeURIComponent(card.user_id)}`)}><Eye className="h-4 w-4" />{t("viewAccount")}</Button>}
   </article>;
 }
 
-export function FamilyAccesses({ form, setField, enabled, isPersisted = false }) {
+export function FamilyAccesses({ form, setField, enabled, isPersisted = false, onSave, onConfirmAndSave }) {
   const { t } = useI18n();
   const [cards, setCards] = useState([]);
   const [confirmation, setConfirmation] = useState(null);
   const [busySlot, setBusySlot] = useState(null);
+  const [savingSlot, setSavingSlot] = useState(null);
   const [message, setMessage] = useState("");
   const loadCards = useCallback(async () => {
     if (!form.id || !enabled) { setCards([]); return; }
@@ -90,6 +91,28 @@ export function FamilyAccesses({ form, setField, enabled, isPersisted = false })
   }, [form.id, enabled]);
   useEffect(() => { loadCards().catch(() => setCards([])); }, [loadCards]);
   const requestInvitation = ({ slot, resend, email }) => setConfirmation({ slot, resend, email });
+  const saveBeforeInvitation = async (slot) => {
+    if (!onSave || savingSlot) return;
+    setSavingSlot(slot); setMessage("");
+    try {
+      await onSave();
+      await loadCards();
+      setMessage(t("familyInvitationSavedContinue"));
+    } catch (error) {
+      setMessage(safeAccessError(error));
+    } finally { setSavingSlot(null); }
+  };
+  const confirmAndSaveBeforeInvitation = async (slot) => {
+    if (!onConfirmAndSave || savingSlot) return;
+    setSavingSlot(slot); setMessage("");
+    try {
+      await onConfirmAndSave(slot);
+      await loadCards();
+      setMessage(t("familyInvitationSavedContinue"));
+    } catch (error) {
+      setMessage(safeAccessError(error));
+    } finally { setSavingSlot(null); }
+  };
   const sendInvitation = async () => {
     if (!confirmation || busySlot) return;
     const { slot, resend } = confirmation;
@@ -107,7 +130,7 @@ export function FamilyAccesses({ form, setField, enabled, isPersisted = false })
   };
   if (!enabled) return null;
   return <>
-    <section className="rounded-2xl border border-sky-100 bg-[#F5F8FC] p-4" aria-labelledby="family-access-title"><div className="mb-4 flex gap-3"><Users className="h-6 w-6 text-[#1B5C8F]" /><div><h3 id="family-access-title" className="font-heading text-lg font-extrabold text-[#0E3554]">{t("familyAccessesTitle")}</h3><p className="text-sm text-slate-600">{t("familyAccessesDescription")}</p></div></div>{message && <p role="status" aria-live="polite" className="mb-4 rounded-xl bg-slate-50 p-3 text-sm font-semibold">{message}</p>}<div className="grid gap-4 lg:grid-cols-2">{[1, 2].map((slot) => <AccessCard key={slot} slot={slot} form={form} setField={setField} isPersisted={isPersisted} busy={busySlot === slot} onRequest={requestInvitation} card={cards.find((item) => item.slot === slot)} />)}</div></section>
+    <section className="rounded-2xl border border-sky-100 bg-[#F5F8FC] p-4" aria-labelledby="family-access-title"><div className="mb-4 flex gap-3"><Users className="h-6 w-6 text-[#1B5C8F]" /><div><h3 id="family-access-title" className="font-heading text-lg font-extrabold text-[#0E3554]">{t("familyAccessesTitle")}</h3><p className="text-sm text-slate-600">{t("familyAccessesDescription")}</p></div></div>{message && <p role="status" aria-live="polite" className="mb-4 rounded-xl bg-slate-50 p-3 text-sm font-semibold">{message}</p>}<div className="grid gap-4 lg:grid-cols-2">{[1, 2].map((slot) => <AccessCard key={slot} slot={slot} form={form} setField={setField} isPersisted={isPersisted} busy={busySlot === slot} saving={savingSlot === slot} onSave={onSave ? saveBeforeInvitation : undefined} onConfirmAndSave={onConfirmAndSave ? confirmAndSaveBeforeInvitation : undefined} onRequest={requestInvitation} card={cards.find((item) => item.slot === slot)} />)}</div></section>
     <Dialog open={Boolean(confirmation)} onOpenChange={(open) => { if (!open && !busySlot) setConfirmation(null); }}><DialogContent><DialogHeader><DialogTitle>{confirmation?.resend ? t("familyInvitationConfirmResendTitle") : t("familyInvitationConfirmTitle")}</DialogTitle><DialogDescription>{confirmation?.resend ? t("familyInvitationConfirmResendDescription") : t("familyInvitationConfirmDescription")}</DialogDescription></DialogHeader><div className="flex items-center gap-3 rounded-xl border border-sky-100 bg-sky-50 p-3 text-sm font-semibold text-sky-950"><Mail className="h-5 w-5" /><span>{t("familyInvitationRecipient")} <strong>{maskedEmail(confirmation?.email)}</strong></span></div><DialogFooter><Button type="button" variant="outline" disabled={Boolean(busySlot)} onClick={() => setConfirmation(null)}>{t("cancel")}</Button><Button type="button" disabled={Boolean(busySlot)} onClick={sendInvitation}>{busySlot ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}{confirmation?.resend ? t("familyInvitationResend") : t("familyInvitationSend")}</Button></DialogFooter></DialogContent></Dialog>
   </>;
 }

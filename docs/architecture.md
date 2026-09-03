@@ -18,7 +18,7 @@ La publicación se realiza solo con autorización explícita. Antes de ella se r
 
 ## Ciclo de vida de invitaciones
 
-La provisión familiar y la administración de usuarios comparten el contrato de entrega SMTP. Primero se guarda la cuenta y el digest de la invitación; después se intenta enviar el mensaje. El resultado se registra con message_id y un purpose explícito. Los errores de transporte no deshacen el alta y permiten reenviar. La URL pública de activación entra por `/activar?token=...`; los enlaces heredados `/login?invitation=...` siguen redirigiendo al formulario. El token permanece válido mientras no caduque, se use o se cancele.
+La provisión familiar y la administración de usuarios comparten el contrato de entrega SMTP. Primero se guarda la cuenta y el digest de la invitación; después se intenta enviar el mensaje. El resultado se registra con message_id y un purpose explícito. Los errores de transporte no deshacen el alta y permiten reenviar. La ficha de Familias ofrece un guardado explícito desde la tarjeta cuando hay cambios pendientes y una confirmación explícita del correo cuando aún no está confirmada, pero el envío solo se habilita tras confirmar la persistencia. La URL pública de activación entra por `/activar?token=...`; los enlaces heredados `/login?invitation=...` siguen redirigiendo al formulario. El token permanece válido mientras no caduque, se use o se cancele.
 
 ## Autorizaciones familiares
 

@@ -39,11 +39,15 @@ const Families = () => {
   const set = (k) => (v) => { setIsPersisted(false); setForm((f) => ({ ...f, [k]: v })); };
   const openNew = () => { setForm(empty); setIsPersisted(false); setDialog(true); };
   const openEdit = (f) => { setForm(f); setIsPersisted(true); setDialog(true); };
-  const save = async () => {
-    const response = form.id ? await api.put(`/families/${form.id}`, form) : await api.post("/families", form);
+  const save = async ({ keepOpen = false, values = form } = {}) => {
+    const response = values.id ? await api.put(`/families/${values.id}`, values) : await api.post("/families", values);
     if (response?.data) setForm(response.data);
     setIsPersisted(true);
-    toast.success(t("saved")); setDialog(false); load();
+    toast.success(t("saved")); if (!keepOpen) setDialog(false); await load();
+  };
+  const confirmEmailAndSave = async (slot) => {
+    const key = `progenitor${slot}_email_confirmado`;
+    await save({ keepOpen: true, values: { ...form, [key]: true } });
   };
   const remove = async (f) => { if (!window.confirm(t("confirmDelete"))) return; await api.delete(`/families/${f.id}`); toast.success(t("deleted")); load(); };
 
@@ -114,10 +118,10 @@ const Families = () => {
             </div>
             <Area label={t("notes")} value={form.observaciones} onChange={set("observaciones")} testid="fam-obs" />
           </div>
-          <FamilyAccesses form={form} setField={(key, value) => { setIsPersisted(false); setForm((current) => ({ ...current, [key]: value })); }} enabled={canManageFamilyAccess} isPersisted={isPersisted} />
+          <FamilyAccesses form={form} setField={(key, value) => { setIsPersisted(false); setForm((current) => ({ ...current, [key]: value })); }} enabled={canManageFamilyAccess} isPersisted={isPersisted} onSave={() => save({ keepOpen: true })} onConfirmAndSave={confirmEmailAndSave} />
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialog(false)}>{t("cancel")}</Button>
-            <Button onClick={save} data-testid="family-save-btn" className="h-11 px-6">{t("save")}</Button>
+            <Button onClick={() => save()} data-testid="family-save-btn" className="h-11 px-6">{t("save")}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

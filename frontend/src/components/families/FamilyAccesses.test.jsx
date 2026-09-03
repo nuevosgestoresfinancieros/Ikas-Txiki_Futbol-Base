@@ -80,6 +80,21 @@ test("disables an unsaved invitation and explains that the family must be saved 
   await act(async () => root.unmount());
 });
 
+test("offers an explicit save action before sending when the family has pending changes", async () => {
+  api.get.mockResolvedValue({ data: { accesses: [{ slot: 1, state: "eligible", allowed_actions: ["generate_invitation"] }] } });
+  const onSave = jest.fn().mockResolvedValue({ id: "family-1" });
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  await act(async () => root.render(<I18nProvider><FamilyAccesses form={form} setField={jest.fn()} enabled isPersisted={false} onSave={onSave} /></I18nProvider>));
+  await act(async () => { await Promise.resolve(); });
+  const save = host.querySelector("[data-testid='save-family-before-invitation-1']");
+  expect(save).toBeTruthy();
+  expect(save.textContent).toContain("Guardar ficha para enviar");
+  await act(async () => save.click());
+  expect(onSave).toHaveBeenCalledTimes(1);
+  await act(async () => root.unmount());
+});
+
 test("resends a failed invitation and does not claim delivery when the API returns pending", async () => {
   api.get.mockResolvedValue({ data: { accesses: [{
     slot: 1, state: "pending_activation", user_id: "user-1",
@@ -115,6 +130,22 @@ test("keeps an unconfirmed email disabled even after the family was saved", asyn
   const send = host.querySelector("[data-testid='send-family-invitation-1']");
   expect(send.disabled).toBe(true);
   expect(host.textContent).toContain("Confirma el correo en la ficha antes de enviar.");
+  await act(async () => root.unmount());
+});
+
+test("offers an explicit confirmation-and-save action for a valid unconfirmed email", async () => {
+  api.get.mockResolvedValue({ data: { accesses: [{ slot: 1, state: "email_unconfirmed", email_confirmed: false, allowed_actions: ["generate_invitation"] }] } });
+  const onConfirmAndSave = jest.fn().mockResolvedValue({ id: "family-1" });
+  const host = document.createElement("div");
+  const root = createRoot(host);
+  await act(async () => root.render(<I18nProvider><FamilyAccesses form={form} setField={jest.fn()} enabled isPersisted onConfirmAndSave={onConfirmAndSave} /></I18nProvider>));
+  await act(async () => { await Promise.resolve(); });
+  const confirm = host.querySelector("[data-testid='confirm-family-email-before-invitation-1']");
+  expect(confirm).toBeTruthy();
+  expect(confirm.textContent).toContain("Confirmar correo y guardar");
+  await act(async () => confirm.click());
+  expect(onConfirmAndSave).toHaveBeenCalledWith(1);
+  expect(host.textContent).toContain("Ficha guardada. Ya puedes enviar la invitación.");
   await act(async () => root.unmount());
 });
 
