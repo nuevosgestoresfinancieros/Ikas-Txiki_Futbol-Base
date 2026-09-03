@@ -9,6 +9,7 @@ from urllib import request as urllib_request
 from html import escape
 from datetime import datetime, timezone
 from email.message import EmailMessage
+from email.utils import make_msgid
 from typing import Mapping, Optional
 from uuid import uuid4
 from brand_assets import BRAND_BLUE, BRAND_NAME, CLUB_NAME, logo_bytes
@@ -163,6 +164,9 @@ def dispatch_email(recipient: str, subject: str, body: str,
         message["From"] = env["SMTP_FROM"]
         message["To"] = recipient
         message["Subject"] = subject
+        # Store a provider-traceable identifier in the delivery result.
+        message_id = make_msgid()
+        message["Message-ID"] = message_id
         message.set_content(body)
         safe_body = "<br>".join(escape(body).splitlines())
         action_html = ""
@@ -205,6 +209,6 @@ def dispatch_email(recipient: str, subject: str, body: str,
             if env.get("SMTP_USER"):
                 client.login(env["SMTP_USER"], env.get("SMTP_PASSWORD", ""))
             client.send_message(message)
-        return {**base, "status": "sent", "error": None, "sent_at": now_iso()}
+        return {**base, "status": "sent", "error": None, "sent_at": now_iso(), "message_id": message_id}
     except Exception as error:
-        return {**base, "status": "failed", "error": type(error).__name__, "sent_at": None}
+        return {**base, "status": "failed", "error": type(error).__name__, "sent_at": None, "message_id": locals().get("message_id")}
