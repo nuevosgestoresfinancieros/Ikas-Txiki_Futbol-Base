@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import smtplib
 import ssl
+from email.utils import parseaddr
 import json
 import re
 from urllib import request as urllib_request
@@ -137,7 +138,7 @@ def smtp_configuration(environment: Optional[Mapping[str, str]] = None) -> dict:
         errors.append("smtp_host_missing")
     if not sender:
         errors.append("smtp_from_missing")
-    elif not _EMAIL_RE.fullmatch(sender):
+    elif not _EMAIL_RE.fullmatch(parseaddr(sender)[1]):
         errors.append("smtp_from_invalid")
     try:
         port = int(str(env.get("SMTP_PORT") or "587"))
@@ -229,6 +230,9 @@ def dispatch_email(recipient: str, subject: str, body: str,
     base = {"id": str(uuid4()), "channel": "email", "recipient": recipient,
             "created_at": now_iso(), "provider": "smtp", "message_id": None,
             "user_id": user_id, "purpose": purpose}
+    if recipient is None or (isinstance(recipient, str) and not recipient.strip()):
+        return {**base, "status": "pending", "error": "recipient_missing", "sent_at": None,
+                "error_detail": "No se ha indicado un destinatario de correo"}
     if not isinstance(recipient, str) or not _EMAIL_RE.fullmatch(recipient.strip()):
         return {**base, "status": "failed", "error": "recipient_invalid", "sent_at": None}
     if not config["configured"]:
@@ -240,7 +244,7 @@ def dispatch_email(recipient: str, subject: str, body: str,
         message["From"] = env["SMTP_FROM"]
         message["To"] = recipient
         message["Subject"] = subject
-        sender_domain = str(env["SMTP_FROM"]).rsplit("@", 1)[-1]
+        sender_domain = parseaddr(str(env["SMTP_FROM"]))[1].rsplit("@", 1)[-1]
         message_id = make_msgid(domain=sender_domain)
         message["Message-ID"] = message_id
         message.set_content(body)

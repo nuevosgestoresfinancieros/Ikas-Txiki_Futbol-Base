@@ -42,7 +42,7 @@ def build_family_access_router(
 
     def actor() -> dict:
         current = dict(actor_getter() or {})
-        if current.get("role") != "admin":
+        if current.get("role") != "admin" or current.get("active", True) is False:
             raise HTTPException(status_code=403, detail="Solo administración puede gestionar accesos familiares")
         return current
 

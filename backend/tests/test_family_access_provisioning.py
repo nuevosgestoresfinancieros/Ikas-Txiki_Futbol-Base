@@ -7,7 +7,8 @@ import pytest
 import family_access_service as family_service
 
 from family_access_service import (
-    campaign_preflight, classify_parent, enqueue_family, get_mode, parent_data, public_access, set_mode,
+    campaign_preflight, classify_parent, enqueue_family, get_mode, manual_invitation,
+    parent_data, public_access, set_mode,
 )
 from user_security_service import issue_token
 
@@ -217,3 +218,39 @@ def test_disabled_worker_records_pending_delivery_for_retry(monkeypatch):
     finish.assert_awaited_once_with(
         db, job, "review_required", "delivery_disabled", delivery_state="pending",
     )
+
+
+@pytest.mark.parametrize("delivery", [
+    {"status": "sent", "message_id": "<fixture@example.test>"},
+    {"status": "pending", "error": "delivery_disabled", "error_detail": "SMTP desactivado"},
+    {"status": "failed", "error": "smtp_connection_error"},
+])
+def test_manual_invitation_records_mock_delivery_and_never_persists_plain_token(monkeypatch, delivery):
+    record = {"digest": "fixture-digest", "expires_at": "2099-01-01T00:00:00+00:00",
+              "created_at": "2026-01-01T00:00:00+00:00", "used_at": None, "cancelled_at": None}
+    user_record = {"id": "user-1", "username": "ana.1", "invitation": None,
+                   "account_status": "pending_activation", "active": False}
+    updates, sent = [], []
+    db = SimpleNamespace(
+        users=SimpleNamespace(update_one=AsyncMock(side_effect=lambda query, update: updates.append(update))),
+        delivery_logs=SimpleNamespace(insert_one=AsyncMock()),
+        internal_events=SimpleNamespace(insert_one=AsyncMock()),
+    )
+    decision = {"slot": 1, "name": "Ana Uno", "email": "ana@example.test", "phone": None,
+                "requested": True, "email_confirmed": True, "state": "eligible", "user_id": None}
+    monkeypatch.setattr(family_service, "decisions_for_family", AsyncMock(return_value=[decision, {"slot": 2, "state": "no_access"}]))
+    monkeypatch.setattr(family_service, "prepare_account", AsyncMock(return_value=user_record))
+    monkeypatch.setattr(family_service, "issue_token", lambda *_args, **_kwargs: ("fixture-plain-token", dict(record)))
+
+    def dispatcher(*args, **kwargs):
+        sent.append((args, kwargs))
+        return {"recipient": args[0], **delivery}
+
+    result = asyncio.run(manual_invitation(
+        db, family(), 1, {"id": "admin", "role": "admin"}, "secret",
+        lambda value: value, dispatcher, "https://app.example.test", allow_delivery=True,
+    ))
+    assert result["delivery"] == delivery["status"]
+    assert sent[0][1]["action_url"] == "https://app.example.test/activar?token=fixture-plain-token"
+    assert "fixture-plain-token" not in str(updates)
+    assert "fixture-plain-token" not in str(db.delivery_logs.insert_one.await_args.args[0])

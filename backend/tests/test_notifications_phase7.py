@@ -40,6 +40,21 @@ def test_email_without_provider_is_recorded_pending_not_sent():
     assert result["error"] == "smtp_configuration_invalid"
 
 
+def test_email_without_recipient_is_recorded_pending_with_explicit_reason():
+    result = dispatch_email(None, "Subject", "Body", environment={})
+    assert result["status"] == "pending"
+    assert result["error"] == "recipient_missing"
+    assert result["sent_at"] is None
+
+
+def test_smtp_from_accepts_display_name():
+    result = smtp_configuration({
+        "SMTP_HOST": "smtp.example.test",
+        "SMTP_FROM": "Ikas-Txiki <ikasfutbase@gmail.com>",
+    })
+    assert result["configured"] is True
+
+
 def test_telegram_never_uses_phone_or_sends_without_a_linked_chat():
     assert dispatch_telegram("", "Aviso", {"TELEGRAM_BOT_TOKEN": "secret"})["error"] == "telegram_not_linked"
     assert dispatch_telegram("123", "Aviso", {})["error"] == "provider_not_configured"
@@ -91,6 +106,32 @@ def test_configured_email_is_sent_only_after_provider_success():
     assert "Ikas-Txiki Manager" in rendered
     assert "Zornotzako Futbol Eskola" in rendered
     assert "Content-ID: <ikastxiki-logo>" in rendered
+
+
+def test_configured_email_with_display_name_has_a_valid_message_id():
+    sent = []
+
+    class FakeSMTP:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def send_message(self, message):
+            sent.append(message)
+
+    result = dispatch_email(
+        "family@example.test", "Subject", "Body",
+        {"SMTP_HOST": "smtp.example.test", "SMTP_FROM": "Ikas-Txiki <ikasfutbase@gmail.com>", "SMTP_STARTTLS": "false"},
+        FakeSMTP,
+    )
+    assert result["status"] == "sent"
+    assert sent[0]["From"] == "Ikas-Txiki <ikasfutbase@gmail.com>"
+    assert sent[0]["Message-ID"].endswith("@gmail.com>")
 
 
 @pytest.mark.parametrize("role", ["coordinator", "coach", "family", "player"])

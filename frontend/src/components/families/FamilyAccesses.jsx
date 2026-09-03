@@ -1,21 +1,115 @@
-import { useEffect, useState } from "react";
-import { CheckCircle2, Clock3, Eye, ShieldAlert, ShieldCheck, Users } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { CheckCircle2, Clock3, Eye, Loader2, Mail, RefreshCw, Send, ShieldAlert, ShieldCheck, Users } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import api from "@/api";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useI18n } from "@/i18n";
 import { accessState, safeAccessError, stateClasses } from "@/pages/familyAccessView";
 
-const iconFor = (state) => state === "active" ? CheckCircle2 : state === "pending_activation" ? Clock3 : ["blocked", "duplicate_email", "email_conflict", "ambiguous_existing_account"].includes(state) ? ShieldAlert : ShieldCheck;
-function AccessCard({ slot, form, card, setField }) { const navigate = useNavigate(); const prefix = `progenitor${slot}`; const state = accessState(card?.state || "no_access"); const Icon = iconFor(card?.state); const email = String(form[`${prefix}_email`] || "").trim(); const other = String(form[`progenitor${slot === 1 ? 2 : 1}_email`] || "").trim(); const existing = !!card?.user_id; const reason = existing ? "Esta cuenta se gestiona desde Usuarios y permisos → Seguridad." : !email ? "Añade un correo para poder preparar un acceso." : !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? "El correo no es válido." : email.toLowerCase() === other.toLowerCase() ? "El correo está repetido en la familia." : ""; return <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm" data-testid={`family-access-${slot}`}><div className="flex justify-between gap-3"><div><p className="text-xs font-bold uppercase text-slate-500">Progenitor/a {slot}</p><h4 className="mt-1 font-heading font-bold">{form[`${prefix}_nombre`] || "Sin nombre"}</h4><p className="mt-1 break-all text-sm text-slate-600">{form[`${prefix}_email`] || "Sin correo electrónico"}</p></div><span className={`inline-flex h-fit items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-bold ${stateClasses(state.tone)}`}><Icon className="h-4 w-4" />{state.label}</span></div><label className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm"><span><strong>Dar acceso a la aplicación</strong><small className="mt-1 block text-slate-600">{reason || "Solo prepara futuras altas; no modifica cuentas existentes."}</small></span><input type="checkbox" checked={!!form[`${prefix}_crear_acceso`]} disabled={!!reason} onChange={(event) => setField?.(`${prefix}_crear_acceso`, event.target.checked)} aria-label={`Dar acceso a la aplicación a progenitor ${slot}`} /></label>{card?.invitation_delivery?.status === "sent" && card?.state === "pending_activation" && <p className="mt-3 rounded-xl border border-sky-200 bg-sky-50 p-3 text-sm font-semibold text-sky-950">Invitación enviada. La cuenta seguirá pendiente hasta que la familia cree su contraseña.</p>}
-{card?.invitation_delivery?.status && card.invitation_delivery.status !== "sent" && <p role="alert" className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm font-semibold text-amber-950">Correo {card.invitation_delivery.status}: {card.invitation_delivery.error_detail || card.invitation_delivery.error || "motivo no disponible"}. La cuenta se puede reenviar desde Usuarios y permisos.</p>}
-{existing && <Button type="button" size="sm" variant="outline" className="mt-4" onClick={() => navigate(`/usuarios?cuenta=${encodeURIComponent(card.user_id)}`)}><Eye className="h-4 w-4" />Ver cuenta</Button>}</article>; }
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-export function FamilyAccesses({ form, setField, enabled }) {
+const iconFor = (state) => state === "active" ? CheckCircle2 : state === "pending_activation" ? Clock3 : ["blocked", "duplicate_email", "email_conflict", "ambiguous_existing_account"].includes(state) ? ShieldAlert : ShieldCheck;
+
+const invitationAction = (card, email) => {
+  if (!card) return null;
+  if (card?.state === "pending_activation") return "resend";
+  if (["eligible", "email_unconfirmed", "invitation_expired"].includes(card?.state)) return "invite";
+  if (card?.state === "no_access" && EMAIL_RE.test(email)) return "invite";
+  return null;
+};
+
+const maskedEmail = (value) => {
+  const email = String(value || "").trim();
+  const [local, domain] = email.split("@");
+  return local && domain ? `${local.slice(0, 1)}***@${domain}` : "correo no válido";
+};
+
+const deliveryStatusLabel = (status, t) => ({
+  pending: t("familyInvitationDeliveryPending"),
+  failed: t("familyInvitationDeliveryFailed"),
+  delivered_unknown: t("familyInvitationDeliveryUnknown"),
+}[status] || status);
+
+function AccessCard({ slot, form, card, setField, isPersisted, busy, onRequest }) {
+  const { t } = useI18n();
+  const navigate = useNavigate();
+  const prefix = `progenitor${slot}`;
+  const state = accessState(card?.state || "no_access");
+  const Icon = iconFor(card?.state);
+  const email = String(form[`${prefix}_email`] || "").trim();
+  const other = String(form[`progenitor${slot === 1 ? 2 : 1}_email`] || "").trim();
+  const existing = !!card?.user_id;
+  const actionType = invitationAction(card, email);
+  const validEmail = EMAIL_RE.test(email);
+  const requested = Boolean(form[`${prefix}_crear_acceso`] || existing);
+  const emailConfirmed = card?.email_confirmed !== false;
+  const actionEnabled = Boolean(
+    actionType && isPersisted && requested && validEmail && emailConfirmed &&
+    ["eligible", "pending_activation", "invitation_expired"].includes(card?.state),
+  );
+  const actionReason = !isPersisted
+    ? t("familyInvitationSaveFirst")
+    : !requested
+      ? t("familyInvitationEnableFirst")
+      : !email
+        ? t("familyInvitationMissingEmail")
+          : !validEmail
+            ? t("familyInvitationInvalidEmail")
+            : email.toLowerCase() === other.toLowerCase()
+              ? t("familyInvitationDuplicateEmail")
+              : !actionType
+                ? existing ? t("familyInvitationManagedInUsers") : t("familyInvitationUnavailable")
+                : !emailConfirmed
+                  ? t("familyInvitationUnconfirmedEmail")
+                  : "";
+  const actionLabel = actionType === "resend"
+    ? t("familyInvitationResend")
+    : card?.state === "invitation_expired" ? t("familyInvitationNew") : t("familyInvitationSend");
+
+  return <article className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm" data-testid={`family-access-${slot}`}>
+    <div className="flex justify-between gap-3"><div><p className="text-xs font-bold uppercase text-slate-500">{t("familyParentLabel")} {slot}</p><h4 className="mt-1 font-heading font-bold">{form[`${prefix}_nombre`] || t("noName")}</h4><p className="mt-1 break-all text-sm text-slate-600">{form[`${prefix}_email`] || t("noEmail")}</p></div><span className={`inline-flex h-fit items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-bold ${stateClasses(state.tone)}`}><Icon className="h-4 w-4" />{state.label}</span></div>
+    <label className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm"><span><strong>{t("familyGrantAccess")}</strong><small className="mt-1 block text-slate-600">{actionReason || t("familyInvitationFutureOnly")}</small></span><input type="checkbox" checked={requested} disabled={existing} onChange={(event) => setField?.(`${prefix}_crear_acceso`, event.target.checked)} aria-label={`${t("familyGrantAccess")} ${slot}`} /></label>
+    {card?.invitation_delivery?.status === "sent" && card?.state === "pending_activation" && <p className="mt-3 rounded-xl border border-sky-200 bg-sky-50 p-3 text-sm font-semibold text-sky-950">{t("familyInvitationSentPending")}</p>}
+    {card?.invitation_delivery?.status && card.invitation_delivery.status !== "sent" && <p role="alert" className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm font-semibold text-amber-950">{t("familyInvitationDeliveryPrefix")} {deliveryStatusLabel(card.invitation_delivery.status, t)}: {card.invitation_delivery.error_detail || card.invitation_delivery.error || t("familyInvitationUnknownReason")}</p>}
+    {actionType && <div className="mt-4 space-y-2"><Button type="button" size="sm" variant={actionType === "resend" ? "outline" : "default"} className="w-full sm:w-auto" disabled={!actionEnabled || busy} onClick={() => onRequest({ slot, resend: actionType === "resend", email })} data-testid={`${actionType === "resend" ? "resend" : "send"}-family-invitation-${slot}`}><span className="inline-flex items-center gap-2">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : actionType === "resend" ? <RefreshCw className="h-4 w-4" /> : <Send className="h-4 w-4" />}{actionLabel}</span></Button>{!actionEnabled && actionReason && <p className="text-xs font-semibold text-slate-500">{actionReason}</p>}</div>}
+    {existing && <Button type="button" size="sm" variant="outline" className="mt-4" onClick={() => navigate(`/usuarios?cuenta=${encodeURIComponent(card.user_id)}`)}><Eye className="h-4 w-4" />{t("viewAccount")}</Button>}
+  </article>;
+}
+
+export function FamilyAccesses({ form, setField, enabled, isPersisted = false }) {
+  const { t } = useI18n();
   const [cards, setCards] = useState([]);
-  useEffect(() => { if (!form.id || !enabled) { setCards([]); return; } api.get(`/family-access/families/${form.id}`).then(({ data }) => setCards(data.accesses || [])).catch(() => setCards([])); }, [form.id, enabled]);
+  const [confirmation, setConfirmation] = useState(null);
+  const [busySlot, setBusySlot] = useState(null);
+  const [message, setMessage] = useState("");
+  const loadCards = useCallback(async () => {
+    if (!form.id || !enabled) { setCards([]); return; }
+    const { data } = await api.get(`/family-access/families/${form.id}`);
+    setCards(data.accesses || []);
+  }, [form.id, enabled]);
+  useEffect(() => { loadCards().catch(() => setCards([])); }, [loadCards]);
+  const requestInvitation = ({ slot, resend, email }) => setConfirmation({ slot, resend, email });
+  const sendInvitation = async () => {
+    if (!confirmation || busySlot) return;
+    const { slot, resend } = confirmation;
+    setBusySlot(slot); setMessage("");
+    try {
+      const path = resend ? "invitation/resend" : "invitation";
+      const confirmationText = resend ? "REENVIAR INVITACIÓN" : "ENVIAR INVITACIÓN";
+      const { data } = await api.post(`/family-access/families/${form.id}/${slot}/${path}`, { confirmation: confirmationText });
+      await loadCards();
+      setMessage(data?.delivery === "sent" ? t("familyInvitationSent") : `${t("familyInvitationNotSent")} ${data?.delivery_error_detail || data?.delivery_error || t("familyInvitationUnknownReason")}`);
+      setConfirmation(null);
+    } catch (error) {
+      setMessage(safeAccessError(error));
+    } finally { setBusySlot(null); }
+  };
   if (!enabled) return null;
-  return <section className="rounded-2xl border border-sky-100 bg-[#F5F8FC] p-4" aria-labelledby="family-access-title"><div className="mb-4 flex gap-3"><Users className="h-6 w-6 text-[#1B5C8F]" /><div><h3 id="family-access-title" className="font-heading text-lg font-extrabold text-[#0E3554]">Accesos familiares</h3><p className="text-sm text-slate-600">Información sincronizada desde Usuarios y permisos. Los accesos se crean únicamente allí.</p></div></div><div className="grid gap-4 lg:grid-cols-2">{[1, 2].map((slot) => <AccessCard key={slot} slot={slot} form={form} setField={setField} card={cards.find((item) => item.slot === slot)} />)}</div></section>;
+  return <>
+    <section className="rounded-2xl border border-sky-100 bg-[#F5F8FC] p-4" aria-labelledby="family-access-title"><div className="mb-4 flex gap-3"><Users className="h-6 w-6 text-[#1B5C8F]" /><div><h3 id="family-access-title" className="font-heading text-lg font-extrabold text-[#0E3554]">{t("familyAccessesTitle")}</h3><p className="text-sm text-slate-600">{t("familyAccessesDescription")}</p></div></div>{message && <p role="status" aria-live="polite" className="mb-4 rounded-xl bg-slate-50 p-3 text-sm font-semibold">{message}</p>}<div className="grid gap-4 lg:grid-cols-2">{[1, 2].map((slot) => <AccessCard key={slot} slot={slot} form={form} setField={setField} isPersisted={isPersisted} busy={busySlot === slot} onRequest={requestInvitation} card={cards.find((item) => item.slot === slot)} />)}</div></section>
+    <Dialog open={Boolean(confirmation)} onOpenChange={(open) => { if (!open && !busySlot) setConfirmation(null); }}><DialogContent><DialogHeader><DialogTitle>{confirmation?.resend ? t("familyInvitationConfirmResendTitle") : t("familyInvitationConfirmTitle")}</DialogTitle><DialogDescription>{confirmation?.resend ? t("familyInvitationConfirmResendDescription") : t("familyInvitationConfirmDescription")}</DialogDescription></DialogHeader><div className="flex items-center gap-3 rounded-xl border border-sky-100 bg-sky-50 p-3 text-sm font-semibold text-sky-950"><Mail className="h-5 w-5" /><span>{t("familyInvitationRecipient")} <strong>{maskedEmail(confirmation?.email)}</strong></span></div><DialogFooter><Button type="button" variant="outline" disabled={Boolean(busySlot)} onClick={() => setConfirmation(null)}>{t("cancel")}</Button><Button type="button" disabled={Boolean(busySlot)} onClick={sendInvitation}>{busySlot ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}{confirmation?.resend ? t("familyInvitationResend") : t("familyInvitationSend")}</Button></DialogFooter></DialogContent></Dialog>
+  </>;
 }
 
 export function FamilyAccessAdministration() {
@@ -32,4 +126,3 @@ export function FamilyAccessAdministration() {
   const confirm = async (campaign) => { if (window.prompt("Escribe exactamente: CONFIRMAR APROVISIONAMIENTO") !== "CONFIRMAR APROVISIONAMIENTO") return; setBusy(true); try { await api.post(`/family-access-campaigns/${campaign.id}/confirm`, { preflight_fingerprint: campaign.preflight_fingerprint, confirmation: "CONFIRMAR APROVISIONAMIENTO" }); await load(); setMessage("Campaña confirmada y encolada."); } catch (error) { setMessage(safeAccessError(error)); } finally { setBusy(false); } };
   return <section className="mb-6 space-y-4 rounded-2xl border border-sky-100 bg-white p-5 shadow-sm" data-testid="family-access-administration"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-wider text-sky-700">Administración</p><h2 className="font-heading text-xl font-extrabold text-[#0E3554]">Aprovisionamiento familiar</h2><p className="text-sm text-slate-600">Modo actual: <strong>{mode?.mode === "automatic" ? "Automático" : "Manual"}</strong>. Entrega técnica: <strong>{mode?.delivery_enabled ? "habilitada" : "desactivada"}</strong>.</p></div><aside className="basis-full rounded-xl border border-sky-200 bg-sky-50 text-slate-800" aria-labelledby="family-provisioning-guide-title"><Button type="button" variant="ghost" className="flex min-h-11 w-full justify-between rounded-xl px-4 text-left font-bold text-[#0E3554] focus-visible:ring-2 focus-visible:ring-sky-700 focus-visible:ring-offset-2" aria-expanded={guideOpen} aria-controls="family-provisioning-guide-content" onClick={() => setGuideOpen((open) => !open)}><span id="family-provisioning-guide-title">{t("familyProvisioningGuideTitle")}</span><span aria-hidden="true">{guideOpen ? "−" : "+"}</span></Button>{guideOpen && <div id="family-provisioning-guide-content" className="space-y-4 border-t border-sky-200 p-4 text-sm"><div className="grid gap-3 md:grid-cols-3"><p><strong>{t("familyProvisioningManualTitle")}</strong><br />{t("familyProvisioningManualDescription")}</p><p><strong>{t("familyProvisioningDeliveryTitle")}</strong><br />{t("familyProvisioningDeliveryDescription")}</p><p><strong>{t("familyProvisioningAutomaticTitle")}</strong><br />{t("familyProvisioningAutomaticDescription")}</p></div><p><strong>{t("familyProvisioningPreflightTitle")}</strong> {t("familyProvisioningPreflightDescription")}</p><section className="rounded-lg border border-sky-200 bg-white p-3" aria-labelledby="family-users-permissions-title"><h3 id="family-users-permissions-title" className="font-bold text-[#0E3554]">{t("familyProvisioningUsersPermissionsTitle")}</h3><div className="mt-3 grid items-center gap-2 text-center sm:grid-cols-5"><div className="rounded-lg bg-sky-50 p-2 font-semibold">{t("familyProvisioningParentOne")}</div><span aria-hidden="true">→</span><div className="rounded-lg bg-sky-100 p-2 font-semibold">{t("familyProvisioningFamilyRecord")}</div><span aria-hidden="true">→</span><div className="rounded-lg bg-sky-50 p-2 font-semibold">{t("familyProvisioningParentTwo")}</div></div><p className="mt-3">{t("familyProvisioningUsersPermissionsDescription")}</p><ul className="mt-2 list-disc space-y-1 pl-5"><li>{t("familyProvisioningSharedFamily")}</li><li>{t("familyProvisioningSeparateCredentials")}</li><li>{t("familyProvisioningUsersPermissionsManagement")}</li><li>{t("familyProvisioningFamilyRecordDecision")}</li><li>{t("familyProvisioningPlayerEmailNotice")}</li><li>{t("familyProvisioningDistinctEmails")}</li></ul></section><ol className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4" aria-label={t("familyProvisioningFlowLabel")}>{["familyProvisioningStepOne", "familyProvisioningStepTwo", "familyProvisioningStepThree", "familyProvisioningStepFour"].map((key, index) => <li key={key} className="flex gap-2 rounded-lg bg-white p-3"><span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-sky-700 text-xs font-bold text-white">{index + 1}</span><span>{t(key)}</span></li>)}</ol><p className="rounded-lg border border-amber-300 bg-amber-50 p-3 font-semibold text-amber-950"><ShieldAlert className="mr-2 inline h-4 w-4" />{t("familyProvisioningSafetyNotice")}</p></div>}</aside><div className="flex flex-wrap gap-2"><Button type="button" variant="outline" disabled={busy || !mode} onClick={toggleMode}>{mode?.mode === "automatic" ? "Desactivar automático" : "Activar automático"}</Button><Button type="button" disabled={busy} onClick={preflight}><ShieldCheck className="h-4 w-4" />Crear preflight</Button></div></div>{message && <p role="status" aria-live="polite" className="rounded-xl bg-slate-50 p-3 text-sm font-semibold">{message}</p>}<div className="space-y-3">{campaigns.slice(0, 5).map((campaign) => <article key={campaign.id} className="rounded-xl border p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><strong>Campaña {campaign.id.slice(0, 8)}</strong><p className="text-xs text-slate-500">{campaign.status}</p></div>{campaign.status === "confirmation_required" && <Button type="button" size="sm" onClick={() => confirm(campaign)} disabled={busy}>Confirmar una vez</Button>}</div><dl className="mt-3 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">{Object.entries(campaign.summary || {}).map(([key, value]) => <div key={key} className="rounded-lg bg-slate-50 p-2"><dt className="text-xs text-slate-500">{key.replaceAll("_", " ")}</dt><dd className="font-bold">{value}</dd></div>)}</dl></article>)}</div></section>;
 }
-
