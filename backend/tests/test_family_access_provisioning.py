@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+import family_access_service as family_service
 
 from family_access_service import (
     campaign_preflight, classify_parent, enqueue_family, get_mode, parent_data, public_access, set_mode,
@@ -166,3 +167,53 @@ def test_two_parent_jobs_are_independent_and_repeated_save_is_idempotent():
     assert [item["job_id"] for item in first] == [item["job_id"] for item in second]
     assert all(row["family_id"] == "family-1" for row in jobs.rows)
     assert len(events.rows) == 2
+
+
+def test_disabled_worker_records_pending_delivery_for_retry(monkeypatch):
+    job = {
+        "id": "job-1", "family_id": "family-1", "family_contact_slot": 1,
+        "campaign_id": None,
+    }
+    user_record = {
+        "id": "user-1", "username": "ana.1", "invitation": None,
+        "account_status": "pending_activation", "active": False,
+    }
+    decision = {
+        "slot": 1, "name": "Ana Uno", "email": "ana@example.test",
+        "phone": None, "state": "eligible",
+    }
+    db = SimpleNamespace(
+        families=SimpleNamespace(find_one=AsyncMock(return_value=family())),
+        users=SimpleNamespace(update_one=AsyncMock()),
+        delivery_logs=SimpleNamespace(insert_one=AsyncMock()),
+    )
+    finish = AsyncMock()
+    monkeypatch.delenv("FAMILY_ACCESS_EMAIL_DELIVERY_ENABLED", raising=False)
+    monkeypatch.setattr(family_service, "claim_job", AsyncMock(return_value=job))
+    monkeypatch.setattr(family_service, "_rate_allowed", AsyncMock(return_value=True))
+    monkeypatch.setattr(family_service, "prepare_account", AsyncMock(return_value=user_record))
+    monkeypatch.setattr(family_service, "decisions_for_family", AsyncMock(return_value=[decision, {
+        "slot": 2, "state": "no_access",
+    }]))
+    monkeypatch.setattr(family_service, "_finish_job", finish)
+
+    result = asyncio.run(family_service.process_one_job(
+        db, "worker-1", {"id": "admin", "role": "admin"}, "test-secret",
+        lambda value: value, lambda *_args, **_kwargs: {"status": "sent"},
+        "https://app.example.test", allow_delivery=False,
+    ))
+
+    assert result == {"job_id": "job-1", "status": "review_required", "result_code": "delivery_disabled"}
+    log = db.delivery_logs.insert_one.await_args.args[0]
+    assert log["status"] == "pending"
+    assert log["error"] == "delivery_disabled"
+    assert log["recipient"] == "ana@example.test"
+    assert log["user_id"] == "user-1"
+    assert log["purpose"] == "family_account_activation"
+    assert {"created_at", "sent_at", "message_id"} <= log.keys()
+    assert "token" not in str(log).lower()
+    delivery_update = db.users.update_one.await_args_list[-1].args[1]
+    assert delivery_update["$set"]["invitation_delivery"]["status"] == "pending"
+    finish.assert_awaited_once_with(
+        db, job, "review_required", "delivery_disabled", delivery_state="pending",
+    )

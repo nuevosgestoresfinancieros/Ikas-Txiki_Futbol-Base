@@ -491,8 +491,39 @@ async def process_one_job(
     }})
     delivery_enabled = allow_delivery and os.environ.get("FAMILY_ACCESS_EMAIL_DELIVERY_ENABLED") == "1"
     if not delivery_enabled:
-        await _finish_job(db, job, "review_required", "delivery_disabled")
-        return {"job_id": job["id"], "status": "review_required", "result_code": "delivery_disabled"}
+        safe_delivery = delivery_log({
+            "channel": "email",
+            "provider": "smtp",
+            "recipient": decision["email"],
+            "status": "pending",
+            "error": "delivery_disabled",
+            "error_detail": "La entrega de invitaciones familiares está desactivada",
+        }, user_id=user["id"], purpose="family_account_activation",
+           type="family_access_invitation",
+           family_id=family["id"], job_id=job["id"])
+
+        await db.delivery_logs.insert_one(safe_delivery)
+
+        await db.users.update_one(
+            {"id": user["id"]},
+            {"$set": {"invitation_delivery": {
+                key: safe_delivery.get(key)
+                for key in (
+                    "status", "error", "error_detail", "created_at",
+                    "sent_at", "message_id", "purpose",
+                )
+            }}},
+        )
+
+        await _finish_job(
+            db, job, "review_required", "delivery_disabled",
+            delivery_state="pending",
+        )
+        return {
+            "job_id": job["id"],
+            "status": "review_required",
+            "result_code": "delivery_disabled",
+        }
     await db.family_access_jobs.update_one({"id": job["id"]}, {"$set": {"status": "sending", "delivery_state": "sending", "updated_at": now_iso()}})
     link = f"{public_app_url.rstrip('/')}/login?invitation={quote(plain, safe='')}"
     try:
