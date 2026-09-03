@@ -11,7 +11,7 @@ export const normalizedStatus = (user) =>
 
 // `access_state` is calculated and returned by the backend. Do not infer it
 // from invitation, password, or lock fields in the administrative interface.
-export const accessState = (user) => user.access_state || "blocked";
+export const accessState = (user) => user.system_account ? "active" : (user.access_state || "blocked");
 
 
 export const userDisplayName = (user) => {
