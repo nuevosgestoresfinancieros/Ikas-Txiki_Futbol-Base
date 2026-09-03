@@ -296,7 +296,7 @@ def test_send_claims_pending_communication_and_uses_only_simulated_provider(monk
     result = run_with_user(user, server.send_communication("communication-fixture"))
 
     assert result["estado_envio"] == "sent"
-    dispatch.assert_called_once_with("simulated-recipient@example.test", "Aviso ficticio", "Contenido ficticio")
+    dispatch.assert_called_once_with("simulated-recipient@example.test", "Aviso ficticio", "Contenido ficticio", purpose="communication")
     assert database.delivery_logs.insert_many.await_args.args[0][0]["communication_id"] == "communication-fixture"
     assert server.enqueue_notifications.await_count == 1
 

@@ -6,6 +6,7 @@ from urllib.parse import quote
 
 from pymongo.errors import DuplicateKeyError
 from family_access_service import audit, new_id, now_iso, parent_data, valid_email
+from notification_service import delivery_log
 from user_admin_service import family_access_state, normalized_key
 from user_security_service import INVITATION_TTL_HOURS, generate_temporary_password, issue_token
 
@@ -50,14 +51,29 @@ async def provision(db: Any, families: list[Mapping], actor: Mapping, secret: st
                             summary["existing_accesses"] += 1
                             outcome = "existing_pending_activation"
                         else:
-                            delivery = dict(dispatcher(email, "Activa tu acceso a Ikas-Txiki", "Hola,\n\nActiva tu acceso y crea tu contraseña personal.", action_url=f"{public_url.rstrip('/')}/activar?token={quote(plain, safe='')}", action_label=username, template="account_activation"))
-                            safe = {k: delivery.get(k) for k in ("id", "channel", "provider", "status", "error", "created_at", "sent_at")}
-                            safe.update({"type": "family_access_invitation", "family_id": family_id, "user_id": user["id"]})
+                            try:
+                                delivery = dict(dispatcher(
+                                    email, "Activa tu acceso a Ikas-Txiki",
+                                    "Hola,\n\nActiva tu acceso y crea tu contraseña personal.",
+                                    action_url=f"{public_url.rstrip('/')}/login?invitation={quote(plain, safe='')}",
+                                    action_label=username, template="account_activation",
+                                    user_id=user["id"], purpose="family_account_activation",
+                                ))
+                            except Exception:
+                                delivery = {"recipient": email, "status": "failed", "error": "email_delivery_error"}
+                            safe = delivery_log(delivery, user_id=user["id"], purpose="family_account_activation",
+                                                type="family_access_invitation", family_id=family_id)
                             await db.delivery_logs.insert_one(safe)
+                            if hasattr(db.users, "update_one"):
+                                await db.users.update_one({"id": user["id"]}, {"$set": {"invitation_delivery": {
+                                    key: safe.get(key) for key in ("status", "error", "error_detail", "created_at", "sent_at", "message_id", "purpose")
+                                }}})
                             await audit(db, actor, "selected_batch_account_created", family_id=family_id, slot=slot)
                             summary["accounts_created"] += 1
-                            summary["invitations_sent"] += int(delivery.get("status") == "sent")
-                            outcome = "created"
+                            summary["invitations_sent"] += int(safe.get("status") == "sent")
+                            outcome = "created" if safe.get("status") == "sent" else (
+                                "created_delivery_failed:" + str(safe.get("error_detail") or safe.get("error") or "unknown")
+                            )
             results.append({"family_id": family_id, "slot": slot, "outcome": outcome})
         summary["families_for_review"] += int(review)
     return {"ok": True, "summary": summary, "results": results}

@@ -29,3 +29,22 @@ def test_single_duplicate_invalid_and_existing_are_aggregated_without_secrets():
  result, db, sent=run([family(progenitor1_email='used@example.test',progenitor2_email='used@example.test'),family(id='f2',progenitor1_email='',progenitor2_email='invalid')],[active])
  assert result['summary']['existing_accesses']==1 and result['summary']['families_for_review']==2 and not sent
  assert 'token' not in str(result) and 'password' not in str(result) and 'https://' not in str(result)
+
+
+def test_smtp_failure_keeps_both_accounts_and_records_retryable_delivery_logs():
+    db = SimpleNamespace(users=Users(), players=Players(), delivery_logs=Logs(), internal_events=Logs())
+
+    def failing_dispatch(*_args, **_kwargs):
+        raise OSError("fake SMTP unavailable")
+
+    result = asyncio.run(provision(
+        db, [family()], {"id": "admin", "role": "admin"}, "secret",
+        lambda _: "hash", failing_dispatch, "https://app.test",
+    ))
+    assert result["summary"]["accounts_created"] == 2
+    assert result["summary"]["invitations_sent"] == 0
+    assert len(db.users.rows) == 2 and len(db.delivery_logs.rows) == 2
+    for log in db.delivery_logs.rows:
+        assert log["status"] == "failed"
+        assert {"recipient", "status", "error", "created_at", "sent_at", "message_id", "user_id", "purpose"} <= log.keys()
+    assert all(user["account_status"] == "pending_activation" and user["active"] is False for user in db.users.rows)

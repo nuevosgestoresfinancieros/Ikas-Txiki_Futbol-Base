@@ -22,6 +22,7 @@ from pymongo import ReturnDocument
 
 from pymongo.errors import DuplicateKeyError
 from user_admin_service import account_status, family_access_state, normalized_key, normalized_text
+from notification_service import delivery_log
 from user_security_service import (
     INVITATION_TTL_HOURS, generate_temporary_password, invitation_status,
     issue_token, parse_time, token_is_usable,
@@ -118,7 +119,7 @@ def classify_parent(
     if equivalent:
         user = equivalent[0]
         result = {**base, "user_id": user.get("id")}
-        state = family_access_state(user)
+        state = "blocked" if _blocked(user) else family_access_state(user)
         if state == "pending_activation" and not _pending(user):
             state = "invitation_expired"
         return {**result, "state": state}
@@ -153,11 +154,18 @@ def public_access(decision: Mapping[str, Any], user: Mapping[str, Any] | None = 
         actions.append("block")
     if user_id:
         actions.append("view_account")
+    delivery = (user.get("invitation_delivery") or {}) if user_id else {}
     return {
         "slot": decision.get("slot"), "name": decision.get("name") or "",
         "email": decision.get("email"), "requested": bool(decision.get("requested")),
         "email_confirmed": bool(decision.get("email_confirmed")), "state": state,
-        "user_id": user_id, "username": (user or {}).get("username") if user_id else None, "invitation_status": invitation_status((user or {}).get("invitation")),
+        "user_id": user_id, "username": (user or {}).get("username") if user_id else None,
+        "invitation_status": invitation_status((user or {}).get("invitation")),
+        "invitation_delivery": {
+            "status": delivery.get("status"), "error": delivery.get("error"),
+            "error_detail": delivery.get("error_detail"),
+            "created_at": delivery.get("created_at"), "sent_at": delivery.get("sent_at"),
+        } if delivery else None,
         "allowed_actions": actions,
     }
 
@@ -486,19 +494,24 @@ async def process_one_job(
         await _finish_job(db, job, "review_required", "delivery_disabled")
         return {"job_id": job["id"], "status": "review_required", "result_code": "delivery_disabled"}
     await db.family_access_jobs.update_one({"id": job["id"]}, {"$set": {"status": "sending", "delivery_state": "sending", "updated_at": now_iso()}})
-    link = f"{public_app_url.rstrip('/')}/activar?token={quote(plain, safe='')}"
+    link = f"{public_app_url.rstrip('/')}/login?invitation={quote(plain, safe='')}"
     try:
         delivery = dict(dispatcher(
             decision["email"], "Activa tu acceso a Ikas-Txiki",
             f"Hola,\n\nTu usuario de Ikastxiki es: {user['username']}.\n\nActiva tu acceso y crea tu contraseña personal.",
             action_url=link, action_label=user["username"], template="account_activation",
+            user_id=user["id"], purpose="family_account_activation",
         ))
     except Exception:
-        await _finish_job(db, job, "review_required", "delivery_uncertain", delivery_state="uncertain")
-        return {"job_id": job["id"], "status": "review_required", "result_code": "delivery_uncertain"}
-    safe_delivery = {key: delivery.get(key) for key in ("id", "channel", "provider", "status", "error", "created_at", "sent_at")}
-    safe_delivery.update({"type": "family_access_invitation", "family_id": family["id"], "user_id": user["id"], "job_id": job["id"]})
+        delivery = {"recipient": decision["email"], "status": "delivered_unknown",
+                    "error": "email_delivery_uncertain"}
+    safe_delivery = delivery_log(delivery, user_id=user["id"], purpose="family_account_activation",
+                                  type="family_access_invitation", family_id=family["id"], job_id=job["id"])
     await db.delivery_logs.insert_one(safe_delivery)
+    if hasattr(db.users, "update_one"):
+        await db.users.update_one({"id": user["id"]}, {"$set": {"invitation_delivery": {
+            key: safe_delivery.get(key) for key in ("status", "error", "error_detail", "created_at", "sent_at", "message_id", "purpose")
+        }}})
     if delivery.get("status") == "sent":
         await _finish_job(db, job, "sent", "sent", delivery_state="sent")
         await audit(db, actor, "invitation_sent", job_id=job["id"], family_id=family["id"], slot=decision["slot"])
@@ -537,7 +550,7 @@ async def manual_invitation(
         raise RuntimeError("No existe una invitación pendiente que reenviar")
     if not resend and decision["state"] not in {"eligible", "invitation_expired"}:
         raise RuntimeError("El acceso no admite generar una invitación")
-    if not allow_delivery or os.environ.get("FAMILY_ACCESS_EMAIL_DELIVERY_ENABLED") != "1":
+    if not allow_delivery:
         raise RuntimeError("La entrega de accesos familiares está desactivada")
     user = await prepare_account(db, family, decision, password_hasher) if not decision.get("user_id") else await db.users.find_one({"id": decision["user_id"]}, {"_id": 0})
     plain, record = issue_token(secret, ttl_minutes=0, ttl_hours=INVITATION_TTL_HOURS)
@@ -545,10 +558,26 @@ async def manual_invitation(
     await db.users.update_one({"id": user["id"], "active": {"$ne": True}}, {"$set": {
         "invitation": record, "invitation_history": history, "account_status": "pending_activation", "active": False,
     }})
-    delivery = dispatcher(decision["email"], "Activa tu acceso a Ikas-Txiki",
-                          f"Hola,\n\nTu usuario de Ikastxiki es: {user['username']}.",
-                          action_url=f"{public_app_url.rstrip('/')}/activar?token={quote(plain, safe='')}",
-                          action_label=user["username"], template="account_activation")
-    await audit(db, actor, "invitation_sent", family_id=family["id"], slot=slot)
-    return {"ok": delivery.get("status") == "sent", "delivery": delivery.get("status"), "expires_at": record["expires_at"]}
+    try:
+        delivery = dict(dispatcher(
+            decision["email"], "Activa tu acceso a Ikas-Txiki",
+            f"Hola,\n\nTu usuario de Ikastxiki es: {user['username']}.",
+            action_url=f"{public_app_url.rstrip('/')}/login?invitation={quote(plain, safe='')}",
+            action_label=user["username"], template="account_activation",
+            user_id=user["id"], purpose="family_account_activation",
+        ))
+    except Exception:
+        delivery = {"recipient": decision["email"], "status": "failed", "error": "email_delivery_error"}
+    safe_delivery = delivery_log(delivery, user_id=user["id"], purpose="family_account_activation",
+                                  type="family_access_invitation", family_id=family["id"], slot=slot)
+    await db.delivery_logs.insert_one(safe_delivery)
+    if hasattr(db.users, "update_one"):
+        await db.users.update_one({"id": user["id"]}, {"$set": {"invitation_delivery": {
+            key: safe_delivery.get(key) for key in ("status", "error", "error_detail", "created_at", "sent_at", "message_id", "purpose")
+        }}})
+    await audit(db, actor, "invitation_sent" if safe_delivery["status"] == "sent" else "invitation_delivery_failed",
+                family_id=family["id"], slot=slot)
+    return {"ok": True, "delivery": safe_delivery["status"], "delivery_error": safe_delivery.get("error"),
+            "delivery_error_detail": safe_delivery.get("error_detail"),
+            "message_id": safe_delivery.get("message_id"), "expires_at": record["expires_at"]}
 

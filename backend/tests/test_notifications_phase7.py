@@ -5,7 +5,7 @@ from starlette.requests import Request
 
 from authz import ROLE_PERMISSIONS, route_permission
 from notification_service import (
-    RECOVERY_LOGO_CID, _activation_email_html, _public_legal_url, _recovery_email_html, dispatch_email, dispatch_telegram, make_notification, notification_enabled, provider_configuration,
+    RECOVERY_LOGO_CID, _activation_email_html, _public_legal_url, _recovery_email_html, dispatch_email, dispatch_telegram, make_notification, notification_enabled, provider_configuration, smtp_configuration,
 )
 from server import scope_for_collection
 from server import Communication
@@ -37,7 +37,7 @@ def test_provider_status_does_not_claim_unconfigured_channels_are_available():
 def test_email_without_provider_is_recorded_pending_not_sent():
     result = dispatch_email("family@example.test", "Subject", "Body", environment={})
     assert result["status"] == "pending" and result["sent_at"] is None
-    assert result["error"] == "provider_not_configured"
+    assert result["error"] == "smtp_configuration_invalid"
 
 
 def test_telegram_never_uses_phone_or_sends_without_a_linked_chat():
@@ -231,3 +231,22 @@ def test_activation_email_mime_keeps_url_only_in_html_button_and_embeds_logo():
     assert html.count("Crear mi contraseña") == 1
     assert f'cid:{RECOVERY_LOGO_CID}' in html and 'alt="Ikastxiki"' in html
     assert any(part.get("Content-ID") == f"<{RECOVERY_LOGO_CID}>" for part in message.walk())
+
+
+def test_smtp_configuration_validates_transport_without_exposing_password():
+    result = smtp_configuration({
+        "SMTP_HOST": "smtp.example.test", "SMTP_PORT": "bad",
+        "SMTP_FROM": "invalid", "SMTP_USER": "user", "SMTP_PASSWORD": "",
+        "SMTP_STARTTLS": "true", "SMTP_USE_SSL": "true",
+    })
+    assert result["configured"] is False
+    assert {"smtp_port_invalid", "smtp_from_invalid", "smtp_ssl_starttls_conflict", "smtp_password_missing"} <= set(result["errors"])
+    assert "SMTP_PASSWORD" not in str(result) and "user" not in str(result).lower()
+
+
+def test_admin_permission_matrix_covers_every_internal_module():
+    required = {"users", "families", "players", "teams", "calendar", "trainings", "matches",
+                "callups", "stats", "payments", "authorizations", "inscriptions",
+                "communications", "settings", "reports", "data", "notifications"}
+    assert required <= set(ROLE_PERMISSIONS["admin"])
+    assert all("read" in actions and "administer" in actions for actions in ROLE_PERMISSIONS["admin"].values())

@@ -7,7 +7,7 @@ from passlib.context import CryptContext
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 import asyncio
 import io
 import base64
@@ -59,7 +59,7 @@ from calendar_service import (
     next_calendar_event, subscription_capability,
 )
 from portal_service import document_status, portal_attendance, portal_callups, safe_payment, safe_player, upcoming
-from notification_service import dispatch_email, dispatch_telegram, make_notification, notification_enabled, provider_configuration
+from notification_service import delivery_log, dispatch_email, dispatch_telegram, make_notification, notification_enabled, provider_configuration
 from brand_assets import BRAND_BLUE, BRAND_TEAL, pdf_logo
 from inscription_import_service import (
     SEASON as IMPORT_SEASON, SAFE_PLAYER_FIELDS, ImportValidationError,
@@ -1078,7 +1078,14 @@ async def create_user(user: UserCreate):
     elif access_method == "invitation":
         plain, record = issue_token(JWT_SECRET, ttl_minutes=0, ttl_hours=INVITATION_TTL_HOURS)
         await db.users.update_one({"id": data["id"]}, {"$set": {"invitation": record}})
-        response.update({"invitation_token": plain, "expires_at": record["expires_at"], "show_once": True, "delivery": "not_sent"})
+        data["invitation"] = record
+        delivery = await _send_invitation_email(data, plain)
+        data["invitation_delivery"] = {key: delivery.get(key) for key in (
+            "status", "error", "error_detail", "created_at", "sent_at", "message_id", "purpose",
+        )}
+        response = secured_public_user(data)
+        response.update({"delivery": delivery["status"], "delivery_error": delivery.get("error"),
+                         "delivery_error_detail": delivery.get("error_detail"), "expires_at": record["expires_at"]})
     return response
 
 
@@ -1342,18 +1349,12 @@ async def generate_user_invitation(user_id: str):
         "invitation": record, "invitation_history": invitation_history,
         "account_status": "pending_activation", "active": False,
     }})
-    link = _activation_link(plain)
-    delivery = dispatch_email(
-        email, "Activa tu acceso a Ikas-Txiki",
-        _invitation_email_body(str(user.get("username") or "")),
-        action_url=link, action_label=str(user.get("username") or ""), template="account_activation",
-    )
-    delivery.update({"type": "user_access_invitation", "user_id": user_id})
-    await db.delivery_logs.insert_one(delivery)
+    delivery = await _send_invitation_email(user, plain, purpose="family_account_activation",
+                                            type="user_access_invitation")
     await record_user_audit("invitation_sent" if delivery["status"] == "sent" else "invitation_delivery_failed", user, [])
-    if delivery["status"] != "sent":
-        raise HTTPException(status_code=502, detail="No se pudo enviar la invitación; revisa la configuración de correo")
-    return {"ok": True, "delivery": "sent", "expires_at": record["expires_at"]}
+    return {"ok": True, "delivery": delivery["status"], "delivery_error": delivery.get("error"),
+            "delivery_error_detail": delivery.get("error_detail"),
+            "message_id": delivery.get("message_id"), "expires_at": record["expires_at"]}
 
 
 @api_router.delete("/users/{user_id}/security/invitation")
@@ -1792,13 +1793,14 @@ def _public_app_url() -> str:
         if markdown_link:
             origin = markdown_link.group(1)
         origin = origin.strip("[]").strip().strip('"').strip("'").rstrip("/")
-        if origin.startswith(("https://", "http://")):
+        parsed = urlsplit(origin)
+        if parsed.scheme in {"https", "http"} and parsed.hostname:
             return origin
     raise HTTPException(status_code=503, detail="No está configurada la URL pública de activación")
 
 
 def _activation_link(token: str) -> str:
-    return f"{_public_app_url()}/activar?token={quote(token, safe='')}"
+    return f"{_public_app_url()}/login?invitation={quote(token, safe='')}"
 
 
 def _recovery_link(token: str) -> str:
@@ -1827,6 +1829,33 @@ def _recovery_email_body(username: str) -> str:
         "Este correo no incluye datos personales de menores. Los datos se tratan únicamente para prestar el servicio, proteger las cuentas y gestionar esta solicitud. "
         "Consulta la Política de privacidad y las Condiciones de uso en Ikastxiki para conocer más información."
     )
+
+
+async def _send_invitation_email(user: Mapping[str, Any], plain: str, *,
+                                  purpose: str = "family_account_activation",
+                                  access_label: str = "", **extra: Any) -> dict:
+    """Send and persist one invitation result; the account already exists."""
+    recipient = normalized_key(user.get("email")) or None
+    try:
+        delivery = dispatch_email(
+            recipient, "Activa tu acceso a Ikas-Txiki",
+            _invitation_email_body(str(user.get("username") or ""), access_label),
+            action_url=_activation_link(plain), action_label=str(user.get("username") or ""),
+            template="account_activation", user_id=user.get("id"), purpose=purpose,
+        )
+    except HTTPException as error:
+        delivery = {"recipient": recipient, "status": "failed",
+                    "error": "public_app_url_invalid" if error.status_code == 503 else "email_delivery_error"}
+    except Exception:
+        delivery = {"recipient": recipient, "status": "failed", "error": "email_delivery_error"}
+    delivery = {**delivery, "recipient": delivery.get("recipient") or recipient}
+    delivery = delivery_log(delivery, user_id=user.get("id"), purpose=purpose, **extra)
+    await db.delivery_logs.insert_one(delivery)
+    safe_delivery = {key: delivery.get(key) for key in (
+        "status", "error", "error_detail", "created_at", "sent_at", "message_id", "purpose",
+    )}
+    await db.users.update_one({"id": user.get("id")}, {"$set": {"invitation_delivery": safe_delivery}})
+    return delivery
 
 
 async def _family_access_username(family: dict) -> str:
@@ -6479,10 +6508,14 @@ async def communication_delivery_logs(data: dict, destinations: list[str]) -> li
     channel = data.get("canal")
     if channel == "email":
         if destinations:
-            return [dispatch_email(destination, data.get("asunto") or "Ikas-Txiki", data.get("mensaje") or "")
-                    for destination in destinations]
-        return [{"id": new_id(), "channel": "email", "recipient": None, "provider": "smtp",
-                 "status": "failed", "error": "recipient_missing", "created_at": now_iso(), "sent_at": None}]
+            return [delivery_log(dispatch_email(
+                destination, data.get("asunto") or "Ikas-Txiki", data.get("mensaje") or "",
+                purpose="communication",
+            ), purpose="communication") for destination in destinations]
+        return [delivery_log({
+            "id": new_id(), "channel": "email", "recipient": None, "provider": "smtp",
+            "status": "failed", "error": "recipient_missing", "created_at": now_iso(), "sent_at": None,
+        }, purpose="communication")]
     if channel == "telegram":
         if destinations:
             text = "\n\n".join(part for part in (data.get("asunto"), data.get("mensaje")) if part)

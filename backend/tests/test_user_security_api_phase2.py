@@ -70,10 +70,12 @@ def test_invitation_is_emailed_and_keeps_recent_pending_links_usable(monkeypatch
         return {"status": "sent", "error": None, "recipient": "family@example.invalid"}
     monkeypatch.setattr(server, "dispatch_email", dispatch)
     result = run_as_admin(server.generate_user_invitation(user["id"]))
-    update = db.users.update_one.await_args.args[1]["$set"]
+    invitation_update = db.users.update_one.await_args_list[0].args[1]["$set"]
+    delivery_update = db.users.update_one.await_args_list[-1].args[1]["$set"]
     assert result["delivery"] == "sent" and "invitation_token" not in result
-    assert "token" not in str(update)
-    assert update["invitation_history"] == [user["invitation"]]
+    assert "token" not in str(invitation_update)
+    assert invitation_update["invitation_history"] == [user["invitation"]]
+    assert delivery_update["invitation_delivery"]["status"] == "sent"
     delivery = db.delivery_logs.insert_one.await_args.args[0]
     assert delivery["type"] == "user_access_invitation" and delivery["status"] == "sent"
     assert "Tu usuario de Ikastxiki es: fixture" in sent["args"][2]
@@ -107,7 +109,7 @@ def test_activation_link_strips_legacy_cors_origin_brackets(monkeypatch):
     monkeypatch.delenv("PUBLIC_APP_URL", raising=False)
     monkeypatch.setenv("CORS_ORIGINS", "[https://ikasfutbase.cibermedida.es]")
     assert server._activation_link("token_value") == (
-        "https://ikasfutbase.cibermedida.es/activar?token=token_value"
+        "https://ikasfutbase.cibermedida.es/login?invitation=token_value"
     )
 
 
@@ -117,7 +119,7 @@ def test_activation_link_normalizes_markdown_formatted_public_url(monkeypatch):
         "[https://ikasfutbase.cibermedida.es](https://ikasfutbase.cibermedida.es)",
     )
     assert server._activation_link("token_value") == (
-        "https://ikasfutbase.cibermedida.es/activar?token=token_value"
+        "https://ikasfutbase.cibermedida.es/login?invitation=token_value"
     )
 
 
@@ -150,11 +152,12 @@ def test_invitation_delivery_failure_is_logged_without_disclosing_the_token(monk
     monkeypatch.setattr(server, "dispatch_email", lambda *_args, **_kwargs: {
         "status": "failed", "error": "SMTPException", "recipient": "family@example.invalid",
     })
-    with pytest.raises(Exception) as error:
-        run_as_admin(server.generate_user_invitation(user["id"]))
-    assert error.value.status_code == 502
-    assert "token" not in str(error.value.detail).lower()
-    assert db.delivery_logs.insert_one.await_args.args[0]["status"] == "failed"
+    result = run_as_admin(server.generate_user_invitation(user["id"]))
+    assert result["ok"] and result["delivery"] == "failed"
+    assert "token" not in str(result).lower()
+    logged = db.delivery_logs.insert_one.await_args.args[0]
+    assert logged["status"] == "failed"
+    assert {"recipient", "status", "error", "created_at", "sent_at", "message_id", "user_id", "purpose"} <= logged.keys()
 
 
 def test_session_revocation_rejects_self_and_increments_other_user(monkeypatch):
@@ -278,3 +281,126 @@ def test_permanent_deletion_confirmation_requires_the_exact_word():
     assert server.PermanentDeletionConfirmation(confirmation=" ELIMINAR ").confirmation == "ELIMINAR"
     with pytest.raises(Exception):
         server.PermanentDeletionConfirmation(confirmation="eliminar")
+
+
+class MemoryCollection:
+    def __init__(self, rows=()):
+        self.rows = [dict(row) for row in rows]
+
+    async def find_one(self, query, *_args, **_kwargs):
+        def matches(row, key, value):
+            if key == "$or":
+                return any(matches(row, inner_key, inner_value) for branch in value for inner_key, inner_value in branch.items())
+            target = row
+            for part in key.split("."):
+                target = target.get(part) if isinstance(target, dict) else None
+            if isinstance(value, dict) and "$ne" in value:
+                return target != value["$ne"]
+            return target == value
+        for row in self.rows:
+            if all(matches(row, key, value) for key, value in query.items()):
+                return dict(row)
+        return None
+
+    async def insert_one(self, row):
+        self.rows.append(dict(row))
+
+    async def update_one(self, query, update, **_kwargs):
+        row = await self.find_one(query)
+        if not row:
+            return SimpleNamespace(modified_count=0)
+        for key, value in update.get("$set", {}).items():
+            target = row
+            parts = key.split(".")
+            for part in parts[:-1]:
+                target = target.setdefault(part, {})
+            target[parts[-1]] = value
+        for key, value in update.get("$inc", {}).items():
+            row[key] = int(row.get(key, 0)) + value
+        for key, value in row.items():
+            for existing in self.rows:
+                if existing.get("id") == row.get("id"):
+                    existing[key] = value
+        return SimpleNamespace(modified_count=1)
+
+
+class FamilyFixtureCollection:
+    async def find_one(self, *_args, **_kwargs):
+        return {"id": "family-fixture"}
+
+    async def distinct(self, *_args, **_kwargs):
+        return ["player-fixture"]
+
+
+def invitation_database():
+    users = MemoryCollection()
+    return SimpleNamespace(
+        users=users,
+        families=FamilyFixtureCollection(),
+        players=FamilyFixtureCollection(),
+        delivery_logs=MemoryCollection(),
+        internal_events=MemoryCollection(),
+    )
+
+
+def test_creating_invitation_saves_account_logs_delivery_and_activates(monkeypatch):
+    db = invitation_database()
+    monkeypatch.setattr(server, "db", db)
+    monkeypatch.setattr(server, "record_user_audit", AsyncMock())
+    monkeypatch.setenv("PUBLIC_APP_URL", "https://example.invalid")
+    fixed_record = {
+        "digest": server.token_digest("activation-token", server.JWT_SECRET),
+        "expires_at": "2099-01-01T00:00:00+00:00",
+        "created_at": "2026-01-01T00:00:00+00:00", "used_at": None, "cancelled_at": None,
+    }
+    monkeypatch.setattr(server, "issue_token", lambda *_args, **_kwargs: ("activation-token", dict(fixed_record)))
+    sent = []
+
+    def dispatch(*args, **kwargs):
+        sent.append((args, kwargs))
+        return {"status": "sent", "recipient": args[0], "message_id": "<test@example.invalid>",
+                "created_at": "2026-01-01T00:00:00+00:00", "sent_at": "2026-01-01T00:00:01+00:00"}
+
+    monkeypatch.setattr(server, "dispatch_email", dispatch)
+    result = run_as_admin(server.create_user(server.UserCreate(
+        username="family-fixture", first_name="Ana", last_name="Uno",
+        email="ana@example.invalid", role="family", family_id="family-fixture",
+        access_method="invitation", account_status="pending_activation",
+    )))
+    assert result["delivery"] == "sent"
+    assert "invitation_token" not in result
+    saved = db.users.rows[0]
+    assert saved["account_status"] == "pending_activation" and saved["active"] is False
+    assert saved["invitation"]["digest"] != "activation-token"
+    log = db.delivery_logs.rows[0]
+    assert {"recipient", "status", "error", "created_at", "sent_at", "message_id", "user_id", "purpose"} <= log.keys()
+    assert log["status"] == "sent" and log["user_id"] == saved["id"]
+    assert sent[0][1]["purpose"] == "family_account_activation"
+    assert "/login?invitation=activation-token" in sent[0][1]["action_url"]
+
+    activated = asyncio.run(server.activate_invitation(server.TokenPasswordRequest(
+        token="activation-token", password="Secure-Activation-2026!",
+        password_confirmation="Secure-Activation-2026!",
+    )))
+    assert activated == {"ok": True, "username": "family-fixture"}
+    assert db.users.rows[0]["account_status"] == "active" and db.users.rows[0]["active"] is True
+    assert db.users.rows[0]["invitation"]["used_at"]
+
+
+def test_creating_invitation_with_delivery_failure_keeps_account_retriable(monkeypatch):
+    db = invitation_database()
+    monkeypatch.setattr(server, "db", db)
+    monkeypatch.setattr(server, "record_user_audit", AsyncMock())
+    monkeypatch.setenv("PUBLIC_APP_URL", "https://example.invalid")
+    monkeypatch.setattr(server, "dispatch_email", lambda *_args, **_kwargs: {
+        "status": "failed", "error": "smtp_authentication_failed",
+    })
+    result = run_as_admin(server.create_user(server.UserCreate(
+        username="family-failed", first_name="Bea", last_name="Dos",
+        email="bea@example.invalid", role="family", family_id="family-fixture",
+        access_method="invitation", account_status="pending_activation",
+    )))
+    assert result["delivery"] == "failed" and result["delivery_error"] == "smtp_authentication_failed"
+    assert len(db.users.rows) == 1 and db.users.rows[0]["active"] is False
+    assert db.users.rows[0]["invitation_delivery"]["error"] == "smtp_authentication_failed"
+    assert db.delivery_logs.rows[0]["purpose"] == "family_account_activation"

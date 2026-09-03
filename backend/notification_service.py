@@ -5,10 +5,12 @@ import os
 import smtplib
 import ssl
 import json
+import re
 from urllib import request as urllib_request
 from html import escape
 from datetime import datetime, timezone
 from email.message import EmailMessage
+from email.utils import make_msgid
 from typing import Mapping, Optional
 from uuid import uuid4
 from brand_assets import BRAND_BLUE, BRAND_NAME, CLUB_NAME, logo_bytes
@@ -22,6 +24,8 @@ NOTIFICATION_TYPES = {
 PRIORITIES = {"low", "normal", "high", "urgent"}
 RECOVERY_LOGO_CID = "ikastxiki-logo"
 PUBLIC_APP_URL = "https://ikasfutbase.cibermedida.es"
+DELIVERY_STATUSES = {"sent", "pending", "failed", "delivered_unknown"}
+_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 
 def _public_legal_url(path: str) -> str:
@@ -106,14 +110,81 @@ def notification_enabled(preferences: Mapping, notification_type: str) -> bool:
 
 def provider_configuration(environment: Optional[Mapping[str, str]] = None) -> dict:
     env = environment if environment is not None else os.environ
+    smtp = smtp_configuration(env)
     return {
-        "email": {"configured": bool(env.get("SMTP_HOST") and env.get("SMTP_FROM")), "provider": "smtp"},
+        "email": {"configured": smtp["configured"], "provider": "smtp", "errors": smtp["errors"]},
         "telegram": {
             "configured": bool(env.get("TELEGRAM_BOT_TOKEN")), "provider": "telegram_bot",
             "bot_username": env.get("TELEGRAM_BOT_USERNAME", "").lstrip("@") or None,
         },
         "sms": {"configured": bool(env.get("SMS_PROVIDER_URL") and env.get("SMS_TOKEN")), "provider": "optional"},
     }
+
+
+def _as_bool(value: object, default: bool) -> bool:
+    if value is None or str(value).strip() == "":
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def smtp_configuration(environment: Optional[Mapping[str, str]] = None) -> dict:
+    """Validate SMTP settings without ever returning a secret value."""
+    env = environment if environment is not None else os.environ
+    host = str(env.get("SMTP_HOST") or "").strip()
+    sender = str(env.get("SMTP_FROM") or "").strip()
+    errors = []
+    if not host:
+        errors.append("smtp_host_missing")
+    if not sender:
+        errors.append("smtp_from_missing")
+    elif not _EMAIL_RE.fullmatch(sender):
+        errors.append("smtp_from_invalid")
+    try:
+        port = int(str(env.get("SMTP_PORT") or "587"))
+        if not 1 <= port <= 65535:
+            raise ValueError
+    except (TypeError, ValueError):
+        errors.append("smtp_port_invalid")
+        port = None
+    use_ssl = _as_bool(env.get("SMTP_USE_SSL"), False)
+    starttls = _as_bool(env.get("SMTP_STARTTLS"), True)
+    if use_ssl and starttls:
+        errors.append("smtp_ssl_starttls_conflict")
+    if str(env.get("SMTP_USER") or "").strip() and not str(env.get("SMTP_PASSWORD") or ""):
+        errors.append("smtp_password_missing")
+    return {"configured": not errors, "errors": errors, "port": port,
+            "use_ssl": use_ssl, "starttls": starttls}
+
+
+def delivery_log(delivery: Mapping[str, object] | None, *, user_id: str | None = None,
+                 purpose: str | None = None, **extra: object) -> dict:
+    """Return the stable, secret-free delivery_logs schema."""
+    source = dict(delivery or {})
+    status = source.get("status") if source.get("status") in DELIVERY_STATUSES else "failed"
+    return {
+        "id": source.get("id") or str(uuid4()), "channel": source.get("channel"),
+        "provider": source.get("provider"), "recipient": source.get("recipient"),
+        "status": status, "error": source.get("error"), "error_detail": source.get("error_detail"),
+        "created_at": source.get("created_at") or now_iso(), "sent_at": source.get("sent_at"),
+        "message_id": source.get("message_id"), "user_id": user_id or source.get("user_id"),
+        "purpose": purpose or source.get("purpose"), **extra,
+    }
+
+
+def _smtp_error(error: Exception) -> tuple[str, str]:
+    if isinstance(error, smtplib.SMTPAuthenticationError):
+        return "failed", "smtp_authentication_failed"
+    if isinstance(error, smtplib.SMTPRecipientsRefused):
+        return "failed", "smtp_recipient_refused"
+    if isinstance(error, smtplib.SMTPSenderRefused):
+        return "failed", "smtp_sender_refused"
+    if isinstance(error, smtplib.SMTPDataError):
+        return "failed", "smtp_data_rejected"
+    if isinstance(error, (smtplib.SMTPConnectError, smtplib.SMTPServerDisconnected, TimeoutError, OSError)):
+        return "pending", "smtp_connection_error"
+    if isinstance(error, smtplib.SMTPException):
+        return "failed", "smtp_protocol_error"
+    return "failed", "email_delivery_error"
 
 
 def dispatch_telegram(chat_id: str, text: str, environment: Optional[Mapping[str, str]] = None,
@@ -151,18 +222,27 @@ def dispatch_telegram(chat_id: str, text: str, environment: Optional[Mapping[str
 def dispatch_email(recipient: str, subject: str, body: str,
                    environment: Optional[Mapping[str, str]] = None,
                    smtp_factory=None, *, action_url: Optional[str] = None,
-                   action_label: Optional[str] = None, template: Optional[str] = None) -> dict:
+                   action_label: Optional[str] = None, template: Optional[str] = None,
+                   user_id: Optional[str] = None, purpose: Optional[str] = None) -> dict:
     env = environment if environment is not None else os.environ
-    config = provider_configuration(env)["email"]
+    config = smtp_configuration(env)
     base = {"id": str(uuid4()), "channel": "email", "recipient": recipient,
-            "created_at": now_iso(), "provider": "smtp"}
+            "created_at": now_iso(), "provider": "smtp", "message_id": None,
+            "user_id": user_id, "purpose": purpose}
+    if not isinstance(recipient, str) or not _EMAIL_RE.fullmatch(recipient.strip()):
+        return {**base, "status": "failed", "error": "recipient_invalid", "sent_at": None}
     if not config["configured"]:
-        return {**base, "status": "pending", "error": "provider_not_configured", "sent_at": None}
+        return {**base, "status": "pending", "error": "smtp_configuration_invalid" if config["errors"] else "provider_not_configured", "sent_at": None,
+                "configuration_errors": config["errors"],
+                "error_detail": ", ".join(config["errors"]) if config["errors"] else None}
     try:
         message = EmailMessage()
         message["From"] = env["SMTP_FROM"]
         message["To"] = recipient
         message["Subject"] = subject
+        sender_domain = str(env["SMTP_FROM"]).rsplit("@", 1)[-1]
+        message_id = make_msgid(domain=sender_domain)
+        message["Message-ID"] = message_id
         message.set_content(body)
         safe_body = "<br>".join(escape(body).splitlines())
         action_html = ""
@@ -197,14 +277,16 @@ def dispatch_email(recipient: str, subject: str, body: str,
         message.add_alternative(html, subtype="html")
         html_part = message.get_payload()[-1]
         html_part.add_related(logo_bytes(), maintype="image", subtype="png", cid=f"<{RECOVERY_LOGO_CID}>")
-        factory = smtp_factory or (smtplib.SMTP_SSL if env.get("SMTP_USE_SSL", "false").lower() == "true" else smtplib.SMTP)
-        port = int(env.get("SMTP_PORT", "465" if factory is smtplib.SMTP_SSL else "587"))
+        use_ssl = config["use_ssl"]
+        factory = smtp_factory or (smtplib.SMTP_SSL if use_ssl else smtplib.SMTP)
+        port = config["port"]
         with factory(env["SMTP_HOST"], port, timeout=10) as client:
-            if factory is not smtplib.SMTP_SSL and env.get("SMTP_STARTTLS", "true").lower() == "true":
+            if not use_ssl and config["starttls"]:
                 client.starttls(context=ssl.create_default_context())
             if env.get("SMTP_USER"):
                 client.login(env["SMTP_USER"], env.get("SMTP_PASSWORD", ""))
             client.send_message(message)
-        return {**base, "status": "sent", "error": None, "sent_at": now_iso()}
+        return {**base, "message_id": message_id, "status": "sent", "error": None, "sent_at": now_iso()}
     except Exception as error:
-        return {**base, "status": "failed", "error": type(error).__name__, "sent_at": None}
+        status, error_code = _smtp_error(error)
+        return {**base, "status": status, "error": error_code, "sent_at": None}
