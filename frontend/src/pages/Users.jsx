@@ -197,7 +197,13 @@ export default function Users() {
       const response = await api[method](`/users/${security.user.id}/security/${path}`);
       const secret = response.data.temporary_password || response.data.invitation_token;
       if (secret) setRevealedSecret({ value: secret, kind: response.data.temporary_password ? "password" : "invitation" });
-      toast({ title: t("securityActionCompleted") });
+      const invitationDelivery = path === "invitation" ? response.data?.delivery : null;
+      const invitationError = response.data?.delivery_error_detail || response.data?.delivery_error;
+      toast({ title: invitationDelivery && invitationDelivery !== "sent"
+        ? "Invitación no enviada (" + (invitationError || "motivo no disponible") + "). La cuenta queda reenviable."
+        : invitationDelivery === "sent"
+          ? "Invitación enviada al correo indicado."
+          : t("securityActionCompleted") });
       const refreshed = await api.get(`/users/${security.user.id}/security`);
       setSecurity((current) => ({ ...current, ...refreshed.data })); await load();
     } catch (requestError) { toast({ title: requestError.response?.data?.detail || t("saveError"), variant: "destructive" }); }
@@ -309,6 +315,7 @@ export default function Users() {
         <DialogContent className="max-h-[92vh] max-w-2xl overflow-y-auto"><DialogHeader><DialogTitle>{t("accessSecurity")}</DialogTitle><DialogDescription>{t("accessSecurityDescription")}</DialogDescription></DialogHeader>{security && <div className="space-y-5">
           <section className="rounded-xl border border-sky-100 bg-sky-50 p-4" aria-label={t("accessStatus")}><h3 className="font-bold text-sky-950">{t("accessStatus")}</h3><dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2"><div><dt className="font-semibold text-slate-500">{t("username")}</dt><dd className="mt-1 font-bold text-slate-900">{security.user.system_account ? t("configuredOnServer") : security.user.username}</dd></div><div><dt className="font-semibold text-slate-500">{t("currentStatus")}</dt><dd className="mt-1 font-bold text-slate-900">{t(`accessState_${accessState(security)}`)}</dd></div>{security.last_access_at ? <div><dt className="font-semibold text-slate-500">{t("lastAccess")}</dt><dd className="mt-1 text-slate-900">{new Date(security.last_access_at).toLocaleString()}</dd></div> : security.last_activation_at ? <div><dt className="font-semibold text-slate-500">{t("lastActivation")}</dt><dd className="mt-1 text-slate-900">{new Date(security.last_activation_at).toLocaleString()}</dd></div> : null}</dl></section>
           <div className="grid gap-3 sm:grid-cols-2"><div className="rounded-xl bg-slate-50 p-4"><p className="text-xs font-semibold text-slate-500">{t("securityStatus")}</p><p className="mt-1 font-bold">{security.locked ? t("temporarilyLocked") : t("accessAvailable")}</p></div><div className="rounded-xl bg-slate-50 p-4"><p className="text-xs font-semibold text-slate-500">{t("invitation")}</p><p className="mt-1 font-bold">{t(`invitationStatus_${security.invitation_status || "none"}`)}</p></div></div>
+          {security.invitation_delivery_error && <p role="alert" className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm font-semibold text-amber-950">Motivo del último envío: {security.invitation_delivery_error_detail || security.invitation_delivery_error}. La cuenta sigue guardada y se puede reenviar.</p>}
           {revealedSecret && <div className="rounded-2xl border-2 border-amber-300 bg-amber-50 p-4" role="alert"><p className="font-bold text-amber-950">{t("shownOnlyOnce")}</p><code className="mt-2 block break-all rounded-lg bg-white p-3 text-sm">{revealedSecret.value}</code><Button className="mt-3" variant="outline" onClick={() => setRevealedSecret(null)}>{t("understoodHideSecret")}</Button></div>}
           {security.read_only ? <p className="rounded-xl bg-sky-50 p-4 text-sm text-sky-900">{t("systemSecurityReadOnly")}</p> : <div className="grid gap-3 sm:grid-cols-2">
             <Button disabled={securityBusy} variant="outline" onClick={() => securityAction("temporary-password")}><KeyRound className="h-4 w-4" />{t("generateTemporaryPassword")}</Button>

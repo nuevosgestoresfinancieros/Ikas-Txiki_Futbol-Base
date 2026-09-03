@@ -117,9 +117,10 @@ test("explains invalid team assignments without returning backend secrets", () =
   expect(userSaveFeedback({ response: { status: 422, data: { detail: "token=confidencial" } } }).message).toBe("No se ha podido guardar el usuario. Comprueba la conexión e inténtalo de nuevo.");
 });
 
-test("reports successful creation, including a generated but unsent invitation", () => {
+test("reports the delivery result while keeping the account creation successful", () => {
   expect(userSaveSuccessFeedback()).toEqual({ kind: "success", message: "Usuario creado correctamente." });
-  expect(userSaveSuccessFeedback({ invitation_token: "never-rendered" })).toEqual({ kind: "success", message: "Usuario creado correctamente. La invitación se ha generado, pero no se ha enviado por correo." });
+  expect(userSaveSuccessFeedback({ delivery: "sent" })).toEqual({ kind: "success", message: "Usuario creado correctamente. La invitación se ha enviado al correo indicado." });
+  expect(userSaveSuccessFeedback({ delivery: "failed", delivery_error: "smtp_authentication_failed" })).toEqual({ kind: "success", message: "Usuario creado correctamente. La invitación no se ha enviado (smtp_authentication_failed). Puedes reenviarla desde Seguridad." });
 });
 
 test("uses the safe generic message for a network error", () => {

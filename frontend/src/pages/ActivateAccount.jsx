@@ -85,11 +85,12 @@ export default function ActivateAccount() {
     event.preventDefault();
     if (state.loading) return;
     setTouched({ password: true, confirmation: true });
-    if (!params.get("token")) return setState({ loading: false, error: "El enlace de activación no es válido o está incompleto.", completed: false, username: "" });
+    const token = params.get("token") || params.get("invitation");
+    if (!token) return setState({ loading: false, error: "El enlace de activación no es válido o está incompleto.", completed: false, username: "" });
     if (password !== confirmation) return setState({ loading: false, error: "Las contraseñas no coinciden. Revisa ambos campos.", completed: false, username: "" });
     if (!passwordIsValid(password)) return setState({ loading: false, error: "Revisa los requisitos de seguridad de la contraseña.", completed: false, username: "" });
     setState({ loading: true, error: "", completed: false, username: "" });
-    try { const { data } = await api.post("/auth/activate", { token: params.get("token"), password, password_confirmation: confirmation }); setState({ loading: false, error: "", completed: true, username: data.username || "" }); } catch (error) { setState({ loading: false, completed: false, username: "", error: error.response?.data?.detail || "No se ha podido activar la cuenta. Solicita una nueva invitación si el enlace ha caducado." }); }
+    try { const { data } = await api.post("/auth/activate", { token, password, password_confirmation: confirmation }); setState({ loading: false, error: "", completed: true, username: data.username || "" }); } catch (error) { setState({ loading: false, completed: false, username: "", error: error.response?.data?.detail || "No se ha podido activar la cuenta. Solicita una nueva invitación si el enlace ha caducado." }); }
   };
   return <main className="relative min-h-screen min-h-[100dvh] overflow-hidden bg-[#F5F8FC] px-4 py-6 sm:px-6 sm:py-10">
     <div className="pointer-events-none absolute -left-28 top-1/4 h-80 w-80 rounded-full bg-[#93C8EE]/30 blur-3xl" /><div className="pointer-events-none absolute -right-24 top-0 h-96 w-96 rounded-full border-[52px] border-[#93C8EE]/20" />

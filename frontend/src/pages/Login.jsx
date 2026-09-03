@@ -32,6 +32,13 @@ const Login = ({ onLogin }) => {
   });
 
   useEffect(() => {
+    const invitation = new URLSearchParams(location.search).get("invitation");
+    if (invitation) {
+      navigate("/activar?token=" + encodeURIComponent(invitation), { replace: true });
+    }
+  }, [location.search, navigate]);
+
+  useEffect(() => {
     api.get("/public/branding")
       .then(({ data }) => setBranding((current) => ({ ...current, ...data })))
       .catch(() => {});

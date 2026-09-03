@@ -112,5 +112,13 @@ export const userSaveFeedback = (requestError) => {
   if ((status === 400 || status === 403 || status === 422) && safeDetail) return { kind: "error", field: null, message: `No se ha podido guardar: ${safeDetail}.` };
   return { kind: "error", field: null, message: "No se ha podido guardar el usuario. Comprueba la conexión e inténtalo de nuevo." };
 };
-export const userSaveSuccessFeedback = (response) => ({ kind: "success", message: response?.invitation_token ? "Usuario creado correctamente. La invitación se ha generado, pero no se ha enviado por correo." : "Usuario creado correctamente." });
+export const userSaveSuccessFeedback = (response) => {
+  if (response?.delivery && response.delivery !== "sent") {
+    return { kind: "success", message: "Usuario creado correctamente. La invitación no se ha enviado (" + (response.delivery_error_detail || response.delivery_error || "motivo no disponible") + "). Puedes reenviarla desde Seguridad." };
+  }
+  if (response?.delivery === "sent") {
+    return { kind: "success", message: "Usuario creado correctamente. La invitación se ha enviado al correo indicado." };
+  }
+  return { kind: "success", message: "Usuario creado correctamente." };
+};
 export const userFeedbackStep = (field) => (["username", "email", "first_name", "last_name", "phone"].includes(field) ? 1 : ["assigned_team_ids", "assigned_category_ids"].includes(field) ? 3 : field ? 4 : null);
