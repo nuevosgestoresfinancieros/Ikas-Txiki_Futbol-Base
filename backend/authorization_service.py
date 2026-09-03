@@ -58,6 +58,7 @@ async def ensure_family_authorizations(
                 "persona_autorizada": None,
                 "dni_autorizada": None,
                 "firmante": None,
+                "firmante_parent_slot": None,
                 "fecha_firma": None,
                 "fecha_caducidad": None,
                 "estado": "pendiente",

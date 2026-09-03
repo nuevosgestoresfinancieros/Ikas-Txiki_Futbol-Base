@@ -4,7 +4,6 @@ import { toast } from "sonner";
 import api from "@/api";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 
 const SIGNATURE_CANVAS_WIDTH = 800;
 const SIGNATURE_CANVAS_HEIGHT = 220;
@@ -138,18 +137,25 @@ export default function FamilyAuthorizationOnboarding({ data, user, onRefresh, f
   const { t, lang } = useI18n();
   const [selectedChildId, setSelectedChildId] = useState("");
   const [signing, setSigning] = useState(null);
-  const [signerName, setSignerName] = useState("");
+  const [selectedParentSlot, setSelectedParentSlot] = useState("");
   const [consent, setConsent] = useState(false);
   const [hasSignature, setHasSignature] = useState(false);
   const [busyId, setBusyId] = useState("");
 
   const children = useMemo(() => data?.children || [], [data?.children]);
+  const parents = useMemo(() => data?.family_parents || [], [data?.family_parents]);
   const pendingCount = Number(data?.pending_count || 0);
   const totalCount = Number(data?.total_count || 0);
   const selectedChild = children.find((child) => child.player_id === selectedChildId) || children[0];
+  const selectedParent = parents.find((parent) => String(parent.slot) === String(selectedParentSlot));
   useEffect(() => {
     if (!selectedChildId && children[0]?.player_id) setSelectedChildId(children[0].player_id);
   }, [children, selectedChildId]);
+  useEffect(() => {
+    if (!parents.length || parents.some((parent) => String(parent.slot) === String(selectedParentSlot))) return;
+    const preferred = data?.current_parent_slot || parents[0]?.slot;
+    if (preferred) setSelectedParentSlot(String(preferred));
+  }, [data?.current_parent_slot, parents, selectedParentSlot]);
 
   if (!user || user.role !== "family" || !data?.required || !pendingCount) return null;
 
@@ -174,9 +180,11 @@ export default function FamilyAuthorizationOnboarding({ data, user, onRefresh, f
     const file = event.target.files?.[0];
     const authorizationId = event.target.closest("article")?.dataset?.testid?.replace("family-authorization-", "");
     if (!file || !authorizationId) return;
+    if (!selectedParentSlot) { toast.error(t("familyAuthParentRequired")); return; }
     setBusyId(authorizationId);
     const form = new FormData();
     form.append("file", file);
+    form.append("parent_slot", selectedParentSlot);
     try {
       await api.post(`/authorizations/${authorizationId}/upload-signed`, form);
       toast.success(t("familyAuthReceived"));
@@ -190,7 +198,6 @@ export default function FamilyAuthorizationOnboarding({ data, user, onRefresh, f
   };
 
   const openSignature = (authorization) => {
-    setSignerName([user.first_name, user.last_name].filter(Boolean).join(" "));
     setConsent(false);
     setHasSignature(false);
     setSigning(authorization);
@@ -199,7 +206,8 @@ export default function FamilyAuthorizationOnboarding({ data, user, onRefresh, f
   const submitSignature = async (event) => {
     event.preventDefault();
     if (!hasSignature) { toast.error(t("familyAuthNoSignature")); return; }
-    if (!signerName.trim()) { toast.error(t("familyAuthSignerRequired")); return; }
+    if (!selectedParent) { toast.error(t("familyAuthParentRequired")); return; }
+    if (!selectedParent.is_current) { toast.error(t("familyAuthElectronicCurrentOnly")); return; }
     if (!consent) { toast.error(t("familyAuthConsentRequired")); return; }
     const canvas = document.querySelector("[data-testid='family-signature-canvas']");
     if (!canvas) return;
@@ -207,7 +215,7 @@ export default function FamilyAuthorizationOnboarding({ data, user, onRefresh, f
     try {
       await api.post(`/authorizations/${signing.id}/sign`, {
         signature_data: canvas.toDataURL("image/png"),
-        signer_name: signerName.trim(),
+        parent_slot: Number(selectedParent.slot),
         consent: true,
         consent_version: "family-authorization-v1",
       });
@@ -237,6 +245,16 @@ export default function FamilyAuthorizationOnboarding({ data, user, onRefresh, f
       <p className="mt-3 text-sm leading-6 text-amber-900">{t("familyAuthPendingNotice")}</p>
     </div>
 
+    <div className="mt-6 rounded-2xl border border-[#CFE9FA] bg-[#F5F8FC] p-4" data-testid="family-auth-parent-selector">
+      <label htmlFor="family-auth-parent" className="text-sm font-bold text-[#0E3554]">{t("familyAuthParentLabel")}</label>
+      <select id="family-auth-parent" value={selectedParentSlot} onChange={(event) => setSelectedParentSlot(event.target.value)} className="mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-800" required>
+        <option value="" disabled>{t("familyAuthParentPlaceholder")}</option>
+        {parents.map((parent) => <option key={parent.slot} value={parent.slot}>{parent.name}{parent.is_current ? ` · ${t("familyAuthParentCurrent")}` : ""}</option>)}
+      </select>
+      <p className="mt-2 text-xs leading-5 text-slate-600">{selectedParent?.is_current ? t("familyAuthParentCurrentNotice") : t("familyAuthParentPaperNotice")}</p>
+      {!parents.length && <p className="mt-2 text-sm font-semibold text-red-700" role="alert">{t("familyAuthParentUnavailable")}</p>}
+    </div>
+
     {children.length > 1 && <div className="mt-6 flex gap-2 overflow-x-auto pb-1" aria-label={t("familyAuthChildren")}>
       {children.map((child) => <button key={child.player_id} type="button" onClick={() => setSelectedChildId(child.player_id)} aria-pressed={selectedChild?.player_id === child.player_id} className={`min-h-11 shrink-0 rounded-xl border px-4 text-left text-sm font-bold ${selectedChild?.player_id === child.player_id ? "border-primary bg-primary text-white" : "border-slate-200 bg-white text-slate-700"}`}>{child.name}<span className="ml-2 text-xs opacity-80">{child.pending_count}</span></button>)}
     </div>}
@@ -245,7 +263,7 @@ export default function FamilyAuthorizationOnboarding({ data, user, onRefresh, f
 
     <div className="mt-6 flex flex-col-reverse gap-3 border-t border-slate-100 pt-5 sm:flex-row sm:items-center sm:justify-between"><p className="text-xs leading-5 text-slate-500">{t("familyAuthSimpleNotice")}</p>{onLater && <Button type="button" variant="outline" onClick={onLater}><X className="h-4 w-4" />{t("familyAuthLater")}</Button>}</div>
 
-    {signing && <div className="fixed inset-0 z-[60] overflow-y-auto bg-slate-950/50 p-4" role="dialog" aria-modal="true" aria-labelledby="family-sign-title"><div className="mx-auto mt-8 w-full max-w-2xl rounded-[1.5rem] bg-white p-5 shadow-2xl sm:mt-16 sm:p-7"><div className="flex items-start justify-between gap-4"><div><h3 id="family-sign-title" className="font-heading text-2xl font-extrabold text-[#0E3554]">{t("familyAuthSignTitle")}</h3><p className="mt-2 text-sm leading-6 text-slate-600">{t(`authType_${signing.tipo}`)} · {t("familyAuthSignHelp")}</p></div><Button type="button" size="icon" variant="ghost" aria-label={t("close")} onClick={() => setSigning(null)}><X className="h-5 w-5" /></Button></div><form className="mt-5 space-y-4" onSubmit={submitSignature}><div><label htmlFor="family-signer-name" className="text-sm font-bold text-slate-700">{t("familyAuthSignerName")}</label><Input id="family-signer-name" value={signerName} onChange={(event) => setSignerName(event.target.value)} className="mt-2" autoComplete="name" required /></div><div><p className="text-sm font-bold text-slate-700">{t("familyAuthDrawSignature")}</p><div className="mt-2"><SignaturePad onChange={setHasSignature} /></div></div><label className="flex items-start gap-3 rounded-2xl border border-[#CFE9FA] bg-[#F5F8FC] p-4 text-sm leading-6 text-[#0E3554]"><input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} className="mt-1 h-4 w-4" />{t("familyAuthConsent")}</label><p className="text-xs leading-5 text-slate-500">{t("familyAuthLegalNotice")}</p><div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end"><Button type="button" variant="outline" onClick={() => setSigning(null)}>{t("cancel")}</Button><Button type="submit" disabled={busyId === signing.id}><PenLine className="h-4 w-4" />{busyId === signing.id ? t("saving") : t("familyAuthSaveSignature")}</Button></div></form></div></div>}
+    {signing && <div className="fixed inset-0 z-[60] overflow-y-auto bg-slate-950/50 p-4" role="dialog" aria-modal="true" aria-labelledby="family-sign-title"><div className="mx-auto mt-8 w-full max-w-2xl rounded-[1.5rem] bg-white p-5 shadow-2xl sm:mt-16 sm:p-7"><div className="flex items-start justify-between gap-4"><div><h3 id="family-sign-title" className="font-heading text-2xl font-extrabold text-[#0E3554]">{t("familyAuthSignTitle")}</h3><p className="mt-2 text-sm leading-6 text-slate-600">{t(`authType_${signing.tipo}`)} · {t("familyAuthSignHelp")}</p></div><Button type="button" size="icon" variant="ghost" aria-label={t("close")} onClick={() => setSigning(null)}><X className="h-5 w-5" /></Button></div><form className="mt-5 space-y-4" onSubmit={submitSignature}><div><label htmlFor="family-signer-parent" className="text-sm font-bold text-slate-700">{t("familyAuthParentLabel")}</label><select id="family-signer-parent" value={selectedParentSlot} onChange={(event) => setSelectedParentSlot(event.target.value)} className="mt-2 min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-800" required>{parents.map((parent) => <option key={parent.slot} value={parent.slot}>{parent.name}{parent.is_current ? ` · ${t("familyAuthParentCurrent")}` : ""}</option>)}</select></div>{selectedParent && !selectedParent.is_current && <p className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm font-semibold text-amber-950" role="alert">{t("familyAuthElectronicCurrentOnly")}</p>}<div><p className="text-sm font-bold text-slate-700">{t("familyAuthDrawSignature")}</p><div className="mt-2"><SignaturePad onChange={setHasSignature} /></div></div><label className="flex items-start gap-3 rounded-2xl border border-[#CFE9FA] bg-[#F5F8FC] p-4 text-sm leading-6 text-[#0E3554]"><input type="checkbox" checked={consent} onChange={(event) => setConsent(event.target.checked)} className="mt-1 h-4 w-4" />{t("familyAuthConsent")}</label><p className="text-xs leading-5 text-slate-500">{t("familyAuthLegalNotice")}</p><div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end"><Button type="button" variant="outline" onClick={() => setSigning(null)}>{t("cancel")}</Button><Button type="submit" disabled={busyId === signing.id || !selectedParent?.is_current}><PenLine className="h-4 w-4" />{busyId === signing.id ? t("saving") : t("familyAuthSaveSignature")}</Button></div></form></div></div>}
   </section>;
 
   return fullPage ? <div className="fixed inset-0 z-50 overflow-y-auto bg-[#F5F8FC] p-4 sm:p-8"><div className="flex min-h-full items-center justify-center">{content}</div></div> : content;

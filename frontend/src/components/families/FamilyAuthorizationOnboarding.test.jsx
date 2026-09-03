@@ -10,6 +10,10 @@ const portalData = {
   required: true,
   pending_count: 2,
   total_count: 3,
+  family_parents: [
+    { slot: 1, name: "Ana Uno", is_current: true },
+    { slot: 2, name: "Bruno Dos", is_current: false },
+  ],
   children: [{
     player_id: "player-1",
     name: "Ane Uno",
@@ -57,6 +61,23 @@ test("uploads the selected file through the family submit endpoint", async () =>
   Object.defineProperty(input, "files", { configurable: true, value: [file] });
   await act(async () => input.dispatchEvent(new Event("change", { bubbles: true })));
   expect(api.post).toHaveBeenCalledWith("/authorizations/auth-1/upload-signed", expect.any(FormData));
+  expect(api.post.mock.calls[0][1].get("parent_slot")).toBe("1");
+  await act(async () => root.unmount());
+});
+
+test("uses the selected parent slot when receiving a paper document", async () => {
+  api.post.mockResolvedValueOnce({ data: { ok: true, status: "firmada" } });
+  const { container, root } = await renderComponent();
+  const selector = container.querySelector("#family-auth-parent");
+  await act(async () => {
+    selector.value = "2";
+    selector.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  const input = container.querySelector('input[type="file"]');
+  const file = new File(["%PDF-1.7\n%%EOF"], "firmada.pdf", { type: "application/pdf" });
+  Object.defineProperty(input, "files", { configurable: true, value: [file] });
+  await act(async () => input.dispatchEvent(new Event("change", { bubbles: true })));
+  expect(api.post.mock.calls[0][1].get("parent_slot")).toBe("2");
   await act(async () => root.unmount());
 });
 

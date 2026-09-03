@@ -3219,6 +3219,7 @@ async def get_portal():
 
     raw_authorizations = await list_docs("authorizations")
     authorizations = [_portal_authorization(authorization) for authorization in raw_authorizations]
+    family_parents = await _family_parent_options(actor.get("family_id"), actor) if role == "family" else []
 
     communications = [{key: item.get(key) for key in (
         "id", "asunto", "mensaje", "canal", "fecha_envio", "created_at",
@@ -3237,6 +3238,8 @@ async def get_portal():
         "authorizations": authorizations,
         "authorization_onboarding": _family_authorization_onboarding(raw_players, raw_authorizations)
         if role == "family" else {"required": False, "pending_count": 0, "total_count": 0, "children": []},
+        "family_parents": family_parents,
+        "current_parent_slot": next((item["slot"] for item in family_parents if item.get("is_current")), None),
         "documents": document_status(raw_players),
         "communications": communications[:20],
     }
@@ -3591,6 +3594,7 @@ class Authorization(BaseModel):
     persona_autorizada: Optional[str] = None
     dni_autorizada: Optional[str] = None
     firmante: Optional[str] = None
+    firmante_parent_slot: Optional[int] = Field(default=None, ge=1, le=2)
     fecha_firma: Optional[str] = None
     fecha_caducidad: Optional[str] = None
     estado: str = "pendiente"  # pendiente, firmada, caducada
@@ -3607,7 +3611,7 @@ class Authorization(BaseModel):
 
 class ElectronicSignatureRequest(BaseModel):
     signature_data: str = Field(min_length=32, max_length=750_000)
-    signer_name: str = Field(min_length=2, max_length=120)
+    parent_slot: int = Field(ge=1, le=2)
     consent: bool
     consent_version: str = Field(default="family-authorization-v1", min_length=1, max_length=64)
 
@@ -3698,7 +3702,7 @@ def _portal_authorization(auth: Mapping[str, Any]) -> dict[str, Any]:
     return {
         key: auth.get(key) for key in (
             "id", "player_id", "tipo", "estado", "fecha_firma", "fecha_caducidad",
-            "persona_autorizada", "observaciones", "firma_modalidad",
+            "persona_autorizada", "firmante", "firmante_parent_slot", "observaciones", "firma_modalidad",
             "archivo_firmado_subido_at",
         )
     } | {"estado": "firmada" if complete else "pendiente", "has_signed_file": complete}
@@ -3725,6 +3729,102 @@ def _family_authorization_onboarding(players: list[dict], authorizations: list[d
         "required": bool(pending), "pending_count": pending, "total_count": total,
         "children": children,
     }
+
+
+def _safe_parent_slot(value: Any) -> int | None:
+    try:
+        slot = int(value)
+    except (TypeError, ValueError):
+        return None
+    return slot if slot in {1, 2} else None
+
+
+def _family_parent_name(family: Mapping[str, Any], slot: int) -> str:
+    return normalized_text(family.get(f"progenitor{slot}_nombre"))
+
+
+async def _family_parent_options(
+    family_id: str,
+    current_user: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Return only the two parent slots belonging to one family.
+
+    The response deliberately exposes no email, username or password data.
+    ``is_current`` is used only to prevent an electronic signature on behalf of
+    another account; a paper document may name either parent while the account
+    that uploaded it remains recorded separately.
+    """
+    family_key = str(family_id or "").strip()
+    if not family_key:
+        return []
+    current_user = current_user or {}
+    try:
+        family = await db.families.find_one(
+            {"id": family_key},
+            {"_id": 0, "progenitor1_nombre": 1, "progenitor1_email": 1,
+             "progenitor2_nombre": 1, "progenitor2_email": 1},
+        ) or {}
+        family_users = await db.users.find(
+            {"role": "family", "family_id": family_key},
+            {"_id": 0, "id": 1, "first_name": 1, "last_name": 1,
+             "email": 1, "family_contact_slot": 1, "active": 1,
+             "account_status": 1},
+        ).to_list(10)
+    except Exception:
+        logging.getLogger(__name__).exception("Family parent options could not be loaded")
+        current_slot = _safe_parent_slot(current_user.get("family_contact_slot")) or 1
+        current_name = signer_name(current_user)
+        return ([{"slot": current_slot, "name": current_name, "is_current": True,
+                  "account_active": True}] if current_name else [])
+
+    options = []
+    for slot in (1, 2):
+        parent_email = normalized_key(family.get(f"progenitor{slot}_email"))
+        slot_users = [
+            user for user in family_users
+            if _safe_parent_slot(user.get("family_contact_slot")) == slot
+        ]
+        if not slot_users and parent_email:
+            slot_users = [
+                user for user in family_users
+                if normalized_key(user.get("email")) == parent_email
+            ]
+        slot_user = slot_users[0] if len(slot_users) == 1 else None
+        name = _family_parent_name(family, slot) or signer_name(slot_user)
+        if not name:
+            continue
+        options.append({
+            "slot": slot,
+            "name": name,
+            "is_current": bool(slot_user and slot_user.get("id") == current_user.get("id")),
+            "account_active": bool(slot_user and slot_user.get("active", True)
+                                    and status_is_active(account_status(slot_user))),
+        })
+    if not options and signer_name(current_user):
+        current_slot = _safe_parent_slot(current_user.get("family_contact_slot")) or 1
+        options.append({"slot": current_slot, "name": signer_name(current_user),
+                        "is_current": True, "account_active": True})
+    return options
+
+
+async def _selected_authorization_parent(
+    auth: Mapping[str, Any], actor: Mapping[str, Any], parent_slot: int,
+) -> dict[str, Any]:
+    slot = _safe_parent_slot(parent_slot)
+    if not slot:
+        raise HTTPException(status_code=422, detail="Selecciona un progenitor válido")
+    if actor.get("role") == "family":
+        family_id = actor.get("family_id")
+    else:
+        player = await db.players.find_one(
+            {"id": auth.get("player_id")}, {"_id": 0, "familia_id": 1}
+        ) or {}
+        family_id = player.get("familia_id")
+    options = await _family_parent_options(family_id, actor)
+    selected = next((item for item in options if item["slot"] == slot), None)
+    if not selected:
+        raise HTTPException(status_code=422, detail="El progenitor seleccionado no pertenece a esta familia")
+    return selected
 
 
 def build_authorization_pdf(
@@ -3832,8 +3932,9 @@ async def create_authorization(auth: Authorization):
     data = auth.model_dump()
     if data.get("estado") == "firmada":
         data["estado"] = "pendiente"
-    for field in ("archivo_firmado", "archivo_firmado_mime", "archivo_firmado_size", "archivo_firmado_sha256",
-                  "archivo_firmado_subido_at", "archivo_firmado_subido_por", "firma_modalidad", "firma_electronica"):
+    for field in ("firmante", "firmante_parent_slot", "archivo_firmado", "archivo_firmado_mime",
+                  "archivo_firmado_size", "archivo_firmado_sha256", "archivo_firmado_subido_at",
+                  "archivo_firmado_subido_por", "firma_modalidad", "firma_electronica"):
         data[field] = None
     return await insert_doc("authorizations", data)
 
@@ -3901,8 +4002,9 @@ async def edit_authorization(auth_id: str, auth: Authorization):
     data = auth.model_dump()
     if data.get("estado") == "firmada" and not _authorization_complete(existing):
         data["estado"] = "pendiente"
-    for field in ("archivo_firmado", "archivo_firmado_mime", "archivo_firmado_size", "archivo_firmado_sha256",
-                  "archivo_firmado_subido_at", "archivo_firmado_subido_por", "firma_modalidad", "firma_electronica"):
+    for field in ("firmante", "firmante_parent_slot", "archivo_firmado", "archivo_firmado_mime",
+                  "archivo_firmado_size", "archivo_firmado_sha256", "archivo_firmado_subido_at",
+                  "archivo_firmado_subido_por", "firma_modalidad", "firma_electronica"):
         data.pop(field, None)
     return await update_doc("authorizations", auth_id, data)
 
@@ -3912,12 +4014,19 @@ async def remove_authorization(auth_id: str):
     return await delete_doc("authorizations", auth_id)
 
 @api_router.post("/authorizations/{auth_id}/upload-signed")
-async def upload_signed_authorization(auth_id: str, file: UploadFile = File(...)):
+async def upload_signed_authorization(
+    auth_id: str,
+    file: UploadFile = File(...),
+    parent_slot: Optional[int] = Form(default=None),
+):
     """Receive a signed PDF/image within the authenticated player's scope."""
     auth = await get_doc("authorizations", auth_id)
     actor = current_user_context.get() or {}
     if actor.get("role") == "family" and _authorization_complete(auth):
         raise HTTPException(status_code=409, detail="Esta autorización ya tiene un documento recibido")
+    selected_parent = None
+    if actor.get("role") == "family" or parent_slot is not None:
+        selected_parent = await _selected_authorization_parent(auth, actor, parent_slot)
     mime = str(file.content_type or "").split(";", 1)[0].strip().lower()
     extension = SIGNED_AUTHORIZATION_MIME_TYPES.get(mime)
     if not extension:
@@ -3942,7 +4051,8 @@ async def upload_signed_authorization(auth_id: str, file: UploadFile = File(...)
             "archivo_firmado_subido_por": actor.get("id"),
             "firma_modalidad": "upload", "firma_electronica": None,
             "fecha_firma": moment[:10], "estado": "firmada", "updated_at": moment,
-            **({"firmante": signer_name(actor)} if actor.get("role") == "family" and not auth.get("firmante") else {}),
+            **({"firmante": selected_parent["name"], "firmante_parent_slot": selected_parent["slot"]}
+               if selected_parent else {}),
         }}
     )
     if actor.get("role") == "family" and not result.modified_count:
@@ -3969,9 +4079,18 @@ async def sign_authorization(auth_id: str, request: ElectronicSignatureRequest):
         raise HTTPException(status_code=422, detail="Debes aceptar la autorización antes de firmarla")
     signature_bytes = _decode_signature_data(request.signature_data)
     actor = current_user_context.get() or {}
+    selected_parent = await _selected_authorization_parent(auth, actor, request.parent_slot)
+    if actor.get("role") == "family" and not selected_parent.get("is_current"):
+        raise HTTPException(
+            status_code=403,
+            detail="Para firmar electrónicamente debes iniciar sesión con el progenitor seleccionado",
+        )
     moment = now_iso()
-    signer = normalized_text(request.signer_name)
-    signed_auth = {**auth, "firmante": signer, "fecha_firma": moment[:10]}
+    signer = selected_parent["name"]
+    signed_auth = {
+        **auth, "firmante": signer, "firmante_parent_slot": selected_parent["slot"],
+        "fecha_firma": moment[:10],
+    }
     player = await get_doc("players", auth.get("player_id"))
     settings = await get_settings()
     pdf = build_authorization_pdf(signed_auth, player, settings, "es", signature_bytes)
@@ -3993,7 +4112,7 @@ async def sign_authorization(auth_id: str, request: ElectronicSignatureRequest):
                 "signer_name": signer, "user_id": actor.get("id"),
                 "signed_at": moment, "consent_version": request.consent_version,
             },
-            "firmante": signer, "fecha_firma": moment[:10],
+            "firmante": signer, "firmante_parent_slot": selected_parent["slot"], "fecha_firma": moment[:10],
             "estado": "firmada", "updated_at": moment,
         }}
     )

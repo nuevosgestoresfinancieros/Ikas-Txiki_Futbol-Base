@@ -153,6 +153,48 @@ def test_portal_onboarding_reports_children_and_never_completes_without_file():
     assert incomplete["estado"] == "pendiente" and incomplete["has_signed_file"] is False
 
 
+def test_family_parent_options_are_scoped_and_mark_the_connected_account(monkeypatch):
+    family = {
+        "id": "family-1", "progenitor1_nombre": "Ana Uno", "progenitor1_email": "ana@example.test",
+        "progenitor2_nombre": "Bruno Dos", "progenitor2_email": "bruno@example.test",
+    }
+    family_users = [
+        {"id": "parent-1", "role": "family", "family_id": "family-1", "family_contact_slot": 1,
+         "first_name": "Ana", "last_name": "Uno", "active": True, "account_status": "active"},
+        {"id": "other-family", "role": "family", "family_id": "family-2", "family_contact_slot": 1,
+         "first_name": "Otra", "last_name": "Familia", "active": True, "account_status": "active"},
+    ]
+
+    class Families:
+        async def find_one(self, query, *_args):
+            return family if query.get("id") == "family-1" else None
+
+    class Users:
+        def find(self, query, *_args):
+            return Cursor([row for row in family_users if row.get("family_id") == query.get("family_id")])
+
+    monkeypatch.setattr(server, "db", SimpleNamespace(families=Families(), users=Users()))
+    options = asyncio.run(server._family_parent_options("family-1", {"id": "parent-1"}))
+    assert options == [{
+        "slot": 1, "name": "Ana Uno", "is_current": True, "account_active": True,
+    }, {
+        "slot": 2, "name": "Bruno Dos", "is_current": False, "account_active": False,
+    }]
+
+
+def test_selected_parent_must_belong_to_the_family(monkeypatch):
+    monkeypatch.setattr(server, "_family_parent_options", AsyncMock(return_value=[
+        {"slot": 1, "name": "Ana Uno", "is_current": True, "account_active": True},
+    ]))
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(server._selected_authorization_parent(
+            {"player_id": "player-1"},
+            {"role": "family", "family_id": "family-1", "id": "parent-1"},
+            2,
+        ))
+    assert error.value.status_code == 422
+
+
 def test_family_submit_permission_is_scoped_and_not_generic_edit():
     family = {"role": "family", "active": True}
     admin = {"role": "admin", "active": True}
@@ -170,6 +212,9 @@ def test_upload_rejects_invalid_binary_and_accepts_mock_pdf_for_family(tmp_path,
     db = MemoryDB(auth)
     monkeypatch.setattr(server, "db", db)
     monkeypatch.setattr(server, "UPLOADS_DIR", Path(tmp_path))
+    monkeypatch.setattr(server, "_selected_authorization_parent", AsyncMock(return_value={
+        "slot": 1, "name": "Ana Uno", "is_current": True,
+    }))
     async def get_doc(collection, _id):
         assert collection == "authorizations"
         if _id != auth["id"]:
@@ -191,6 +236,8 @@ def test_upload_rejects_invalid_binary_and_accepts_mock_pdf_for_family(tmp_path,
     assert result["status"] == "firmada" and result["firma_modalidad"] == "upload"
     assert db.authorizations.row["archivo_firmado"].startswith("auth_auth-1_")
     assert db.authorizations.row["archivo_firmado_sha256"]
+    assert db.authorizations.row["firmante"] == "Ana Uno"
+    assert db.authorizations.row["firmante_parent_slot"] == 1
     assert Path(tmp_path, db.authorizations.row["archivo_firmado"]).read_bytes() == pdf
     assert db.internal_events.insert_one.await_count == 1
 
@@ -218,6 +265,9 @@ def test_electronic_signature_requires_consent_and_does_not_store_raw_signature(
     monkeypatch.setattr(server, "db", db)
     monkeypatch.setattr(server, "UPLOADS_DIR", Path(tmp_path))
     monkeypatch.setattr(server, "get_settings", AsyncMock(return_value={"club_nombre": "Ikas-Txiki"}))
+    monkeypatch.setattr(server, "_selected_authorization_parent", AsyncMock(return_value={
+        "slot": 1, "name": "Ana Uno", "is_current": True,
+    }))
     async def get_doc(collection, _id):
         if collection == "authorizations": return dict(auth)
         if collection == "players": return {"id": "player-1", "nombre": "Ane", "apellidos": "Uno"}
@@ -225,22 +275,43 @@ def test_electronic_signature_requires_consent_and_does_not_store_raw_signature(
     monkeypatch.setattr(server, "get_doc", get_doc)
     one_pixel_png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
     signature_data = "data:image/png;base64," + base64.b64encode(one_pixel_png).decode()
-    request_without_consent = server.ElectronicSignatureRequest(signature_data=signature_data, signer_name="Ana Uno", consent=False)
+    request_without_consent = server.ElectronicSignatureRequest(signature_data=signature_data, parent_slot=1, consent=False)
     token = server.current_user_context.set({"id": "family-user", "role": "family", "active": True})
     try:
         with pytest.raises(HTTPException) as error:
             asyncio.run(server.sign_authorization(auth["id"], request_without_consent))
         assert error.value.status_code == 422
-        request = server.ElectronicSignatureRequest(signature_data=signature_data, signer_name="Ana Uno", consent=True)
+        request = server.ElectronicSignatureRequest(signature_data=signature_data, parent_slot=1, consent=True)
         result = asyncio.run(server.sign_authorization(auth["id"], request))
     finally:
         server.current_user_context.reset(token)
     assert result["status"] == "firmada" and result["firma_modalidad"] == "simple_electronic"
     stored = db.authorizations.row
     assert stored["firma_electronica"]["signer_name"] == "Ana Uno"
+    assert stored["firmante_parent_slot"] == 1
     assert "signature_data" not in str(stored) and signature_data not in str(stored)
     assert stored["archivo_firmado_mime"] == "application/pdf"
     assert Path(tmp_path, stored["archivo_firmado"]).exists()
+
+
+def test_electronic_signature_cannot_be_submitted_for_another_parent(monkeypatch):
+    auth = pending_authorization("auth-other-parent")
+    monkeypatch.setattr(server, "get_doc", AsyncMock(return_value=dict(auth)))
+    monkeypatch.setattr(server, "_selected_authorization_parent", AsyncMock(return_value={
+        "slot": 2, "name": "Bruno Dos", "is_current": False,
+    }))
+    one_pixel_png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+    request = server.ElectronicSignatureRequest(
+        signature_data="data:image/png;base64," + base64.b64encode(one_pixel_png).decode(),
+        parent_slot=2, consent=True,
+    )
+    token = server.current_user_context.set({"id": "parent-1", "role": "family", "family_id": "family-1", "active": True})
+    try:
+        with pytest.raises(HTTPException) as error:
+            asyncio.run(server.sign_authorization(auth["id"], request))
+    finally:
+        server.current_user_context.reset(token)
+    assert error.value.status_code == 403
 
 
 def test_signature_token_or_content_never_appears_in_authorization_record():
