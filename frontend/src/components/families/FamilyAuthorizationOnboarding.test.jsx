@@ -65,6 +65,20 @@ test("uploads the selected file through the family submit endpoint", async () =>
   await act(async () => root.unmount());
 });
 
+test("downloads each authorization with the selected parent slot", async () => {
+  api.get.mockResolvedValueOnce({ data: new Blob(["%PDF-1.7"]) });
+  globalThis.URL.createObjectURL = jest.fn(() => "blob:authorization");
+  globalThis.URL.revokeObjectURL = jest.fn();
+  const { container, root } = await renderComponent();
+  const downloadButton = Array.from(container.querySelectorAll("button"))
+    .find((button) => button.textContent.includes("Descargar autorización"));
+  await act(async () => downloadButton.click());
+  expect(api.get).toHaveBeenCalledWith("/authorizations/auth-1/pdf", {
+    params: { lang: "es", parent_slot: 1 }, responseType: "blob",
+  });
+  await act(async () => root.unmount());
+});
+
 test("uses the selected parent slot when receiving a paper document", async () => {
   api.post.mockResolvedValueOnce({ data: { ok: true, status: "firmada" } });
   const { container, root } = await renderComponent();

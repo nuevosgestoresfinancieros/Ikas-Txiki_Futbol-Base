@@ -3901,13 +3901,14 @@ def build_authorization_pdf(
         story.extend([Paragraph(f"<b>Observaciones · Oharrak:</b> <i>{esc(auth.get('observaciones'))}</i>", normal), Spacer(1, 7 * mm)])
 
     signature_style = ParagraphStyle("Signature", parent=small, alignment=TA_CENTER)
+    signer = esc(auth.get("firmante"), "________________")
     signature_image = ""
     if signature_bytes:
         signature_image = ReportLabImage(io.BytesIO(signature_bytes), width=45 * mm, height=15 * mm, kind="proportional")
     signatures = Table([
-        ["", "", ""],
-        [signature_image or Paragraph("Firma del padre/madre/tutor/a<br/>Aita/ama/tutorearen sinadura", signature_style), Paragraph(f"Fecha · Data: {esc(auth.get('fecha_firma'), '____________')}", signature_style), Paragraph("Sello del club<br/>Klubaren zigilua", signature_style)],
-    ], colWidths=[52 * mm, 52 * mm, 52 * mm], rowHeights=[18 * mm, 12 * mm], hAlign="CENTER")
+        [signature_image, "", ""],
+        [Paragraph(f"<b>{signer}</b><br/>Firma del padre/madre/tutor/a<br/>Aita/ama/tutorearen sinadura", signature_style), Paragraph(f"Fecha · Data: {esc(auth.get('fecha_firma'), '____________')}", signature_style), Paragraph("Sello del club<br/>Klubaren zigilua", signature_style)],
+    ], colWidths=[52 * mm, 52 * mm, 52 * mm], rowHeights=[18 * mm, 18 * mm], hAlign="CENTER")
     signatures.setStyle(TableStyle([("LINEBELOW", (0, 0), (-1, 0), 0.8, colors.HexColor("#111827")), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 6), ("RIGHTPADDING", (0, 0), (-1, -1), 6)]))
     story.extend([Spacer(1, 8 * mm), KeepTogether(signatures), Spacer(1, 10 * mm), HRFlowable(width="100%", thickness=0.4, color=colors.HexColor("#d1d5db")), Spacer(1, 2 * mm), Paragraph(f"{esc(club_name)} · Documento generado / Sortutako dokumentua: {date.today().strftime('%d/%m/%Y')} · RGPD/DBEO (UE/EB) 2016/679", ParagraphStyle("Footer", parent=small, alignment=TA_CENTER, fontSize=7))])
     doc.build(story)
@@ -3983,8 +3984,15 @@ async def get_authorizations(estado: Optional[str] = None):
 
 
 @api_router.get("/authorizations/{auth_id}/pdf")
-async def download_authorization_pdf(auth_id: str, lang: str = "es"):
+async def download_authorization_pdf(
+    auth_id: str, lang: str = "es", parent_slot: Optional[int] = None,
+):
     auth = await get_doc("authorizations", auth_id)
+    if parent_slot is not None:
+        actor = current_user_context.get() or {}
+        selected_parent = await _selected_authorization_parent(auth, actor, parent_slot)
+        auth = {**auth, "firmante": selected_parent["name"],
+                "firmante_parent_slot": selected_parent["slot"]}
     player = await get_doc("players", auth.get("player_id"))
     settings = await get_settings()
     buffer = build_authorization_pdf(auth, player, settings, lang)

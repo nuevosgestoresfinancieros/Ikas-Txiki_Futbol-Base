@@ -93,7 +93,7 @@ const buildAuthHTML = (auth, player, settings, lang) => {
       </div>` : ""}
       ${auth.observaciones ? `<div style="margin-bottom:24px;font-size:13px;font-style:italic;color:#555;"><strong>Observaciones · Oharrak:</strong> ${auth.observaciones}</div>` : ""}
       <div style="margin-top:56px;display:flex;justify-content:space-between;gap:40px;">
-        <div style="flex:1;text-align:center;"><div style="border-top:1.5px solid #1a1a1a;padding-top:8px;font-size:11px;color:#555;">Firma del padre/madre/tutor/a<br/>Aita/ama/tutorearen sinadura</div></div>
+        <div style="flex:1;text-align:center;"><div style="font-size:12px;font-weight:700;min-height:18px;margin-bottom:6px;">${firmante}</div><div style="border-top:1.5px solid #1a1a1a;padding-top:8px;font-size:11px;color:#555;">Firma del padre/madre/tutor/a<br/>Aita/ama/tutorearen sinadura</div></div>
         <div style="flex:1;text-align:center;"><div style="border-top:1.5px solid #1a1a1a;padding-top:8px;font-size:11px;color:#555;">Fecha · Data: ${fecha}</div></div>
         <div style="flex:1;text-align:center;"><div style="border-top:1.5px solid #1a1a1a;padding-top:8px;font-size:11px;color:#555;">Sello del club · Klubaren zigilua</div></div>
       </div>
@@ -191,10 +191,16 @@ const Authorizations = () => {
   const setParentSlot = (playerId, slot) => {
     setSelectedParentSlots((current) => ({ ...current, [playerId]: Number(slot) }));
   };
+  const selectedParentForAuthorization = (authorization) => {
+    const options = getFamilyParentOptions(authorization.player_id);
+    const slot = parentSlotForPlayer(authorization.player_id);
+    return options.find((parent) => parent.slot === slot) || null;
+  };
   const doPrint = (a) => {
     const printRoot = document.createElement("div");
     printRoot.id = "authorization-print-root";
-    printRoot.innerHTML = buildAuthHTML(a, getPlayer(a.player_id), settings, lang);
+    const parent = selectedParentForAuthorization(a);
+    printRoot.innerHTML = buildAuthHTML({ ...a, firmante: parent?.name || a.firmante }, getPlayer(a.player_id), settings, lang);
 
     const printStyle = document.createElement("style");
     printStyle.id = "authorization-print-style";
@@ -230,10 +236,13 @@ const Authorizations = () => {
 
   const doDownloadPdf = async (a) => {
     const player = getPlayer(a.player_id);
+    const parent = selectedParentForAuthorization(a);
     const tipoSlug = (AUTH_TYPES[a.tipo]?.[lang] || a.tipo).toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
     const jugadorSlug = player ? `${player.nombre}_${player.apellidos || ""}`.toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "") : "jugador";
     try {
-      const response = await api.get(`/authorizations/${a.id}/pdf`, { params: { lang }, responseType: "blob" });
+      const response = await api.get(`/authorizations/${a.id}/pdf`, {
+        params: { lang, ...(parent ? { parent_slot: parent.slot } : {}) }, responseType: "blob",
+      });
       const url = URL.createObjectURL(response.data);
       const link = document.createElement("a");
       link.href = url;

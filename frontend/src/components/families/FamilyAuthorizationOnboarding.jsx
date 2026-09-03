@@ -160,9 +160,12 @@ export default function FamilyAuthorizationOnboarding({ data, user, onRefresh, f
   if (!user || user.role !== "family" || !data?.required || !pendingCount) return null;
 
   const download = async (authorization) => {
+    if (!selectedParentSlot) { toast.error(t("familyAuthParentRequired")); return; }
     setBusyId(authorization.id);
     try {
-      const response = await api.get(`/authorizations/${authorization.id}/pdf?lang=${lang}`, { responseType: "blob" });
+      const response = await api.get(`/authorizations/${authorization.id}/pdf`, {
+        params: { lang, parent_slot: Number(selectedParentSlot) }, responseType: "blob",
+      });
       const url = URL.createObjectURL(response.data);
       const link = document.createElement("a");
       link.href = url;
