@@ -7,7 +7,7 @@ import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { PageHeader, StatusBadge } from "@/components/shared";
 import FamilyAuthorizationOnboarding from "@/components/families/FamilyAuthorizationOnboarding";
-import { attendancePercentage, filterPortalByPlayer, nextPortalActivity } from "./portalView";
+import { attendancePercentage, authorizationOnboardingData, filterPortalByPlayer, nextPortalActivity } from "./portalView";
 
 const Card = ({ title, icon: Icon, children, testid }) => <section className="surface-card p-4 sm:p-5" data-testid={testid}>
   <h2 className="mb-4 flex items-center gap-2 font-heading text-lg font-bold text-slate-900"><Icon className="h-5 w-5 text-primary" />{title}</h2>{children}
@@ -39,6 +39,7 @@ export default function Portal({ user }) {
   }, [data, searchParams, setSearchParams]);
 
   const view = useMemo(() => filterPortalByPlayer(data || {}, selectedId), [data, selectedId]);
+  const onboardingData = useMemo(() => authorizationOnboardingData(data || {}), [data]);
   const next = useMemo(() => nextPortalActivity(view.schedule), [view.schedule]);
   const formatDate = (value, options = { dateStyle: "medium" }) => {
     if (!value) return "—";
@@ -71,7 +72,7 @@ export default function Portal({ user }) {
   if (!view.player) return <div><PageHeader title={t("familyPlayerPortal")} icon={ShieldCheck} /><Empty>{t("portalNoAssociation")}</Empty></div>;
 
   return <div data-testid="portal-page">
-    {onboardingOpen && <FamilyAuthorizationOnboarding data={data.authorization_onboarding} user={user} onRefresh={load} fullPage onLater={closeOnboarding} />}
+    {onboardingOpen && <FamilyAuthorizationOnboarding data={onboardingData} user={user} onRefresh={load} fullPage onLater={closeOnboarding} />}
     <PageHeader title={user?.role === "family" ? t("familyPortal") : t("playerPortal")} subtitle={t("portalSubtitle")} icon={ShieldCheck} />
     {user?.role === "family" && data.authorization_onboarding?.required && <section className="mb-5 rounded-2xl border border-amber-200 bg-amber-50 p-4" role="status" data-testid="family-auth-pending-banner"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="font-bold text-amber-900">{t("familyAuthPendingNotice")}</p><p className="mt-1 text-sm text-amber-800">{t("familyAuthBannerDetail")} {data.authorization_onboarding.pending_count}</p></div><Button type="button" variant="outline" onClick={() => setOnboardingOpen(true)}>{t("familyAuthOpen")}</Button></div></section>}
     {user?.role === "family" && <Card title={t("associatedChildren")} icon={UserRound} testid="portal-linked-children">

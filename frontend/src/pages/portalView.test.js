@@ -1,4 +1,4 @@
-import { attendancePercentage, filterPortalByPlayer, nextPortalActivity, pendingPortalResponses } from "./portalView";
+import { attendancePercentage, authorizationOnboardingData, filterPortalByPlayer, nextPortalActivity, pendingPortalResponses } from "./portalView";
 
 const portal = {
   players: [{ id: "one", equipo_id: "a" }, { id: "two", equipo_id: "b" }],
@@ -33,4 +33,26 @@ test("identifies only the selected player's pending callups", () => {
 test("calculates attendance for the selected player", () => {
   expect(attendancePercentage([{ status: "presente" }, { status: "justificada" }])).toBe(50);
   expect(attendancePercentage([])).toBe(0);
+});
+
+test("passes the API root parent options to the onboarding component", () => {
+  const result = authorizationOnboardingData({
+    authorization_onboarding: { required: true, pending_count: 1 },
+    family_parents: [{ slot: 1, name: "Ana Uno", is_current: true }],
+    current_parent_slot: 1,
+  });
+  expect(result.family_parents).toEqual([{ slot: 1, name: "Ana Uno", is_current: true }]);
+  expect(result.current_parent_slot).toBe(1);
+});
+
+test("accepts nested parent options during API response transitions", () => {
+  const result = authorizationOnboardingData({
+    authorization_onboarding: {
+      required: true,
+      family_parents: [{ slot: 2, name: "Bruno Dos", is_current: false }],
+      current_parent_slot: 2,
+    },
+  });
+  expect(result.family_parents[0].slot).toBe(2);
+  expect(result.current_parent_slot).toBe(2);
 });

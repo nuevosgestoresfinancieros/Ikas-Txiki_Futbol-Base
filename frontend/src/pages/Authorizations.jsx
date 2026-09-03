@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { PageHeader, StatusBadge, EmptyState } from "@/components/shared";
 import { Field, Area, SelectField } from "@/components/form";
+import { familyParentOptions, selectedFamilyParentSlot } from "./authorizationsView";
 
 const AUTH_TYPES = {
   general:          { es: "Autorización general de participación",  eu: "Parte hartzeko baimen orokorra" },
@@ -108,26 +109,35 @@ const Authorizations = () => {
   const [params, setParams] = useSearchParams();
   const [auths, setAuths] = useState([]);
   const [players, setPlayers] = useState([]);
+  const [families, setFamilies] = useState([]);
   const [settings, setSettings] = useState({});
   const [dialog, setDialog] = useState(false);
   const [form, setForm] = useState({ tipo: "general", estado: "pendiente" });
-  const [bulkForm, setBulkForm] = useState({ player_id: "", firmante: "" });
+  const [bulkForm, setBulkForm] = useState({ player_id: "", parent_slot: "" });
   const [bulkDialog, setBulkDialog] = useState(false);
   const [syncingAll, setSyncingAll] = useState(false);
   const [expanded, setExpanded] = useState({}); // { player_id: true/false }
+  const [selectedParentSlots, setSelectedParentSlots] = useState({});
   const uploadRefs = useRef({});
 
   const load = async () => setAuths((await api.get("/authorizations")).data);
   useEffect(() => {
     load();
     api.get("/players").then((r) => setPlayers(r.data));
+    api.get("/families").then((r) => setFamilies(r.data));
     api.get("/settings").then((r) => setSettings(r.data));
     if (params.get("new") && canCreate) { setBulkDialog(true); params.delete("new"); setParams(params); }
     // eslint-disable-next-line
   }, []);
 
   const set = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
-  const openEdit = (a) => { setForm(a); setDialog(true); };
+  const openEdit = (a) => {
+    setForm(a);
+    if (a.player_id && a.firmante_parent_slot) {
+      setSelectedParentSlots((current) => ({ ...current, [a.player_id]: Number(a.firmante_parent_slot) }));
+    }
+    setDialog(true);
+  };
   const save = async () => {
     if (form.id) await api.put(`/authorizations/${form.id}`, form);
     else await api.post("/authorizations", form);
@@ -145,8 +155,11 @@ const Authorizations = () => {
     const toCreate = Object.keys(AUTH_TYPES).filter((t) => !existing.includes(t));
     if (toCreate.length === 0) { toast.error("Este jugador ya tiene las 6 autorizaciones"); return; }
     await Promise.all(toCreate.map((tipo) =>
-      api.post("/authorizations", { player_id: bulkForm.player_id, firmante: bulkForm.firmante, tipo, estado: "pendiente" })
+      api.post("/authorizations", { player_id: bulkForm.player_id, tipo, estado: "pendiente" })
     ));
+    if (bulkForm.parent_slot) {
+      setSelectedParentSlots((current) => ({ ...current, [bulkForm.player_id]: Number(bulkForm.parent_slot) }));
+    }
     toast.success(`${toCreate.length} autorizaciones creadas`);
     setBulkDialog(false);
     // Expandir automáticamente al jugador recién creado
@@ -171,6 +184,13 @@ const Authorizations = () => {
   };
 
   const getPlayer = (id) => players.find((p) => p.id === id);
+  const getFamilyParentOptions = (playerId) => familyParentOptions(families, players, playerId);
+  const parentSlotForPlayer = (playerId) => selectedFamilyParentSlot(
+    getFamilyParentOptions(playerId), selectedParentSlots[playerId],
+  );
+  const setParentSlot = (playerId, slot) => {
+    setSelectedParentSlots((current) => ({ ...current, [playerId]: Number(slot) }));
+  };
   const doPrint = (a) => {
     const printRoot = document.createElement("div");
     printRoot.id = "authorization-print-root";
@@ -231,6 +251,9 @@ const Authorizations = () => {
 
   const doUploadSigned = async (authId, file) => {
     const fd = new FormData(); fd.append("file", file);
+    const authorization = auths.find((item) => item.id === authId);
+    const parentSlot = parentSlotForPlayer(authorization?.player_id);
+    if (parentSlot) fd.append("parent_slot", String(parentSlot));
     try {
       await api.post(`/authorizations/${authId}/upload-signed`, fd, { headers: { "Content-Type": "multipart/form-data" } });
       toast.success("PDF firmado subido"); load();
@@ -313,7 +336,7 @@ const Authorizations = () => {
             <Button variant="outline" data-testid="ensure-all-authorizations" onClick={ensureAllPlayers} disabled={syncingAll || !players.length} className="h-11 px-5">
               <Users className="h-5 w-5" />{syncingAll ? "Integrando…" : "Integrar todos los jugadores"}
             </Button>
-            <Button data-testid="add-auth-btn" onClick={() => { setBulkForm({ player_id: "", firmante: "" }); setBulkDialog(true); }} className="h-11 px-5">
+            <Button data-testid="add-auth-btn" onClick={() => { setBulkForm({ player_id: "", parent_slot: "" }); setBulkDialog(true); }} className="h-11 px-5">
               <Plus className="h-5 w-5" />{t("newAuthorization")}
             </Button>
           </div> : null
@@ -330,6 +353,8 @@ const Authorizations = () => {
             const firmadas = group.items.filter((a) => a.estado === "firmada").length;
             const pendientes = group.items.filter((a) => a.estado === "pendiente").length;
             const total = group.items.length;
+            const parentOptions = getFamilyParentOptions(group.player_id);
+            const selectedParentSlot = parentSlotForPlayer(group.player_id);
             return (
               <div key={group.player_id} className="surface-card overflow-hidden">
                 {/* Cabecera del grupo — fila del jugador */}
@@ -361,6 +386,14 @@ const Authorizations = () => {
                 {/* Detalle de las 6 autorizaciones — desplegable */}
                 {isOpen && (
                   <div>
+                    {parentOptions.length > 0 && <div className="flex flex-wrap items-center gap-3 border-t border-slate-100 bg-[#F5F8FC] px-4 py-3" data-testid={`authorization-parent-selector-${group.player_id}`}>
+                      <label htmlFor={`authorization-parent-${group.player_id}`} className="text-sm font-semibold text-[#0E3554]">{t("authorizationSignerParent")}</label>
+                      <select id={`authorization-parent-${group.player_id}`} value={selectedParentSlot || ""} onChange={(event) => setParentSlot(group.player_id, event.target.value)} className="min-h-10 min-w-56 rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-800">
+                        <option value="" disabled>{t("authorizationSignerParentPlaceholder")}</option>
+                        {parentOptions.map((parent) => <option key={parent.slot} value={parent.slot}>{parent.name}</option>)}
+                      </select>
+                      <span className="text-xs text-slate-600">{t("authorizationSignerParentHint")}</span>
+                    </div>}
                     {/* Cabecera columnas */}
                     <div className="flex items-center gap-2 px-4 py-1.5 bg-slate-50 text-xs font-bold uppercase tracking-wider text-slate-400 border-t border-slate-100">
                       <div className="w-48">Tipo</div>
@@ -411,8 +444,14 @@ const Authorizations = () => {
             </p>
             <SelectField label={t("name")} value={bulkForm.player_id}
               onChange={(v) => setBulkForm((f) => ({ ...f, player_id: v }))} options={playerOptions} testid="bulk-auth-player" />
-            <Field label={t("signer")} value={bulkForm.firmante}
-              onChange={(v) => setBulkForm((f) => ({ ...f, firmante: v }))} testid="bulk-auth-firmante" />
+            {getFamilyParentOptions(bulkForm.player_id).length > 0 && <div className="space-y-2 rounded-xl border border-[#CFE9FA] bg-[#F5F8FC] p-3" data-testid="bulk-auth-parent-selector">
+              <label htmlFor="bulk-auth-parent" className="text-sm font-semibold text-[#0E3554]">{t("authorizationSignerParent")}</label>
+              <select id="bulk-auth-parent" value={bulkForm.parent_slot} onChange={(event) => setBulkForm((f) => ({ ...f, parent_slot: event.target.value }))} className="min-h-10 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-800">
+                <option value="" disabled>{t("authorizationSignerParentPlaceholder")}</option>
+                {getFamilyParentOptions(bulkForm.player_id).map((parent) => <option key={parent.slot} value={parent.slot}>{parent.name}</option>)}
+              </select>
+              <p className="text-xs leading-5 text-slate-600">{t("authorizationSignerParentHint")}</p>
+            </div>}
             {bulkForm.player_id && (
               <div className="rounded-lg border border-slate-100 bg-slate-50 p-3">
                 <p className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">Autorizaciones</p>
@@ -447,7 +486,14 @@ const Authorizations = () => {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
             <SelectField label={t("name")} value={form.player_id} onChange={set("player_id")} options={playerOptions} testid="auth-player" />
             <SelectField label={t("authType")} value={form.tipo} onChange={set("tipo")} options={typeOptions} testid="auth-tipo" />
-            <Field label={t("signer")} value={form.firmante} onChange={set("firmante")} testid="auth-firmante" />
+            {getFamilyParentOptions(form.player_id).length > 0 && <div className="sm:col-span-2 space-y-2 rounded-xl border border-[#CFE9FA] bg-[#F5F8FC] p-3" data-testid="auth-parent-selector">
+              <label htmlFor="auth-parent" className="text-sm font-semibold text-[#0E3554]">{t("authorizationSignerParent")}</label>
+              <select id="auth-parent" value={form.parent_slot || form.firmante_parent_slot || parentSlotForPlayer(form.player_id) || ""} onChange={(event) => { setForm((current) => ({ ...current, parent_slot: Number(event.target.value) })); setParentSlot(form.player_id, event.target.value); }} className="min-h-10 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm text-slate-800">
+                <option value="" disabled>{t("authorizationSignerParentPlaceholder")}</option>
+                {getFamilyParentOptions(form.player_id).map((parent) => <option key={parent.slot} value={parent.slot}>{parent.name}</option>)}
+              </select>
+              <p className="text-xs leading-5 text-slate-600">{t("authorizationSignerParentHint")}</p>
+            </div>}
             <SelectField label={t("status")} value={form.estado} onChange={set("estado")} options={["pendiente","firmada","caducada"].map((s)=>({value:s,label:s}))} testid="auth-estado" />
             <Field label={t("signDate")} type="date" value={form.fecha_firma} onChange={set("fecha_firma")} testid="auth-fecha" />
             <Field label={t("expiryDate")} type="date" value={form.fecha_caducidad} onChange={set("fecha_caducidad")} testid="auth-caducidad" />
