@@ -92,6 +92,18 @@ Aplicación web integral para la **gestión de una escuela de fútbol base juven
 
 ---
 
+## 📚 Documentación y guías de asistentes
+
+Los hooks versionados están disponibles, pero no se activan automáticamente. Para configurarlos en un clon local, ejecuta:
+
+```bash
+scripts/install-git-hooks.sh
+```
+
+Actualiza `docs/current-state.md` cuando cambie el estado funcional y `docs/architecture.md` para cambios transversales. Para decisiones sobre datos, seguridad o autenticación, crea una decisión numerada en `docs/decisions/`.
+
+---
+
 ## 🚀 Puesta en marcha
 
 ### Desarrollo local
@@ -129,6 +141,22 @@ sudo bash deploy.sh
 ```
 
 No migres a otro proveedor sin planificar antes variables, dominio, CORS, MongoDB y almacenamiento de archivos subidos.
+
+### Publicación segura
+
+Para una publicación autorizada desde la raíz del repositorio y la rama `main`, usa:
+
+```bash
+scripts/publish-safe.sh "Describe el cambio"
+```
+
+El comando sincroniza las guías, limita el staging a archivos versionables permitidos, rechaza secretos y datos, exige la documentación correspondiente, ejecuta pruebas, lint, `git diff --check` y un build temporal. Solo entonces crea el commit, lo envía a `origin/main`, intercambia el build por renombrado y comprueba la salud de la API. Conserva el build anterior en `frontend/.release-backups/` para revertirlo si falla la publicación o el health check. Reinicia únicamente `ikastxiki-backend.service` si hay cambios bajo `backend/`; no toca Apache, MongoDB, uploads ni variables de entorno.
+
+Para validar el flujo sin publicar, usa:
+
+```bash
+scripts/publish-safe.sh --dry-run "Validación de publicación"
+```
 
 ---
 

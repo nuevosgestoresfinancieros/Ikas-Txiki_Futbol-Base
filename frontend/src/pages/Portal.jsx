@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { CalendarDays, Check, ClipboardCheck, Download, Euro, FileCheck, MessageSquare, RefreshCw, ShieldCheck, Trophy, UserRound, X } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { PageHeader, StatusBadge } from "@/components/shared";
+import FamilyAuthorizationOnboarding from "@/components/families/FamilyAuthorizationOnboarding";
 import { attendancePercentage, filterPortalByPlayer, nextPortalActivity } from "./portalView";
 
 const Card = ({ title, icon: Icon, children, testid }) => <section className="surface-card p-4 sm:p-5" data-testid={testid}>
@@ -18,6 +20,8 @@ export default function Portal({ user }) {
   const [selectedId, setSelectedId] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
   const load = useCallback(async () => {
     setLoading(true); setError(false);
     try {
@@ -28,6 +32,11 @@ export default function Portal({ user }) {
     finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (searchParams.get("onboarding") !== "1" || !data) return;
+    if (data.authorization_onboarding?.required) setOnboardingOpen(true);
+    else setSearchParams({}, { replace: true });
+  }, [data, searchParams, setSearchParams]);
 
   const view = useMemo(() => filterPortalByPlayer(data || {}, selectedId), [data, selectedId]);
   const next = useMemo(() => nextPortalActivity(view.schedule), [view.schedule]);
@@ -52,13 +61,19 @@ export default function Portal({ user }) {
       link.href = url; link.download = filename; link.click(); URL.revokeObjectURL(url);
     } catch { toast.error(t("downloadError")); }
   };
+  const closeOnboarding = () => {
+    setOnboardingOpen(false);
+    setSearchParams({}, { replace: true });
+  };
 
   if (loading) return <div className="py-20 text-center text-sm text-slate-500" role="status">{t("loading")}</div>;
   if (error) return <div className="surface-card flex flex-col items-center gap-4 p-12 text-center" role="alert"><p className="text-red-600">{t("portalLoadError")}</p><Button variant="outline" onClick={load}><RefreshCw className="h-4 w-4" />{t("retry")}</Button></div>;
   if (!view.player) return <div><PageHeader title={t("familyPlayerPortal")} icon={ShieldCheck} /><Empty>{t("portalNoAssociation")}</Empty></div>;
 
   return <div data-testid="portal-page">
+    {onboardingOpen && <FamilyAuthorizationOnboarding data={data.authorization_onboarding} user={user} onRefresh={load} fullPage onLater={closeOnboarding} />}
     <PageHeader title={user?.role === "family" ? t("familyPortal") : t("playerPortal")} subtitle={t("portalSubtitle")} icon={ShieldCheck} />
+    {user?.role === "family" && data.authorization_onboarding?.required && <section className="mb-5 rounded-2xl border border-amber-200 bg-amber-50 p-4" role="status" data-testid="family-auth-pending-banner"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="font-bold text-amber-900">{t("familyAuthPendingNotice")}</p><p className="mt-1 text-sm text-amber-800">{t("familyAuthBannerDetail")} {data.authorization_onboarding.pending_count}</p></div><Button type="button" variant="outline" onClick={() => setOnboardingOpen(true)}>{t("familyAuthOpen")}</Button></div></section>}
     {user?.role === "family" && <Card title={t("associatedChildren")} icon={UserRound} testid="portal-linked-children">
       {(data.players || []).length ? <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{data.players.map((player) => <button key={player.id} type="button" onClick={() => setSelectedId(player.id)} aria-pressed={selectedId === player.id} className={`rounded-2xl border p-4 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${selectedId === player.id ? "border-primary bg-primary/5" : "border-slate-200 bg-white hover:border-primary/40"}`}><p className="font-bold text-slate-900">{player.nombre} {player.apellidos}</p><p className="mt-1 text-sm text-slate-600">{player.team_name || t("noTeam")} · {player.categoria || "—"}</p><div className="mt-2"><StatusBadge status={player.estado} /></div></button>)}</div> : <Empty>{t("portalNoAssociation")}</Empty>}
     </Card>}

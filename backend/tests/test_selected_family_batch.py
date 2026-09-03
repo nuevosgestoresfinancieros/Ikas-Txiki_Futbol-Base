@@ -8,12 +8,21 @@ class Users:
  async def insert_one(self, row): self.rows.append(dict(row))
 class Players:
  async def distinct(self, *_): return ['p1']
+class AuthorizationCursor:
+ def __init__(self, rows): self.rows=rows
+ async def to_list(self, _limit): return list(self.rows)
+class Authorizations:
+ def __init__(self): self.rows=[]
+ def find(self, query, *_):
+  players=set(query['player_id']['$in']); types=set(query['tipo']['$in'])
+  return AuthorizationCursor([row for row in self.rows if row['player_id'] in players and row['tipo'] in types])
+ async def insert_many(self, rows, **_): self.rows.extend(dict(row) for row in rows)
 class Logs:
  def __init__(self): self.rows=[]
  async def insert_one(self,row): self.rows.append(row)
 def family(**x): return {'id':'f1','progenitor1_nombre':'Ana','progenitor1_email':' ANA@EXAMPLE.TEST ','progenitor2_nombre':'Bea','progenitor2_email':'bea@example.test',**x}
 def run(families, users=()):
- db=SimpleNamespace(users=Users(users),players=Players(),delivery_logs=Logs(),internal_events=Logs())
+ db=SimpleNamespace(users=Users(users),players=Players(),authorizations=Authorizations(),delivery_logs=Logs(),internal_events=Logs())
  sent=[]
  def dispatch(*args, **kwargs): sent.append((args,kwargs)); return {'status':'sent','id':'d'}
  result=asyncio.run(provision(db,families,{'id':'admin','role':'admin'},'secret',lambda _: 'hash',dispatch,'https://app.test'))
@@ -32,7 +41,7 @@ def test_single_duplicate_invalid_and_existing_are_aggregated_without_secrets():
 
 
 def test_smtp_failure_keeps_both_accounts_and_records_retryable_delivery_logs():
-    db = SimpleNamespace(users=Users(), players=Players(), delivery_logs=Logs(), internal_events=Logs())
+    db = SimpleNamespace(users=Users(), players=Players(), authorizations=Authorizations(), delivery_logs=Logs(), internal_events=Logs())
 
     def failing_dispatch(*_args, **_kwargs):
         raise OSError("fake SMTP unavailable")

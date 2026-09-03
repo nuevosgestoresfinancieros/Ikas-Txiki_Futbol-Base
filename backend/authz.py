@@ -8,7 +8,7 @@ from fastapi import HTTPException, Request
 
 
 ROLES = ("admin", "coordinator", "coach", "family", "player")
-ACTIONS = ("read", "create", "edit", "delete", "export", "administer", "respond")
+ACTIONS = ("read", "create", "edit", "delete", "export", "administer", "respond", "submit")
 RESOURCES = (
     "dashboard", "users", "players", "families", "teams", "trainings",
     "matches", "callups", "attendance", "payments", "authorizations",
@@ -78,7 +78,7 @@ ROLE_PERMISSIONS: Dict[str, Dict[str, Set[str]]] = {
         "matches": _actions("read"),
         "callups": _actions("read", "respond"),
         "payments": _actions("read", "export"),
-        "authorizations": _actions("read", "export"),
+        "authorizations": _actions("read", "export", "submit"),
         "communications": _actions("read"),
         "reports": _actions("read", "export"),
         "stats": _actions("read"),
@@ -190,6 +190,8 @@ def route_permission(request: Request) -> tuple[str, str]:
         return "reports", "read"
     if first == "reports" and any(part.startswith("export.") for part in parts):
         return "reports", "export"
+    if first == "authorizations" and any(part in {"upload-signed", "sign"} for part in parts):
+        return "authorizations", "submit"
     if first == "assistant":
         if "confirm" in parts or "cancel" in parts:
             return "assistant", "edit"

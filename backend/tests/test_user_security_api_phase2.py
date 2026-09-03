@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from notification_service import dispatch_email as smtp_dispatch_email
 
 os.environ.setdefault("MONGO_URL", "mongodb://127.0.0.1:27039")
 os.environ.setdefault("DB_NAME", "ikastxiki_users_phase2_test")
@@ -109,7 +110,7 @@ def test_activation_link_strips_legacy_cors_origin_brackets(monkeypatch):
     monkeypatch.delenv("PUBLIC_APP_URL", raising=False)
     monkeypatch.setenv("CORS_ORIGINS", "[https://ikasfutbase.cibermedida.es]")
     assert server._activation_link("token_value") == (
-        "https://ikasfutbase.cibermedida.es/login?invitation=token_value"
+        "https://ikasfutbase.cibermedida.es/activar?token=token_value"
     )
 
 
@@ -119,7 +120,7 @@ def test_activation_link_normalizes_markdown_formatted_public_url(monkeypatch):
         "[https://ikasfutbase.cibermedida.es](https://ikasfutbase.cibermedida.es)",
     )
     assert server._activation_link("token_value") == (
-        "https://ikasfutbase.cibermedida.es/login?invitation=token_value"
+        "https://ikasfutbase.cibermedida.es/activar?token=token_value"
     )
 
 
@@ -158,6 +159,20 @@ def test_invitation_delivery_failure_is_logged_without_disclosing_the_token(monk
     logged = db.delivery_logs.insert_one.await_args.args[0]
     assert logged["status"] == "failed"
     assert {"recipient", "status", "error", "created_at", "sent_at", "message_id", "user_id", "purpose"} <= logged.keys()
+
+
+def test_invitation_without_recipient_is_pending_with_safe_reason(monkeypatch):
+    user = {"id": "user-fixture", "username": "family", "role": "family", "email": None}
+    db = database(user)
+    monkeypatch.setattr(server, "db", db)
+    monkeypatch.setattr(server, "dispatch_email", smtp_dispatch_email)
+    result = asyncio.run(server._send_invitation_email(user, "fixture-plain-token"))
+    assert result["status"] == "pending"
+    assert result["error"] == "recipient_missing"
+    logged = db.delivery_logs.insert_one.await_args.args[0]
+    assert logged["status"] == "pending"
+    assert logged["error"] == "recipient_missing"
+    assert "fixture-plain-token" not in str(logged)
 
 
 def test_session_revocation_rejects_self_and_increments_other_user(monkeypatch):
@@ -305,6 +320,12 @@ class MemoryCollection:
     async def insert_one(self, row):
         self.rows.append(dict(row))
 
+    async def insert_many(self, rows, **_kwargs):
+        self.rows.extend(dict(row) for row in rows)
+
+    def find(self, *_args, **_kwargs):
+        return SimpleNamespace(to_list=lambda _limit: _async_rows(self.rows))
+
     async def update_one(self, query, update, **_kwargs):
         row = await self.find_one(query)
         if not row:
@@ -332,12 +353,17 @@ class FamilyFixtureCollection:
         return ["player-fixture"]
 
 
+async def _async_rows(rows):
+    return [dict(row) for row in rows]
+
+
 def invitation_database():
     users = MemoryCollection()
     return SimpleNamespace(
         users=users,
         families=FamilyFixtureCollection(),
         players=FamilyFixtureCollection(),
+        authorizations=MemoryCollection(),
         delivery_logs=MemoryCollection(),
         internal_events=MemoryCollection(),
     )
@@ -376,7 +402,7 @@ def test_creating_invitation_saves_account_logs_delivery_and_activates(monkeypat
     assert {"recipient", "status", "error", "created_at", "sent_at", "message_id", "user_id", "purpose"} <= log.keys()
     assert log["status"] == "sent" and log["user_id"] == saved["id"]
     assert sent[0][1]["purpose"] == "family_account_activation"
-    assert "/login?invitation=activation-token" in sent[0][1]["action_url"]
+    assert "/activar?token=activation-token" in sent[0][1]["action_url"]
 
     activated = asyncio.run(server.activate_invitation(server.TokenPasswordRequest(
         token="activation-token", password="Secure-Activation-2026!",
@@ -385,6 +411,13 @@ def test_creating_invitation_saves_account_logs_delivery_and_activates(monkeypat
     assert activated == {"ok": True, "username": "family-fixture"}
     assert db.users.rows[0]["account_status"] == "active" and db.users.rows[0]["active"] is True
     assert db.users.rows[0]["invitation"]["used_at"]
+    assert "activation-token" not in str(db.users.rows[0])
+    with pytest.raises(Exception) as error:
+        asyncio.run(server.activate_invitation(server.TokenPasswordRequest(
+            token="activation-token", password="Secure-Activation-2026!",
+            password_confirmation="Secure-Activation-2026!",
+        )))
+    assert error.value.status_code == 400
 
 
 def test_creating_invitation_with_delivery_failure_keeps_account_retriable(monkeypatch):

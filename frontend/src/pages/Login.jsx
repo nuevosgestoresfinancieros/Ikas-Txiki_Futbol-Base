@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import ClubLogo from "@/components/ClubLogo";
 import InstallAppCard from "@/components/InstallAppCard";
 import PublicLegalLinks from "@/components/PublicLegalLinks";
+import { destinationAfterLogin } from "./loginView";
 
 const featureIcons = [Users, CalendarDays, FileCheck2];
 const featureKeys = ["loginFeaturePlayers", "loginFeatureSchedule", "loginFeatureAdmin"];
@@ -79,9 +80,7 @@ const Login = ({ onLogin }) => {
       onLogin?.(loggedUser);
       // Una cuenta familiar o de jugador no debe volver al dashboard interno
       // aunque el navegador hubiera guardado la ruta anterior.
-      const destination = ["family", "player"].includes(loggedUser.role)
-        ? "/portal"
-        : location.state?.from?.pathname || "/";
+      const destination = destinationAfterLogin(loggedUser, location.search, location.state?.from?.pathname || "/");
       navigate(destination, { replace: true });
     } catch (requestError) {
       const status = requestError.response?.status;

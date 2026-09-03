@@ -141,3 +141,22 @@ global en `manual`. Requiere autorización posterior explícita:
 ```bash
 ../venv/bin/python migrations/009_family_access_provisioning.py --apply \
   --confirm PREPARE-FAMILY-ACCESS-INFRASTRUCTURE
+```
+
+## Índice de autorizaciones familiares
+
+`010_family_authorization_indexes.py` comprueba si existen autorizaciones
+duplicadas por jugador y tipo, y cuenta jugadores con menos de seis tipos. Por
+defecto no modifica nada:
+
+```bash
+../venv/bin/python migrations/010_family_authorization_indexes.py
+```
+
+Solo cuando el preflight no encuentre duplicados se puede crear el índice
+único que protege la creación idempotente:
+
+```bash
+../venv/bin/python migrations/010_family_authorization_indexes.py --apply \
+  --confirm PREPARE-FAMILY-AUTHORIZATION-INDEX
+```

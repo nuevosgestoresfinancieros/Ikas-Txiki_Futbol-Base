@@ -12,6 +12,7 @@ import asyncio
 import io
 import base64
 import copy
+import hashlib
 import html as html_lib
 import json
 import logging
@@ -31,7 +32,8 @@ from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, KeepTogether
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable, KeepTogether, Image as ReportLabImage
+from PIL import Image as PILImage
 from datetime import datetime, timezone, date, timedelta
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -59,6 +61,7 @@ from calendar_service import (
     next_calendar_event, subscription_capability,
 )
 from portal_service import document_status, portal_attendance, portal_callups, safe_payment, safe_player, upcoming
+from authorization_service import AUTHORIZATION_TYPES, ensure_family_authorizations, signer_name
 from notification_service import delivery_log, dispatch_email, dispatch_telegram, make_notification, notification_enabled, provider_configuration
 from brand_assets import BRAND_BLUE, BRAND_TEAL, pdf_logo
 from inscription_import_service import (
@@ -383,6 +386,13 @@ async def consume_password_token(kind: str, request: TokenPasswordRequest, respo
     }, "$inc": {"session_version": 1}})
     if not result.modified_count:
         raise HTTPException(status_code=400, detail="Enlace inválido, caducado o ya utilizado")
+    if kind == "invitation" and user.get("role") == "family" and user.get("family_id"):
+        try:
+            await ensure_family_authorizations(
+                db, user["family_id"], player_ids=user.get("linked_player_ids"),
+            )
+        except Exception:
+            logging.getLogger(__name__).exception("Family authorization onboarding could not be initialized")
     await record_user_audit(f"{kind}_completed", user, [])
     payload = {"ok": True}
     if kind == "invitation":
@@ -1071,6 +1081,10 @@ async def create_user(user: UserCreate):
     })
     data["notification_preferences"] = dict(data["notification_preferences"])
     await db.users.insert_one(dict(data))
+    if data.get("role") == "family" and data.get("family_id"):
+        await ensure_family_authorizations(
+            db, data["family_id"], player_ids=data.get("linked_player_ids"),
+        )
     await record_user_audit("created", data, list(data.keys()))
     response = secured_public_user(data)
     if access_method == "temporary_password":
@@ -1741,6 +1755,10 @@ class FamilyAccessInvitationRequest(BaseModel):
     family_ids: List[str] = Field(min_length=1, max_length=500)
 
 
+class PendingFamilyInvitationRequest(BaseModel):
+    family_ids: Optional[List[str]] = Field(default=None, max_length=500)
+
+
 def _family_access_email(family: dict) -> str | None:
     for key in ("progenitor1_email", "progenitor2_email"):
         value = normalized_key(family.get(key))
@@ -1800,7 +1818,9 @@ def _public_app_url() -> str:
 
 
 def _activation_link(token: str) -> str:
-    return f"{_public_app_url()}/login?invitation={quote(token, safe='')}"
+    # La ruta pública directa evita que una sesión administrativa ya abierta
+    # redirija /login al portal antes de que se muestre la activación.
+    return f"{_public_app_url()}/activar?token={quote(token, safe='')}"
 
 
 def _recovery_link(token: str) -> str:
@@ -1910,8 +1930,53 @@ async def send_family_access_invitations(request: FamilyAccessInvitationRequest)
     # and is idempotent on retries.
     return await provision_selected_family_batch(
         db, families, actor, JWT_SECRET, pwd_context.hash, dispatch_email,
-        PUBLIC_APP_URL,
+        _public_app_url(),
     )
+
+
+@api_router.post("/account-provisioning/families/invitations/resend-pending")
+async def resend_pending_family_invitations(request: Optional[PendingFamilyInvitationRequest] = None):
+    """Renew pending family links and record each mocked/real provider result.
+
+    The operation is administrator-only and intentionally returns aggregate
+    statuses without recipients, links, hashes or other account secrets.
+    """
+    actor = _require_family_access_admin()
+    family_ids = sorted(set(ids(request.family_ids if request else [])))
+    query = {"role": "family", "account_status": "pending_activation", "active": False}
+    if family_ids:
+        query["family_id"] = {"$in": family_ids}
+    users = await db.users.find(query, {"_id": 0}).to_list(500)
+    results = []
+    for user in users:
+        plain, record = issue_token(JWT_SECRET, ttl_minutes=0, ttl_hours=INVITATION_TTL_HOURS)
+        pending = list(user.get("invitation_history") or [])
+        current = user.get("invitation") or {}
+        if token_is_usable(current):
+            pending.append(current)
+        unique_pending, seen_digests = [], set()
+        for item in reversed([item for item in pending if token_is_usable(item)]):
+            digest = item.get("digest")
+            if digest and digest not in seen_digests:
+                unique_pending.append(item)
+                seen_digests.add(digest)
+        history = list(reversed(unique_pending[:3]))
+        await db.users.update_one({"id": user["id"], "active": False}, {"$set": {
+            "invitation": record, "invitation_history": history,
+            "account_status": "pending_activation", "active": False, "updated_at": now_iso(),
+        }})
+        delivery = await _send_invitation_email(
+            user, plain, purpose="family_account_activation",
+            type="family_access_pending_resend", family_id=user.get("family_id"),
+        )
+        results.append({"user_id": user.get("id"), "family_id": user.get("family_id"),
+                        "status": delivery.get("status"), "error": delivery.get("error")})
+        await record_user_audit(
+            "pending_family_invitation_resent" if delivery.get("status") == "sent"
+            else "pending_family_invitation_delivery_failed", user, [],
+        )
+    counts = {status: sum(item["status"] == status for item in results) for status in ("sent", "pending", "failed")}
+    return {"ok": True, "total": len(results), **counts, "results": results}
 
 
 class PlayerAccessInvitationRequest(BaseModel):
@@ -3124,6 +3189,14 @@ async def get_portal():
     if role not in {"family", "player"}:
         raise HTTPException(status_code=403, detail="El portal está reservado a familias y jugadores")
 
+    if role == "family" and actor.get("family_id"):
+        try:
+            await ensure_family_authorizations(
+                db, actor["family_id"], player_ids=await user_player_ids(actor),
+            )
+        except Exception:
+            logging.getLogger(__name__).exception("Family authorization onboarding could not be refreshed")
+
     raw_players = await list_docs("players")
     player_ids = {player.get("id") for player in raw_players if player.get("id")}
     teams = await list_docs("teams")
@@ -3144,14 +3217,8 @@ async def get_portal():
         callup["team_name"] = team_map.get(callup.get("equipo_id"), {}).get("nombre")
         callup["deadline_expired"] = is_late(callup.get("response_deadline"))
 
-    authorizations = []
-    for authorization in await list_docs("authorizations"):
-        authorizations.append({
-            key: authorization.get(key) for key in (
-                "id", "player_id", "tipo", "estado", "fecha_firma", "fecha_caducidad",
-                "persona_autorizada", "observaciones",
-            )
-        } | {"has_signed_file": bool(authorization.get("archivo_firmado"))})
+    raw_authorizations = await list_docs("authorizations")
+    authorizations = [_portal_authorization(authorization) for authorization in raw_authorizations]
 
     communications = [{key: item.get(key) for key in (
         "id", "asunto", "mensaje", "canal", "fecha_envio", "created_at",
@@ -3168,6 +3235,8 @@ async def get_portal():
         "attendance": portal_attendance(trainings, player_ids),
         "payments": payments,
         "authorizations": authorizations,
+        "authorization_onboarding": _family_authorization_onboarding(raw_players, raw_authorizations)
+        if role == "family" else {"required": False, "pending_count": 0, "total_count": 0, "children": []},
         "documents": document_status(raw_players),
         "communications": communications[:20],
     }
@@ -3525,8 +3594,22 @@ class Authorization(BaseModel):
     fecha_firma: Optional[str] = None
     fecha_caducidad: Optional[str] = None
     estado: str = "pendiente"  # pendiente, firmada, caducada
-    archivo_firmado: Optional[str] = None  # ruta relativa al PDF firmado subido
+    archivo_firmado: Optional[str] = None  # ruta relativa al documento firmado subido
+    archivo_firmado_mime: Optional[str] = None
+    archivo_firmado_size: Optional[int] = None
+    archivo_firmado_sha256: Optional[str] = None
+    archivo_firmado_subido_at: Optional[str] = None
+    archivo_firmado_subido_por: Optional[str] = None
+    firma_modalidad: Optional[str] = None  # upload, simple_electronic
+    firma_electronica: Optional[dict] = None
     observaciones: Optional[str] = None
+
+
+class ElectronicSignatureRequest(BaseModel):
+    signature_data: str = Field(min_length=32, max_length=750_000)
+    signer_name: str = Field(min_length=2, max_length=120)
+    consent: bool
+    consent_version: str = Field(default="family-authorization-v1", min_length=1, max_length=64)
 
 
 AUTHORIZATION_PDF_TYPES = {
@@ -3568,8 +3651,86 @@ AUTHORIZATION_PDF_TYPES = {
     },
 }
 
+SIGNED_AUTHORIZATION_MAX_BYTES = 10 * 1024 * 1024
+SIGNED_AUTHORIZATION_MIME_TYPES = {
+    "application/pdf": ".pdf",
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+}
 
-def build_authorization_pdf(auth: dict, player: dict, settings: dict, lang: str = "es") -> io.BytesIO:
+
+def _validate_signed_authorization_bytes(payload: bytes, mime: str) -> None:
+    if len(payload) > SIGNED_AUTHORIZATION_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="El archivo supera el tamaño máximo permitido")
+    if mime == "application/pdf":
+        if not payload.startswith(b"%PDF-") or b"%%EOF" not in payload[-1024:]:
+            raise HTTPException(status_code=422, detail="El archivo no contiene un PDF válido")
+        return
+    try:
+        with PILImage.open(io.BytesIO(payload)) as image:
+            image.verify()
+    except Exception as error:
+        raise HTTPException(status_code=422, detail="La imagen no tiene un formato válido") from error
+
+
+def _decode_signature_data(value: str) -> bytes:
+    match = re.fullmatch(r"data:image/png;base64,([A-Za-z0-9+/=]+)", value or "")
+    if not match:
+        raise HTTPException(status_code=422, detail="La firma electrónica debe ser una imagen PNG válida")
+    try:
+        payload = base64.b64decode(match.group(1), validate=True)
+    except (ValueError, base64.binascii.Error) as error:
+        raise HTTPException(status_code=422, detail="La firma electrónica no se puede leer") from error
+    if len(payload) > 512 * 1024:
+        raise HTTPException(status_code=413, detail="La firma electrónica supera el tamaño máximo permitido")
+    _validate_signed_authorization_bytes(payload, "image/png")
+    return payload
+
+
+def _authorization_complete(auth: Mapping[str, Any]) -> bool:
+    """A signed status without an associated evidence file is incomplete."""
+    return auth.get("estado") == "firmada" and bool(auth.get("archivo_firmado"))
+
+
+def _portal_authorization(auth: Mapping[str, Any]) -> dict[str, Any]:
+    complete = _authorization_complete(auth)
+    return {
+        key: auth.get(key) for key in (
+            "id", "player_id", "tipo", "estado", "fecha_firma", "fecha_caducidad",
+            "persona_autorizada", "observaciones", "firma_modalidad",
+            "archivo_firmado_subido_at",
+        )
+    } | {"estado": "firmada" if complete else "pendiente", "has_signed_file": complete}
+
+
+def _family_authorization_onboarding(players: list[dict], authorizations: list[dict]) -> dict:
+    by_player: dict[str, list[dict]] = defaultdict(list)
+    for auth in authorizations:
+        if auth.get("player_id"):
+            by_player[str(auth["player_id"])].append(_portal_authorization(auth))
+    children = []
+    for player in players:
+        player_id = str(player.get("id"))
+        rows = sorted(by_player.get(player_id, []), key=lambda item: str(item.get("tipo") or ""))
+        children.append({
+            "player_id": player_id,
+            "name": f"{player.get('nombre', '')} {player.get('apellidos', '')}".strip(),
+            "authorizations": rows,
+            "pending_count": sum(not item["has_signed_file"] for item in rows),
+        })
+    total = sum(len(child["authorizations"]) for child in children)
+    pending = sum(child["pending_count"] for child in children)
+    return {
+        "required": bool(pending), "pending_count": pending, "total_count": total,
+        "children": children,
+    }
+
+
+def build_authorization_pdf(
+    auth: dict, player: dict, settings: dict, lang: str = "es",
+    signature_bytes: bytes | None = None,
+) -> io.BytesIO:
     """Genera una autorización A4 vectorial sin depender del navegador."""
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -3640,9 +3801,12 @@ def build_authorization_pdf(auth: dict, player: dict, settings: dict, lang: str 
         story.extend([Paragraph(f"<b>Observaciones · Oharrak:</b> <i>{esc(auth.get('observaciones'))}</i>", normal), Spacer(1, 7 * mm)])
 
     signature_style = ParagraphStyle("Signature", parent=small, alignment=TA_CENTER)
+    signature_image = ""
+    if signature_bytes:
+        signature_image = ReportLabImage(io.BytesIO(signature_bytes), width=45 * mm, height=15 * mm, kind="proportional")
     signatures = Table([
         ["", "", ""],
-        [Paragraph("Firma del padre/madre/tutor/a<br/>Aita/ama/tutorearen sinadura", signature_style), Paragraph(f"Fecha · Data: {esc(auth.get('fecha_firma'), '____________')}", signature_style), Paragraph("Sello del club<br/>Klubaren zigilua", signature_style)],
+        [signature_image or Paragraph("Firma del padre/madre/tutor/a<br/>Aita/ama/tutorearen sinadura", signature_style), Paragraph(f"Fecha · Data: {esc(auth.get('fecha_firma'), '____________')}", signature_style), Paragraph("Sello del club<br/>Klubaren zigilua", signature_style)],
     ], colWidths=[52 * mm, 52 * mm, 52 * mm], rowHeights=[18 * mm, 12 * mm], hAlign="CENTER")
     signatures.setStyle(TableStyle([("LINEBELOW", (0, 0), (-1, 0), 0.8, colors.HexColor("#111827")), ("VALIGN", (0, 0), (-1, -1), "TOP"), ("LEFTPADDING", (0, 0), (-1, -1), 6), ("RIGHTPADDING", (0, 0), (-1, -1), 6)]))
     story.extend([Spacer(1, 8 * mm), KeepTogether(signatures), Spacer(1, 10 * mm), HRFlowable(width="100%", thickness=0.4, color=colors.HexColor("#d1d5db")), Spacer(1, 2 * mm), Paragraph(f"{esc(club_name)} · Documento generado / Sortutako dokumentua: {date.today().strftime('%d/%m/%Y')} · RGPD/DBEO (UE/EB) 2016/679", ParagraphStyle("Footer", parent=small, alignment=TA_CENTER, fontSize=7))])
@@ -3651,9 +3815,27 @@ def build_authorization_pdf(auth: dict, player: dict, settings: dict, lang: str 
     return buffer
 
 
+def _stored_signed_file_path(auth: Mapping[str, Any]) -> Path | None:
+    """Resolve only server-generated file names inside the uploads directory."""
+    stored = str(auth.get("archivo_firmado") or "").strip()
+    if not stored or Path(stored).name != stored:
+        return None
+    uploads_root = UPLOADS_DIR.resolve()
+    candidate = (uploads_root / stored).resolve()
+    if candidate.parent != uploads_root:
+        return None
+    return candidate
+
+
 @api_router.post("/authorizations")
 async def create_authorization(auth: Authorization):
-    return await insert_doc("authorizations", auth.model_dump())
+    data = auth.model_dump()
+    if data.get("estado") == "firmada":
+        data["estado"] = "pendiente"
+    for field in ("archivo_firmado", "archivo_firmado_mime", "archivo_firmado_size", "archivo_firmado_sha256",
+                  "archivo_firmado_subido_at", "archivo_firmado_subido_por", "firma_modalidad", "firma_electronica"):
+        data[field] = None
+    return await insert_doc("authorizations", data)
 
 
 @api_router.post("/authorizations/ensure-all")
@@ -3692,6 +3874,8 @@ async def get_authorizations(estado: Optional[str] = None):
     auths = await list_docs("authorizations", query)
     players = {p["id"]: p for p in await list_docs("players")}
     for a in auths:
+        if not _authorization_complete(a) and a.get("estado") == "firmada":
+            a["estado"] = "pendiente"
         p = players.get(a.get("player_id"), {})
         a["player_nombre"] = f"{p.get('nombre','')} {p.get('apellidos','')}".strip() or "—"
     return auths
@@ -3713,7 +3897,14 @@ async def download_authorization_pdf(auth_id: str, lang: str = "es"):
 
 @api_router.put("/authorizations/{auth_id}")
 async def edit_authorization(auth_id: str, auth: Authorization):
-    return await update_doc("authorizations", auth_id, auth.model_dump())
+    existing = await get_doc("authorizations", auth_id)
+    data = auth.model_dump()
+    if data.get("estado") == "firmada" and not _authorization_complete(existing):
+        data["estado"] = "pendiente"
+    for field in ("archivo_firmado", "archivo_firmado_mime", "archivo_firmado_size", "archivo_firmado_sha256",
+                  "archivo_firmado_subido_at", "archivo_firmado_subido_por", "firma_modalidad", "firma_electronica"):
+        data.pop(field, None)
+    return await update_doc("authorizations", auth_id, data)
 
 
 @api_router.delete("/authorizations/{auth_id}")
@@ -3722,25 +3913,103 @@ async def remove_authorization(auth_id: str):
 
 @api_router.post("/authorizations/{auth_id}/upload-signed")
 async def upload_signed_authorization(auth_id: str, file: UploadFile = File(...)):
-    """Recibe un PDF firmado, lo guarda en disco y marca la autorización como firmada."""
+    """Receive a signed PDF/image within the authenticated player's scope."""
     auth = await get_doc("authorizations", auth_id)
-    # Eliminar archivo anterior si existe
-    if auth.get("archivo_firmado"):
-        old_path = UPLOADS_DIR / auth["archivo_firmado"]
-        if old_path.exists():
-            old_path.unlink()
-    # Guardar nuevo archivo
-    ext = Path(file.filename).suffix if file.filename else ".pdf"
-    filename = f"auth_{auth_id}{ext}"
+    actor = current_user_context.get() or {}
+    if actor.get("role") == "family" and _authorization_complete(auth):
+        raise HTTPException(status_code=409, detail="Esta autorización ya tiene un documento recibido")
+    mime = str(file.content_type or "").split(";", 1)[0].strip().lower()
+    extension = SIGNED_AUTHORIZATION_MIME_TYPES.get(mime)
+    if not extension:
+        raise HTTPException(status_code=422, detail="Solo se aceptan PDF, JPG, PNG o WEBP")
+    payload = await file.read(SIGNED_AUTHORIZATION_MAX_BYTES + 1)
+    _validate_signed_authorization_bytes(payload, mime)
+    filename = f"auth_{auth_id}_{uuid.uuid4().hex}{extension}"
     file_path = UPLOADS_DIR / filename
-    with open(file_path, "wb") as out:
-        shutil.copyfileobj(file.file, out)
-    # Actualizar documento
-    await db["authorizations"].update_one(
-        {"id": auth_id},
-        {"$set": {"archivo_firmado": filename, "estado": "firmada", "updated_at": now_iso()}}
+    file_path.write_bytes(payload)
+    moment = now_iso()
+    old_path = _stored_signed_file_path(auth)
+    update_filter = {"id": auth_id}
+    if actor.get("role") == "family":
+        update_filter["archivo_firmado"] = {"$in": [None, ""]}
+    result = await db["authorizations"].update_one(
+        update_filter,
+        {"$set": {
+            "archivo_firmado": filename, "archivo_firmado_mime": mime,
+            "archivo_firmado_size": len(payload),
+            "archivo_firmado_sha256": hashlib.sha256(payload).hexdigest(),
+            "archivo_firmado_subido_at": moment,
+            "archivo_firmado_subido_por": actor.get("id"),
+            "firma_modalidad": "upload", "firma_electronica": None,
+            "fecha_firma": moment[:10], "estado": "firmada", "updated_at": moment,
+            **({"firmante": signer_name(actor)} if actor.get("role") == "family" and not auth.get("firmante") else {}),
+        }}
     )
-    return {"ok": True, "archivo_firmado": filename}
+    if actor.get("role") == "family" and not result.modified_count:
+        file_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=409, detail="Esta autorización ya tiene un documento recibido")
+    if old_path and old_path != file_path and old_path.exists():
+        old_path.unlink()
+    await db.internal_events.insert_one({
+        "id": new_id(), "type": "authorization.signed_file_uploaded",
+        "actor_user_id": actor.get("id"), "actor_role": actor.get("role"),
+        "authorization_id": auth_id, "created_at": moment,
+        "detail": {"sensitive_values_recorded": False, "mode": "upload"},
+    })
+    return {"ok": True, "status": "firmada", "firma_modalidad": "upload", "signed_at": moment}
+
+
+@api_router.post("/authorizations/{auth_id}/sign")
+async def sign_authorization(auth_id: str, request: ElectronicSignatureRequest):
+    """Create a simple, auditable electronic signature for an own authorization."""
+    auth = await get_doc("authorizations", auth_id)
+    if _authorization_complete(auth):
+        raise HTTPException(status_code=409, detail="Esta autorización ya está firmada")
+    if not request.consent:
+        raise HTTPException(status_code=422, detail="Debes aceptar la autorización antes de firmarla")
+    signature_bytes = _decode_signature_data(request.signature_data)
+    actor = current_user_context.get() or {}
+    moment = now_iso()
+    signer = normalized_text(request.signer_name)
+    signed_auth = {**auth, "firmante": signer, "fecha_firma": moment[:10]}
+    player = await get_doc("players", auth.get("player_id"))
+    settings = await get_settings()
+    pdf = build_authorization_pdf(signed_auth, player, settings, "es", signature_bytes)
+    payload = pdf.getvalue()
+    filename = f"auth_{auth_id}_{uuid.uuid4().hex}.pdf"
+    file_path = UPLOADS_DIR / filename
+    file_path.write_bytes(payload)
+    old_path = _stored_signed_file_path(auth)
+    await db["authorizations"].update_one(
+        {"id": auth_id, "archivo_firmado": {"$in": [None, ""]}},
+        {"$set": {
+            "archivo_firmado": filename, "archivo_firmado_mime": "application/pdf",
+            "archivo_firmado_size": len(payload),
+            "archivo_firmado_sha256": hashlib.sha256(payload).hexdigest(),
+            "archivo_firmado_subido_at": moment,
+            "archivo_firmado_subido_por": actor.get("id"),
+            "firma_modalidad": "simple_electronic",
+            "firma_electronica": {
+                "signer_name": signer, "user_id": actor.get("id"),
+                "signed_at": moment, "consent_version": request.consent_version,
+            },
+            "firmante": signer, "fecha_firma": moment[:10],
+            "estado": "firmada", "updated_at": moment,
+        }}
+    )
+    updated = await db["authorizations"].find_one({"id": auth_id}, {"_id": 0, "archivo_firmado": 1})
+    if not updated or updated.get("archivo_firmado") != filename:
+        file_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=409, detail="La autorización ya fue firmada")
+    if old_path and old_path != file_path and old_path.exists():
+        old_path.unlink()
+    await db.internal_events.insert_one({
+        "id": new_id(), "type": "authorization.signed_electronically",
+        "actor_user_id": actor.get("id"), "actor_role": actor.get("role"),
+        "authorization_id": auth_id, "created_at": moment,
+        "detail": {"sensitive_values_recorded": False, "mode": "simple_electronic", "consent_version": request.consent_version},
+    })
+    return {"ok": True, "status": "firmada", "firma_modalidad": "simple_electronic", "signed_at": moment}
 
 
 @api_router.get("/authorizations/{auth_id}/signed-file")
@@ -3749,13 +4018,14 @@ async def get_signed_authorization(auth_id: str):
     auth = await get_doc("authorizations", auth_id)
     if not auth.get("archivo_firmado"):
         raise HTTPException(status_code=404, detail="No hay archivo firmado para esta autorización")
-    file_path = UPLOADS_DIR / auth["archivo_firmado"]
-    if not file_path.exists():
+    file_path = _stored_signed_file_path(auth)
+    if not file_path or not file_path.exists():
         raise HTTPException(status_code=404, detail="Archivo no encontrado en disco")
+    extension = SIGNED_AUTHORIZATION_MIME_TYPES.get(auth.get("archivo_firmado_mime"), ".pdf")
     return FileResponse(
         path=str(file_path),
-        media_type="application/pdf",
-        filename=f"autorizacion_firmada_{auth_id}.pdf"
+        media_type=auth.get("archivo_firmado_mime") or "application/pdf",
+        filename=f"autorizacion_firmada_{auth_id}{extension}"
     )
 
 
@@ -3764,12 +4034,18 @@ async def delete_signed_authorization(auth_id: str):
     """Elimina el PDF firmado de una autorización y la vuelve a estado pendiente."""
     auth = await get_doc("authorizations", auth_id)
     if auth.get("archivo_firmado"):
-        file_path = UPLOADS_DIR / auth["archivo_firmado"]
-        if file_path.exists():
+        file_path = _stored_signed_file_path(auth)
+        if file_path and file_path.exists():
             file_path.unlink()
     await db["authorizations"].update_one(
         {"id": auth_id},
-        {"$set": {"archivo_firmado": None, "estado": "pendiente", "updated_at": now_iso()}}
+        {"$set": {
+            "archivo_firmado": None, "archivo_firmado_mime": None,
+            "archivo_firmado_size": None, "archivo_firmado_sha256": None,
+            "archivo_firmado_subido_at": None, "archivo_firmado_subido_por": None,
+            "firma_modalidad": None, "firma_electronica": None,
+            "estado": "pendiente", "updated_at": now_iso(),
+        }}
     )
     return {"ok": True}
 

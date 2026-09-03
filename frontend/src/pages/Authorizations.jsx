@@ -278,7 +278,9 @@ const Authorizations = () => {
     <div className="flex items-center gap-2 px-4 py-2 border-t border-slate-100 bg-white hover:bg-slate-50/60 text-sm">
       <div className="w-48 flex-shrink-0 text-slate-600">{AUTH_TYPES[a.tipo]?.[lang] || a.tipo}</div>
       <div className="w-24 flex-shrink-0"><StatusBadge status={a.estado} /></div>
-      <div className="w-28 flex-shrink-0 text-xs text-slate-400">{a.fecha_firma || "—"}</div>
+      <div className="w-28 flex-shrink-0 text-xs text-slate-400">{a.archivo_firmado_subido_at?.slice(0, 10) || a.fecha_firma || "—"}</div>
+      <div className="w-32 flex-shrink-0 text-xs text-slate-500">{a.firma_modalidad === "upload" ? t("authorizationModeUpload") : a.firma_modalidad === "simple_electronic" ? t("authorizationModeElectronic") : "—"}</div>
+      <div className="w-32 flex-shrink-0 truncate text-xs text-slate-400" title={a.archivo_firmado_subido_por || ""}>{a.archivo_firmado_subido_por || "—"}</div>
       <div className="flex-shrink-0">
         {a.archivo_firmado
           ? <span className="inline-flex items-center gap-1 text-xs text-emerald-600 font-medium"><FileCheck className="h-3 w-3" />PDF subido</span>
@@ -289,7 +291,7 @@ const Authorizations = () => {
         <PermissionGate resource="authorizations" action="export"><Button variant="ghost" size="icon" className="text-blue-600" aria-label="Descargar PDF" title="Descargar PDF" onClick={() => doDownloadPdf(a)}><Download className="h-4 w-4" /></Button></PermissionGate>
         <PermissionGate resource="authorizations" action="export"><Button variant="ghost" size="icon" className="text-primary" aria-label={t("print")} title={t("print")} onClick={() => doPrint(a)}><Printer className="h-4 w-4" /></Button></PermissionGate>
         <PermissionGate resource="authorizations" action="edit"><Button variant="ghost" size="icon" className="text-orange-500" aria-label="Subir autorización firmada" title="Subir firmada" onClick={() => uploadRefs.current[a.id]?.click()}><Upload className="h-4 w-4" /></Button></PermissionGate>
-        <input type="file" accept=".pdf,image/*" ref={(el) => (uploadRefs.current[a.id] = el)} style={{ display: "none" }}
+        <input type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/jpeg,image/png,image/webp" ref={(el) => (uploadRefs.current[a.id] = el)} style={{ display: "none" }}
           onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) doUploadSigned(a.id, f); }} />
         {a.archivo_firmado && (
           <>
@@ -363,7 +365,9 @@ const Authorizations = () => {
                     <div className="flex items-center gap-2 px-4 py-1.5 bg-slate-50 text-xs font-bold uppercase tracking-wider text-slate-400 border-t border-slate-100">
                       <div className="w-48">Tipo</div>
                       <div className="w-24">Estado</div>
-                      <div className="w-28">Fecha firma</div>
+                      <div className="w-28">{t("authorizationReceivedAt")}</div>
+                      <div className="w-32">{t("authorizationMode")}</div>
+                      <div className="w-32">{t("authorizationReceivedBy")}</div>
                       <div className="flex-shrink-0">PDF firmado</div>
                       <div className="flex-1" />
                       <div>Acciones</div>

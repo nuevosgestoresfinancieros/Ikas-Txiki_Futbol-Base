@@ -170,4 +170,3 @@ def build_family_access_router(
         return {"processed": bool(result), "result": result}
 
     return router
-

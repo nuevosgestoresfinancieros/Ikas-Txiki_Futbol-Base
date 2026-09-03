@@ -5,6 +5,7 @@ from typing import Any, Mapping
 from urllib.parse import quote
 
 from pymongo.errors import DuplicateKeyError
+from authorization_service import ensure_family_authorizations
 from family_access_service import audit, new_id, now_iso, parent_data, valid_email
 from notification_service import delivery_log
 from user_admin_service import family_access_state, normalized_key
@@ -17,6 +18,7 @@ async def provision(db: Any, families: list[Mapping], actor: Mapping, secret: st
     for family in families:
         family_id, review, seen = str(family["id"]), False, set()
         children = [str(x) for x in await db.players.distinct("id", {"familia_id": family_id}) if x]
+        await ensure_family_authorizations(db, family_id, player_ids=children)
         for slot in (1, 2):
             parent = parent_data(family, slot)
             email = parent["email"]
@@ -51,11 +53,12 @@ async def provision(db: Any, families: list[Mapping], actor: Mapping, secret: st
                             summary["existing_accesses"] += 1
                             outcome = "existing_pending_activation"
                         else:
+                            await ensure_family_authorizations(db, family_id, player_ids=children)
                             try:
                                 delivery = dict(dispatcher(
                                     email, "Activa tu acceso a Ikas-Txiki",
                                     "Hola,\n\nActiva tu acceso y crea tu contraseña personal.",
-                                    action_url=f"{public_url.rstrip('/')}/login?invitation={quote(plain, safe='')}",
+                                    action_url=f"{public_url.rstrip('/')}/activar?token={quote(plain, safe='')}",
                                     action_label=username, template="account_activation",
                                     user_id=user["id"], purpose="family_account_activation",
                                 ))

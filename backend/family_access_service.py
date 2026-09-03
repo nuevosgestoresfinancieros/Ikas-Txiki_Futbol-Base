@@ -21,6 +21,7 @@ from uuid import uuid4
 from pymongo import ReturnDocument
 
 from pymongo.errors import DuplicateKeyError
+from authorization_service import ensure_family_authorizations
 from user_admin_service import account_status, family_access_state, normalized_key, normalized_text
 from notification_service import delivery_log
 from user_security_service import (
@@ -438,6 +439,7 @@ async def prepare_account(db: Any, family: Mapping[str, Any], decision: Mapping[
     }
     user["linked_player_ids"] = [str(value) for value in await db.players.distinct("id", {"familia_id": family["id"]}) if value]
     await db.users.insert_one(user)
+    await ensure_family_authorizations(db, family["id"], player_ids=user["linked_player_ids"])
     return user
 
 
@@ -525,7 +527,7 @@ async def process_one_job(
             "result_code": "delivery_disabled",
         }
     await db.family_access_jobs.update_one({"id": job["id"]}, {"$set": {"status": "sending", "delivery_state": "sending", "updated_at": now_iso()}})
-    link = f"{public_app_url.rstrip('/')}/login?invitation={quote(plain, safe='')}"
+    link = f"{public_app_url.rstrip('/')}/activar?token={quote(plain, safe='')}"
     try:
         delivery = dict(dispatcher(
             decision["email"], "Activa tu acceso a Ikas-Txiki",
@@ -613,4 +615,3 @@ async def manual_invitation(
     return {"ok": True, "delivery": safe_delivery["status"], "delivery_error": safe_delivery.get("error"),
             "delivery_error_detail": safe_delivery.get("error_detail"),
             "message_id": safe_delivery.get("message_id"), "expires_at": record["expires_at"]}
-
