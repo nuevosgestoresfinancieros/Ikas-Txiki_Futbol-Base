@@ -1077,8 +1077,19 @@ async def create_user(user: UserCreate):
         response.update({"temporary_password": password, "show_once": True})
     elif access_method == "invitation":
         plain, record = issue_token(JWT_SECRET, ttl_minutes=0, ttl_hours=INVITATION_TTL_HOURS)
+        delivery = dispatch_email(
+            data.get("email_normalized") or data.get("email") or "",
+            "Acceso familiar a la aplicación Ikas-Txiki",
+            _invitation_email_body(str(data.get("username") or "")),
+            action_url=_activation_link(plain), action_label=str(data.get("username") or ""), template="account_activation",
+        )
+        delivery.update({"type": "user_access_invitation", "user_id": data["id"]})
+        record.update({"delivery_status": delivery["status"], "delivery_error": delivery.get("error"), "sent_at": delivery.get("sent_at")})
         await db.users.update_one({"id": data["id"]}, {"$set": {"invitation": record}})
-        response.update({"invitation_token": plain, "expires_at": record["expires_at"], "show_once": True, "delivery": "not_sent"})
+        await db.delivery_logs.insert_one(delivery)
+        response.update({"expires_at": record["expires_at"], "show_once": delivery["status"] != "sent", "delivery": delivery["status"], "delivery_error": delivery.get("error")})
+        if delivery["status"] != "sent":
+            response["invitation_token"] = plain
     return response
 
 
