@@ -576,6 +576,8 @@ async def manual_invitation(
     password_hasher: Callable[[str], str], dispatcher: Callable[..., Mapping[str, Any]],
     public_app_url: str, *, resend: bool = False, allow_delivery: bool = False,
 ) -> dict[str, Any]:
+    if slot not in {1, 2}:
+        raise ValueError("Slot familiar no válido")
     decision = (await decisions_for_family(db, family))[slot - 1]
     if resend and decision["state"] != "pending_activation":
         raise RuntimeError("No existe una invitación pendiente que reenviar")
@@ -593,7 +595,7 @@ async def manual_invitation(
         delivery = dict(dispatcher(
             decision["email"], "Activa tu acceso a Ikas-Txiki",
             f"Hola,\n\nTu usuario de Ikastxiki es: {user['username']}.",
-            action_url=f"{public_app_url.rstrip('/')}/login?invitation={quote(plain, safe='')}",
+            action_url=f"{public_app_url.rstrip('/')}/activar?token={quote(plain, safe='')}",
             action_label=user["username"], template="account_activation",
             user_id=user["id"], purpose="family_account_activation",
         ))

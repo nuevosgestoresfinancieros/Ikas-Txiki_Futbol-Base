@@ -17,12 +17,15 @@ const empty = { preferencia_comunicacion: "email" };
 
 const Families = () => {
   const canCreate = usePermission("families", "create");
+  const canEdit = usePermission("families", "edit");
   const canAdminAccess = usePermission("users", "administer");
+  const canManageFamilyAccess = canEdit && canAdminAccess;
   const { t } = useI18n();
   const [params] = useSearchParams();
   const [families, setFamilies] = useState([]);
   const [dialog, setDialog] = useState(false);
   const [form, setForm] = useState(empty);
+  const [isPersisted, setIsPersisted] = useState(false);
   const openedSearchResult = useRef("");
 
   const load = async () => setFamilies((await api.get("/families")).data);
@@ -30,15 +33,16 @@ const Families = () => {
   useEffect(() => {
     const familyId = params.get("ficha");
     const family = families.find((item) => item.id === familyId);
-    if (family && openedSearchResult.current !== familyId) { openedSearchResult.current = familyId; setForm(family); setDialog(true); }
+    if (family && openedSearchResult.current !== familyId) { openedSearchResult.current = familyId; setForm(family); setIsPersisted(true); setDialog(true); }
   }, [families, params]);
 
-  const set = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
-  const openNew = () => { setForm(empty); setDialog(true); };
-  const openEdit = (f) => { setForm(f); setDialog(true); };
+  const set = (k) => (v) => { setIsPersisted(false); setForm((f) => ({ ...f, [k]: v })); };
+  const openNew = () => { setForm(empty); setIsPersisted(false); setDialog(true); };
+  const openEdit = (f) => { setForm(f); setIsPersisted(true); setDialog(true); };
   const save = async () => {
-    if (form.id) await api.put(`/families/${form.id}`, form);
-    else await api.post("/families", form);
+    const response = form.id ? await api.put(`/families/${form.id}`, form) : await api.post("/families", form);
+    if (response?.data) setForm(response.data);
+    setIsPersisted(true);
     toast.success(t("saved")); setDialog(false); load();
   };
   const remove = async (f) => { if (!window.confirm(t("confirmDelete"))) return; await api.delete(`/families/${f.id}`); toast.success(t("deleted")); load(); };
@@ -95,13 +99,13 @@ const Families = () => {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <Field label={t("name")} value={form.progenitor1_nombre} onChange={set("progenitor1_nombre")} testid="fam-p1-nombre" />
               <Field label={t("phone")} value={form.progenitor1_telefono} onChange={set("progenitor1_telefono")} testid="fam-p1-tel" />
-              <Field label={t("email")} value={form.progenitor1_email} onChange={(value) => setForm((current) => ({ ...current, progenitor1_email: value, progenitor1_email_confirmado: false }))} testid="fam-p1-email" />
+              <div><Field label={t("email")} value={form.progenitor1_email} onChange={(value) => { setIsPersisted(false); setForm((current) => ({ ...current, progenitor1_email: value, progenitor1_email_confirmado: false })); }} testid="fam-p1-email" /><label className="mt-2 flex items-center gap-2 text-xs font-semibold text-slate-600"><input type="checkbox" data-testid="fam-p1-email-confirmed" checked={Boolean(form.progenitor1_email_confirmado)} onChange={(event) => { setIsPersisted(false); setForm((current) => ({ ...current, progenitor1_email_confirmado: event.target.checked })); }} />{t("familyConfirmEmail")}</label></div>
             </div>
             <p className="text-xs font-bold uppercase tracking-widest text-slate-400">{t("parent2")}</p>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <Field label={t("name")} value={form.progenitor2_nombre} onChange={set("progenitor2_nombre")} testid="fam-p2-nombre" />
               <Field label={t("phone")} value={form.progenitor2_telefono} onChange={set("progenitor2_telefono")} testid="fam-p2-tel" />
-              <Field label={t("email")} value={form.progenitor2_email} onChange={(value) => setForm((current) => ({ ...current, progenitor2_email: value, progenitor2_email_confirmado: false }))} testid="fam-p2-email" />
+              <div><Field label={t("email")} value={form.progenitor2_email} onChange={(value) => { setIsPersisted(false); setForm((current) => ({ ...current, progenitor2_email: value, progenitor2_email_confirmado: false })); }} testid="fam-p2-email" /><label className="mt-2 flex items-center gap-2 text-xs font-semibold text-slate-600"><input type="checkbox" data-testid="fam-p2-email-confirmed" checked={Boolean(form.progenitor2_email_confirmado)} onChange={(event) => { setIsPersisted(false); setForm((current) => ({ ...current, progenitor2_email_confirmado: event.target.checked })); }} />{t("familyConfirmEmail")}</label></div>
             </div>
             <Field label={t("address")} value={form.domicilio} onChange={set("domicilio")} testid="fam-domicilio" />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -110,7 +114,7 @@ const Families = () => {
             </div>
             <Area label={t("notes")} value={form.observaciones} onChange={set("observaciones")} testid="fam-obs" />
           </div>
-          <FamilyAccesses form={form} setField={(key, value) => setForm((current) => ({ ...current, [key]: value }))} enabled={canAdminAccess} />
+          <FamilyAccesses form={form} setField={(key, value) => { setIsPersisted(false); setForm((current) => ({ ...current, [key]: value })); }} enabled={canManageFamilyAccess} isPersisted={isPersisted} />
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialog(false)}>{t("cancel")}</Button>
             <Button onClick={save} data-testid="family-save-btn" className="h-11 px-6">{t("save")}</Button>
