@@ -8,6 +8,7 @@ Este documento describe únicamente información que puede verificarse en el rep
 - Una API FastAPI está ubicada en `backend/`.
 - La configuración y la documentación del proyecto identifican MongoDB como base de datos.
 - El README del repositorio enumera módulos de gestión deportiva, familias, equipos, entrenamientos, partidos, convocatorias, pagos, autorizaciones, comunicación, informes y configuración.
+- La pantalla de Equipos organiza visualmente los registros por el campo existente `temporada`, mediante tarjetas de temporada, filtros de búsqueda/categoría y una vista de plantilla que mantiene el equipo y sus jugadores dentro de la temporada seleccionada. Los equipos sin temporada se muestran en un bloque separado para su revisión; este cambio no modifica el contrato de la API ni el modelo de datos.
 - `scripts/publish-safe.sh` valida, prepara y publica cambios de código de forma controlada; admite `--dry-run` para validar sin commit, push, cambio de build ni reinicio de servicios.
 
 ## Limitaciones conocidas

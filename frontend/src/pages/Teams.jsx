@@ -1,17 +1,21 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Shield, Plus, Pencil, Trash2, Users, UserRound, Hash, MapPin, CalendarDays } from "lucide-react";
+import { Shield, Plus, Pencil, Trash2, Users, UserRound, Hash, MapPin, CalendarDays, Search, ChevronRight, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
 import { PermissionGate, usePermission } from "@/auth";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { PageHeader, StatusBadge, EmptyState } from "@/components/shared";
 import { Field, SelectField } from "@/components/form";
 
 const empty = { nombre: "", estado: "activo", limite_jugadores: 20 };
+const UNASSIGNED_SEASON = "__sin_temporada__";
 const unique = (values = []) => [...new Set(values.filter(Boolean).map(String))].sort((a, b) => a.localeCompare(b));
+const seasonValue = (team) => String(team?.temporada || "").trim() || UNASSIGNED_SEASON;
+const seasonTestId = (season) => season === UNASSIGNED_SEASON ? "unassigned" : season.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "");
 
 const Datalist = ({ id, values }) => (
   <datalist id={id}>
@@ -31,13 +35,29 @@ const Teams = () => {
   const [selectedTeam, setSelectedTeam] = useState(null);
   const [loadingSquad, setLoadingSquad] = useState(false);
   const [form, setForm] = useState(empty);
+  const [selectedSeason, setSelectedSeason] = useState(() => params.get("temporada") || "");
+  const [teamSearch, setTeamSearch] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const openedSearchResult = useRef("");
 
-  const load = async () => setTeams((await api.get("/teams")).data);
+  const load = async () => {
+    setLoading(true);
+    setLoadError(false);
+    try {
+      setTeams((await api.get("/teams")).data);
+    } catch {
+      setLoadError(true);
+    } finally {
+      setLoading(false);
+    }
+  };
   useEffect(() => {
     load();
     Promise.all([api.get("/categories"), api.get("/catalog-options")])
-      .then(([cat, cfg]) => { setCategories(cat.data); setSettings(cfg.data || {}); });
+      .then(([cat, cfg]) => { setCategories(cat.data); setSettings(cfg.data || {}); })
+      .catch(() => { /* Los equipos siguen siendo utilizables aunque falle el catálogo auxiliar. */ });
     if (params.get("new") && canCreate) { setForm(empty); setDialog(true); params.delete("new"); setParams(params); }
     // eslint-disable-next-line
   }, []);
@@ -69,22 +89,169 @@ const Teams = () => {
     const teamId = params.get("ficha");
     const team = teams.find((item) => item.id === teamId);
     if (team && openedSearchResult.current !== teamId) { openedSearchResult.current = teamId; openSquad(team); }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teams, params]);
-  const seasonOptions = useMemo(() => unique([...(settings.temporadas || []), ...teams.map((team) => team.temporada)]), [settings.temporadas, teams]);
+  const seasonOptions = useMemo(() => unique([
+    ...(settings.temporadas || []),
+    settings.temporada_actual,
+    ...teams.map((team) => team.temporada),
+  ]), [settings.temporada_actual, settings.temporadas, teams]);
+  const seasonCards = useMemo(() => {
+    const cards = seasonOptions.map((season) => {
+      const seasonTeams = teams.filter((team) => seasonValue(team) === season);
+      return {
+        value: season,
+        teams: seasonTeams.length,
+        players: seasonTeams.reduce((total, team) => total + (Number(team.num_jugadores) || 0), 0),
+      };
+    });
+    if (teams.some((team) => seasonValue(team) === UNASSIGNED_SEASON)) {
+      const unassignedTeams = teams.filter((team) => seasonValue(team) === UNASSIGNED_SEASON);
+      cards.push({
+        value: UNASSIGNED_SEASON,
+        teams: unassignedTeams.length,
+        players: unassignedTeams.reduce((total, team) => total + (Number(team.num_jugadores) || 0), 0),
+      });
+    }
+    return cards;
+  }, [seasonOptions, teams]);
+  const categoryOptions = useMemo(() => unique([
+    ...categories.map((category) => category.name),
+    ...teams.map((team) => team.categoria),
+  ]), [categories, teams]);
+  useEffect(() => {
+    if (!seasonCards.length) return;
+    const requested = params.get("temporada");
+    const available = seasonCards.map((card) => card.value);
+    const preferred = requested && available.includes(requested)
+      ? requested
+      : settings.temporada_actual && available.includes(settings.temporada_actual)
+        ? settings.temporada_actual
+        : seasonCards[0].value;
+    if (!selectedSeason || !available.includes(selectedSeason)) setSelectedSeason(preferred);
+  }, [params, seasonCards, selectedSeason, settings.temporada_actual]);
+  const selectSeason = (season) => {
+    setSelectedSeason(season);
+    setTeamSearch("");
+    setCategoryFilter("all");
+    const next = new URLSearchParams(params);
+    if (season === UNASSIGNED_SEASON) next.delete("temporada");
+    else next.set("temporada", season);
+    setParams(next, { replace: true });
+  };
+  const activeSeason = selectedSeason || seasonCards[0]?.value || "";
+  const selectedSeasonLabel = activeSeason === UNASSIGNED_SEASON ? t("unassignedSeason") : activeSeason || t("seasonFoldersTitle");
+  const seasonTeams = useMemo(() => teams.filter((team) => seasonValue(team) === activeSeason), [activeSeason, teams]);
+  const filteredTeams = useMemo(() => {
+    const query = teamSearch.trim().toLocaleLowerCase();
+    return seasonTeams.filter((team) => {
+      const matchesCategory = categoryFilter === "all" || team.categoria === categoryFilter;
+      if (!matchesCategory) return false;
+      if (!query) return true;
+      return [team.nombre, team.categoria, team.entrenador, team.segundo_entrenador, team.campo]
+        .filter(Boolean)
+        .join(" ")
+        .toLocaleLowerCase()
+        .includes(query);
+    });
+  }, [categoryFilter, seasonTeams, teamSearch]);
+  const clearTeamFilters = () => { setTeamSearch(""); setCategoryFilter("all"); };
   const fieldOptions = useMemo(() => unique([...(settings.campos || []), ...teams.map((team) => team.campo)]), [settings.campos, teams]);
   const coachOptions = useMemo(() => unique([...(settings.entrenadores || []), ...teams.flatMap((team) => [team.entrenador, team.segundo_entrenador])]), [settings.entrenadores, teams]);
 
   return (
     <div data-testid="teams-page">
-      <PageHeader title={t("teams")} icon={Shield}
+      <PageHeader title={t("teams")} subtitle={t("teamsIntro")} icon={Shield}
         action={canCreate ? <Button data-testid="add-team-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("newTeam")}</Button> : null} />
 
-      {teams.length === 0 ? (
+      {loading ? (
+        <div className="space-y-4" role="status" aria-label={t("loading")}>
+          <div className="h-40 animate-pulse rounded-3xl bg-slate-200/70" />
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-3"><div className="h-36 animate-pulse rounded-2xl bg-slate-200/70" /><div className="h-36 animate-pulse rounded-2xl bg-slate-200/70" /><div className="h-36 animate-pulse rounded-2xl bg-slate-200/70" /></div>
+        </div>
+      ) : loadError ? (
+        <div className="surface-card flex flex-col items-center px-6 py-14 text-center">
+          <Shield className="mb-3 h-8 w-8 text-red-500" aria-hidden="true" />
+          <p className="font-semibold text-slate-800">{t("loadError")}</p>
+          <Button onClick={load} variant="outline" className="mt-4">{t("retry")}</Button>
+        </div>
+      ) : teams.length === 0 ? (
         <EmptyState icon={Shield} message={t("noData")} action={canCreate ? <Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("newTeam")}</Button> : null} />
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {teams.map((tm) => (
+        <>
+          <section className="relative mb-8 overflow-hidden rounded-3xl border border-[#1B5C8F]/20 bg-gradient-to-br from-[#0E3554] via-[#1B5C8F] to-[#2B75B0] p-5 text-white shadow-[0_18px_42px_rgba(14,53,84,0.18)] sm:p-7" aria-labelledby="teams-overview-title">
+            <div className="pointer-events-none absolute -right-16 -top-24 h-64 w-64 rounded-full bg-[#93C8EE]/20 blur-3xl" aria-hidden="true" />
+            <div className="relative flex flex-col justify-between gap-6 lg:flex-row lg:items-end">
+              <div className="max-w-2xl">
+                <p className="text-sm font-bold uppercase tracking-[0.14em] text-[#CFE9FA]">{t("teamsSummary")}</p>
+                <h2 id="teams-overview-title" className="mt-2 font-heading text-2xl font-extrabold tracking-tight sm:text-3xl">{t("seasonFoldersTitle")}</h2>
+                <p className="mt-2 max-w-xl text-sm leading-relaxed text-sky-50/80">{t("seasonFoldersDescription")}</p>
+              </div>
+              <div className="grid grid-cols-3 gap-2 sm:gap-3">
+                <div className="min-w-24 rounded-2xl border border-white/15 bg-white/10 px-3 py-3 backdrop-blur-sm"><p className="text-[11px] font-bold uppercase tracking-wide text-sky-100/70">{t("seasonFoldersTitle")}</p><p className="mt-1 text-2xl font-extrabold">{seasonOptions.length}</p></div>
+                <div className="min-w-24 rounded-2xl border border-white/15 bg-white/10 px-3 py-3 backdrop-blur-sm"><p className="text-[11px] font-bold uppercase tracking-wide text-sky-100/70">{t("teams")}</p><p className="mt-1 text-2xl font-extrabold">{teams.length}</p></div>
+                <div className="min-w-24 rounded-2xl border border-white/15 bg-white/10 px-3 py-3 backdrop-blur-sm"><p className="text-[11px] font-bold uppercase tracking-wide text-sky-100/70">{t("players")}</p><p className="mt-1 text-2xl font-extrabold">{teams.reduce((total, team) => total + (Number(team.num_jugadores) || 0), 0)}</p></div>
+              </div>
+            </div>
+          </section>
+
+          <section className="mb-8" aria-labelledby="teams-seasons-title">
+            <div className="mb-4 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <h2 id="teams-seasons-title" className="font-heading text-xl font-extrabold text-[#0E3554] sm:text-2xl">{t("seasonFoldersTitle")}</h2>
+                <p className="mt-1 text-sm text-slate-500">{t("seasonFoldersDescription")}</p>
+              </div>
+              {activeSeason && <span className="inline-flex w-fit items-center gap-1.5 rounded-full bg-[#EAF6FD] px-3 py-1.5 text-xs font-bold text-[#1B5C8F]"><CalendarDays className="h-3.5 w-3.5" />{selectedSeasonLabel}</span>}
+            </div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {seasonCards.map((card) => {
+                const selected = card.value === activeSeason;
+                const label = card.value === UNASSIGNED_SEASON ? t("unassignedSeason") : card.value;
+                return (
+                  <button
+                    type="button"
+                    key={card.value}
+                    data-testid={`season-card-${seasonTestId(card.value)}`}
+                    aria-pressed={selected}
+                    onClick={() => selectSeason(card.value)}
+                    className={`surface-card group min-h-36 p-5 text-left transition-[transform,box-shadow,border-color,background-color] duration-200 hover:-translate-y-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${selected ? "border-[#2B75B0] bg-[#F5FAFE] shadow-[0_16px_34px_rgba(43,117,176,0.18)]" : "hover:border-[#93C8EE]"}`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <span className={`flex h-11 w-11 items-center justify-center rounded-2xl ${selected ? "bg-[#1B5C8F] text-white" : "bg-[#EAF6FD] text-[#2B75B0]"}`}><CalendarDays className="h-5 w-5" /></span>
+                      <ChevronRight className={`h-5 w-5 transition-transform group-hover:translate-x-1 ${selected ? "text-[#1B5C8F]" : "text-slate-300"}`} aria-hidden="true" />
+                    </div>
+                    <p className="mt-4 font-heading text-lg font-extrabold text-[#0E3554]">{label}</p>
+                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs font-semibold text-slate-500"><span>{card.teams} {t("teamsCount")}</span><span>{card.players} {t("playersCount")}</span></div>
+                    <p className={`mt-3 text-xs font-bold ${selected ? "text-[#1B5C8F]" : "text-slate-400"}`}>{selected ? t("selectedSeason") : t("viewTeams")}</p>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
+          <section aria-labelledby="season-teams-title">
+            <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.14em] text-[#2F7EBE]">{t("season")}</p>
+                <h2 id="season-teams-title" className="mt-1 font-heading text-2xl font-extrabold text-[#0E3554]">{selectedSeasonLabel}</h2>
+                <p className="mt-1 text-sm text-slate-500">{seasonTeams.length} {t("teamsCount")} · {seasonTeams.reduce((total, team) => total + (Number(team.num_jugadores) || 0), 0)} {t("playersCount")}</p>
+              </div>
+              <div className="rounded-2xl border border-[#CFE9FA] bg-white px-4 py-3 text-sm text-slate-600 shadow-sm"><span className="font-bold text-[#0E3554]">{filteredTeams.length}</span>/{seasonTeams.length} {t("teamsCount")}</div>
+            </div>
+
+            <div className="surface-card mb-5 grid grid-cols-1 gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_minmax(220px,260px)_auto] sm:items-end sm:p-5">
+              <div className="space-y-1.5">
+                <label htmlFor="team-search" className="text-sm font-semibold text-slate-700">{t("searchTeams")}</label>
+                <div className="relative"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" aria-hidden="true" /><Input id="team-search" data-testid="team-search" value={teamSearch} onChange={(event) => setTeamSearch(event.target.value)} placeholder={t("searchTeamsPlaceholder")} className="h-11 pl-10" /></div>
+              </div>
+              <SelectField label={t("category")} value={categoryFilter} onChange={setCategoryFilter} options={[{ value: "all", label: t("allCategories") }, ...categoryOptions.map((category) => ({ value: category, label: category }))]} testid="team-category-filter" />
+              {(teamSearch || categoryFilter !== "all") && <Button type="button" variant="ghost" onClick={clearTeamFilters} className="h-11"><RotateCcw className="h-4 w-4" />{t("clearTeamFilters")}</Button>}
+            </div>
+
+            {filteredTeams.length === 0 ? (
+              <EmptyState icon={Users} message={seasonTeams.length ? t("noFilteredTeams") : t("seasonNoTeams")} action={seasonTeams.length && (teamSearch || categoryFilter !== "all") ? <Button variant="outline" onClick={clearTeamFilters}>{t("clearTeamFilters")}</Button> : null} />
+            ) : (
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {filteredTeams.map((tm) => (
             <div key={tm.id} data-testid={`team-card-${tm.id}`} role="button" tabIndex={0}
               aria-label={`Ver plantilla de ${tm.nombre}`} onClick={() => openSquad(tm)}
               onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openSquad(tm); } }}
@@ -106,6 +273,9 @@ const Teams = () => {
               </div>
               <div className="mt-4 flex items-center justify-between">
                 <span className="inline-flex items-center gap-1.5 text-sm text-slate-500"><Users className="h-4 w-4" />{tm.num_jugadores}/{tm.limite_jugadores} {t("playersCount")}</span>
+                <span className="inline-flex items-center gap-1 text-xs font-bold text-[#1B5C8F]">{t("viewPlayers")}<ChevronRight className="h-4 w-4" /></span>
+              </div>
+              <div className="mt-3 flex justify-end">
                 <div className="flex gap-1">
                   <PermissionGate resource="teams" action="edit"><Button variant="ghost" size="icon" aria-label={`${t("edit")} ${tm.nombre}`} data-testid={`edit-team-${tm.id}`} onClick={(event) => { event.stopPropagation(); openEdit(tm); }}><Pencil className="h-4 w-4" /></Button></PermissionGate>
                   <PermissionGate resource="teams" action="delete"><Button variant="ghost" size="icon" aria-label={`${t("delete")} ${tm.nombre}`} data-testid={`delete-team-${tm.id}`} onClick={(event) => { event.stopPropagation(); remove(tm); }} className="text-red-500 hover:bg-red-50"><Trash2 className="h-4 w-4" /></Button></PermissionGate>
@@ -113,7 +283,10 @@ const Teams = () => {
               </div>
             </div>
           ))}
-        </div>
+              </div>
+            )}
+          </section>
+        </>
       )}
 
       <Dialog open={squadDialog} onOpenChange={setSquadDialog}>
