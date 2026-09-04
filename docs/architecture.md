@@ -23,6 +23,15 @@ mantiene el `equipo_id` del jugador como asignación más reciente para la
 compatibilidad de los módulos existentes y usa la pertenencia cuando se
 consulta una temporada histórica.
 
+La equipación sigue la misma separación temporal sin duplicar la ficha personal:
+`players.equipacion_por_temporada` guarda instantáneas parciales por clave de
+temporada. `GET /api/equipment?temporada=...` compone la respuesta con esa
+instantánea y con los datos de la pertenencia; si no existe un dato temporal,
+usa el valor legado de `players` para conservar compatibilidad. Las ediciones
+con temporada escriben únicamente la instantánea seleccionada. Al crear una
+temporada nueva se copia la equipación disponible de la temporada de origen,
+dejando después sus cambios aislados.
+
 ## Ciclo de vida de invitaciones
 
 La provisión familiar y la administración de usuarios comparten el contrato de entrega SMTP. Primero se guarda la cuenta y el digest de la invitación; después se intenta enviar el mensaje. El resultado se registra con message_id y un purpose explícito. Los errores de transporte no deshacen el alta y permiten reenviar. La ficha de Familias ofrece un guardado explícito desde la tarjeta cuando hay cambios pendientes y una confirmación explícita del correo cuando aún no está confirmada, pero el envío solo se habilita tras confirmar la persistencia. La URL pública de activación entra por `/activar?token=...`; los enlaces heredados `/login?invitation=...` siguen redirigiendo al formulario. El token permanece válido mientras no caduque, se use o se cancele.

@@ -9,6 +9,7 @@ Este documento describe únicamente información que puede verificarse en el rep
 - La configuración y la documentación del proyecto identifican MongoDB como base de datos.
 - El README del repositorio enumera módulos de gestión deportiva, familias, equipos, entrenamientos, partidos, convocatorias, pagos, autorizaciones, comunicación, informes y configuración.
 - La pantalla de Equipos organiza visualmente los registros por temporada, mediante tarjetas, filtros de búsqueda/categoría y una vista de plantilla que mantiene el equipo y sus jugadores dentro de la temporada seleccionada. Incluye «Crear temporada siguiente»: copia equipos y plantillas en registros nuevos, conserva una ficha única por jugador mediante `team_memberships` y permite cambiar la nueva temporada sin borrar el histórico anterior. Los equipos sin temporada se muestran en un bloque separado para su revisión.
+- La pantalla de Equipamiento parte de una vista visual por tarjetas, con resumen de entrega, progreso por equipo, búsqueda, temporada, estado de entrega y tallas pendientes. Mantiene una vista de tabla compacta y la exportación CSV como alternativas. Al editar con una temporada seleccionada, las tallas, el dorsal, la entrega, la fecha y las observaciones se guardan en la instantánea de esa temporada; los datos históricos no se sobrescriben.
 - `scripts/publish-safe.sh` valida, prepara y publica cambios de código de forma controlada; admite `--dry-run` para validar sin commit, push, cambio de build ni reinicio de servicios.
 
 ## Limitaciones conocidas

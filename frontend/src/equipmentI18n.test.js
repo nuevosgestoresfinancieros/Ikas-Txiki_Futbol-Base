@@ -7,6 +7,15 @@ const equipmentKeys = [
   "equipmentShirt", "equipmentShorts", "equipmentTracksuit", "equipmentSocks",
   "equipmentShoes", "equipmentDeliveryDate", "equipmentNotes", "equipmentActions",
   "equipmentNoResults", "equipmentUpdated", "equipmentSaveError", "equipmentEditHint",
+  "equipmentNoTeam", "equipmentKitOverview", "equipmentItemsReady", "equipmentMissingItems",
+  "equipmentComplete", "equipmentAvailable", "equipmentCardsView", "equipmentTableView",
+  "equipmentSearchPlaceholder", "equipmentAllSeasons", "equipmentOnlyMissingSizes",
+  "equipmentViewMode", "equipmentFiltersActive", "equipmentOverviewTitle",
+  "equipmentOverviewDescription", "equipmentVisibleSuffix", "equipmentPendingHint",
+  "equipmentMissingSizeHint", "equipmentTeamsSummary", "equipmentTeamsSummaryDescription",
+  "equipmentTeamPlayers", "equipmentDeliveryProgress", "equipmentMetadataWarning",
+  "equipmentTableHint", "equipmentSeasonNotice", "equipmentMainKit", "equipmentDelivery",
+  "equipmentSecondKitReadOnly",
 ];
 
 test.each(equipmentKeys)("equipment label %s exists in Spanish and Basque", (key) => {

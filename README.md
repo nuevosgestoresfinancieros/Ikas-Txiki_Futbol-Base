@@ -44,7 +44,8 @@ Aplicación web integral para la **gestión de una escuela de fútbol base juven
 | **Inscripciones** | Alta nueva o renovación, detección de hermanos, estados, y crear ficha de jugador desde la inscripción. |
 | **Jugadores** | Ficha completa con foto, categoría automática, estado, dorsal, salud, equipación y documentación. Búsqueda y filtros. |
 | **Familias** | Datos de contacto, preferencia de comunicación e hijos vinculados. |
-| **Equipos** | Categoría, temporada, entrenadores, horarios, campo y plantilla. |
+| **Equipos** | Categoría, temporada, entrenadores, horarios, campo y plantilla. Incluye copia segura de la temporada siguiente. |
+| **Equipamiento** | Tarjetas visuales por temporada, progreso de entregas, tallas pendientes, edición contextual, tabla compacta y exportación CSV. |
 | **Entrenamientos** | Fecha/hora/campo y **control de asistencia** por jugador (presente, justificada, injustificada, lesión). |
 | **Partidos** | Jornada, rival, local/visitante, tipo, estado y resultado. |
 | **Convocatorias** | Convocar jugadores para un partido y confirmar asistencia. |
@@ -218,6 +219,7 @@ Todas las rutas llevan el prefijo **`/api`**.
 | Jugadores | `GET/POST /api/players`, `GET/PUT/DELETE /api/players/{id}` |
 | Familias | `GET/POST /api/families`, `PUT/DELETE /api/families/{id}` |
 | Equipos | `GET/POST /api/teams`, `GET/PUT/DELETE /api/teams/{id}`, `POST /api/teams/season-copy` (administración) |
+| Equipamiento | `GET /api/equipment?temporada=...`, `PUT /api/equipment/{player_id}?temporada=...` |
 | Partidos | `GET/POST /api/matches`, `GET/PUT/DELETE /api/matches/{id}` |
 | Convocatorias | `GET/POST /api/callups`, `GET/PUT/DELETE /api/callups/{id}` |
 | Entrenamientos | `GET/POST /api/trainings`, `GET/PUT/DELETE /api/trainings/{id}` |

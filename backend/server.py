@@ -138,6 +138,11 @@ UPLOADS_DIR = ROOT_DIR / "uploads"
 UPLOADS_DIR.mkdir(exist_ok=True)
 TRAINING_LIBRARY_COLLECTION = "training_library"
 TEAM_MEMBERSHIPS_COLLECTION = "team_memberships"
+EQUIPMENT_SEASON_FIELDS = (
+    "dorsal", "nombre_camiseta", "talla_camiseta", "talla_pantalon", "talla_chandal",
+    "talla_medias", "talla_calzado", "equipacion_entregada", "fecha_entrega_equipacion",
+    "observaciones_material", "segunda_equipacion",
+)
 _training_library_sync_lock = asyncio.Lock()
 _training_library_state: dict[str, Any] = {"signature": None, "summary": None}
 load_dotenv(ROOT_DIR / '.env')
@@ -576,7 +581,14 @@ async def user_player_ids(user: dict) -> list[str]:
         linked = await db.players.find(
             {"equipo_id": {"$in": team_ids}}, {"_id": 0, "id": 1}
         ).to_list(5000)
-        return ids(row.get("id") for row in linked)
+        historical = await db[TEAM_MEMBERSHIPS_COLLECTION].find(
+            {"team_id": {"$in": team_ids}, "active": {"$ne": False}},
+            {"_id": 0, "player_id": 1},
+        ).to_list(10000)
+        return ids([
+            *(row.get("id") for row in linked),
+            *(row.get("player_id") for row in historical),
+        ])
     return []
 
 
@@ -779,6 +791,79 @@ async def _team_memberships(
     if active_only:
         query["active"] = {"$ne": False}
     return await db[TEAM_MEMBERSHIPS_COLLECTION].find(query, {"_id": 0}).to_list(20000)
+
+
+def _canonical_equipment(player: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        field: copy.deepcopy(player.get(field))
+        for field in EQUIPMENT_SEASON_FIELDS
+    }
+
+
+def _season_equipment(player: Mapping[str, Any], season: Optional[str]) -> dict[str, Any]:
+    """Return the equipment snapshot for a season, with legacy fallback."""
+    snapshot = _canonical_equipment(player)
+    season_key = str(season or "").strip()
+    seasonal = player.get("equipacion_por_temporada") or {}
+    record = seasonal.get(season_key) if isinstance(seasonal, Mapping) else None
+    if isinstance(record, Mapping):
+        for field in EQUIPMENT_SEASON_FIELDS:
+            if field in record:
+                snapshot[field] = copy.deepcopy(record[field])
+    return snapshot
+
+
+def _equipment_update_payload(data: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        field: copy.deepcopy(data[field])
+        for field in EQUIPMENT_SEASON_FIELDS
+        if field in data
+    }
+
+
+def _validate_equipment_season(season: Optional[str]) -> str:
+    season_key = str(season or "").strip()
+    if not season_key or len(season_key) > 64 or "." in season_key or "$" in season_key:
+        raise HTTPException(status_code=422, detail="La temporada de equipamiento no es válida")
+    return season_key
+
+
+async def _player_for_equipment(player_id: str) -> dict:
+    query = merge_query({"id": player_id}, await scope_for_collection("equipment"))
+    player = await db.players.find_one(query, {"_id": 0})
+    if not player:
+        raise HTTPException(status_code=404, detail="No encontrado")
+    return player
+
+
+async def _store_season_equipment(
+    player: Mapping[str, Any], season: str, values: Mapping[str, Any],
+) -> dict[str, Any]:
+    season_key = _validate_equipment_season(season)
+    seasonal = copy.deepcopy(player.get("equipacion_por_temporada") or {})
+    if not isinstance(seasonal, dict):
+        seasonal = {}
+    record = seasonal.get(season_key)
+    if not isinstance(record, dict):
+        record = {}
+    record.update(_equipment_update_payload(values))
+    seasonal[season_key] = record
+    updated_at = now_iso()
+    query = merge_query({"id": player["id"]}, await scope_for_collection("equipment"))
+    result = await db.players.update_one(
+        query, {"$set": {"equipacion_por_temporada": seasonal, "updated_at": updated_at}},
+    )
+    if not result.matched_count:
+        raise HTTPException(status_code=404, detail="No encontrado")
+    if "dorsal" in values:
+        await db[TEAM_MEMBERSHIPS_COLLECTION].update_one(
+            {"player_id": player["id"], "temporada": season_key, "active": {"$ne": False}},
+            {"$set": {"dorsal": values.get("dorsal"), "updated_at": updated_at}},
+        )
+    updated = {**dict(player), "equipacion_por_temporada": seasonal, "updated_at": updated_at}
+    updated.update({field: copy.deepcopy(record.get(field)) for field in EQUIPMENT_SEASON_FIELDS if field in record})
+    updated["temporada"] = season_key
+    return updated
 
 
 async def _team_roster_rows(team: Mapping[str, Any]) -> list[dict]:
@@ -1633,6 +1718,8 @@ async def create_player(player: Player, temporada: Optional[str] = None):
     try:
         created = await insert_doc("players", data)
         await _sync_player_team_membership(created, created, season=requested_season)
+        if requested_season:
+            created = await _store_season_equipment(created, requested_season, data)
         return created
     except Exception:
         # The player has not been created, so only undo the new family created
@@ -1686,12 +1773,16 @@ async def get_players(equipo_id: Optional[str] = None, estado: Optional[str] = N
                 row = dict(player)
                 row["equipo_id"] = membership.get("team_id")
                 row["temporada"] = temporada
+                row.update(_season_equipment(row, temporada))
                 for field in ("categoria", "dorsal", "posicion", "estado"):
                     if field in membership and membership[field] is not None:
                         row[field] = membership[field]
                 docs.append(row)
             elif player.get("equipo_id") in season_team_ids and player_id not in membership_player_ids:
-                docs.append(dict(player))
+                row = dict(player)
+                row["temporada"] = temporada
+                row.update(_season_equipment(row, temporada))
+                docs.append(row)
         if estado:
             docs = [player for player in docs if player.get("estado") == estado]
     else:
@@ -1716,6 +1807,9 @@ async def edit_player(player_id: str, player: Player, temporada: Optional[str] =
         data["categoria"] = compute_category(data["fecha_nacimiento"])
     existing = await get_doc("players", player_id)
     requested_season = str(temporada or "").strip()
+    season_equipment = _equipment_update_payload(data) if requested_season else {}
+    if requested_season:
+        data = {key: value for key, value in data.items() if key not in EQUIPMENT_SEASON_FIELDS}
     if requested_season and data.get("equipo_id"):
         team = await get_doc("teams", data["equipo_id"])
         if team.get("temporada") and str(team.get("temporada")) != requested_season:
@@ -1726,6 +1820,8 @@ async def edit_player(player_id: str, player: Player, temporada: Optional[str] =
     try:
         updated = await update_doc("players", player_id, data)
         await _sync_player_team_membership(existing, updated, season=requested_season)
+        if requested_season:
+            updated = await _store_season_equipment(updated, requested_season, season_equipment)
         return updated
     except Exception:
         if created_family_id:
@@ -2329,6 +2425,29 @@ async def copy_team_season(request: SeasonCopyRequest):
     created_membership_ids = [
         str(row["id"]) for row in [*plan["source_memberships"], *plan["memberships"]]
     ]
+    source_players_by_id = {str(player.get("id")): player for player in source_players if player.get("id")}
+    equipment_updates: dict[str, dict[str, Any]] = {}
+    for membership in plan["memberships"]:
+        player_id = str(membership.get("player_id") or "")
+        player = source_players_by_id.get(player_id)
+        if not player:
+            continue
+        previous_map = copy.deepcopy(player.get("equipacion_por_temporada"))
+        seasonal_map = copy.deepcopy(previous_map or {})
+        if not isinstance(seasonal_map, dict):
+            seasonal_map = {}
+        source_snapshot = _season_equipment(player, source_season)
+        seasonal_map.setdefault(source_season, copy.deepcopy(source_snapshot))
+        seasonal_map.setdefault(target_season, copy.deepcopy(source_snapshot))
+        if seasonal_map != (previous_map or {}):
+            equipment_updates[player_id] = {
+                "before": previous_map,
+                "after": seasonal_map,
+            }
+
+    team_updates_by_player = {
+        str(update["player_id"]): update for update in plan["player_updates"]
+    }
     updated_players: list[dict] = []
 
     try:
@@ -2336,34 +2455,56 @@ async def copy_team_season(request: SeasonCopyRequest):
         memberships = [*plan["source_memberships"], *plan["memberships"]]
         if memberships:
             await db[TEAM_MEMBERSHIPS_COLLECTION].insert_many(memberships)
-        for update in plan["player_updates"]:
-            player_id = str(update["player_id"])
-            previous_team_id = update.get("previous_team_id")
+        for player_id in sorted(set(team_updates_by_player) | set(equipment_updates)):
+            team_update = team_updates_by_player.get(player_id)
+            equipment_update = equipment_updates.get(player_id)
+            update_document: dict[str, Any] = {"updated_at": timestamp}
+            if team_update:
+                update_document["equipo_id"] = team_update["new_team_id"]
+            if equipment_update:
+                update_document["equipacion_por_temporada"] = equipment_update["after"]
             result = await db.players.update_one(
                 {"id": player_id},
-                {"$set": {"equipo_id": update["new_team_id"], "updated_at": timestamp}},
+                {"$set": update_document},
             )
             if result.matched_count:
                 updated_players.append({
                     "player_id": player_id,
-                    "previous_team_id": previous_team_id,
-                    "new_team_id": update["new_team_id"],
+                    "team_update": team_update,
+                    "equipment_update": equipment_update,
                 })
     except Exception as error:
         # The source season is never changed. If a new-season write fails,
         # remove only the records created by this operation and restore the
         # canonical current assignment for the affected players.
         for update in reversed(updated_players):
-            rollback_query = {"id": update["player_id"], "equipo_id": update["new_team_id"]}
-            if update.get("previous_team_id"):
+            team_update = update.get("team_update")
+            equipment_update = update.get("equipment_update")
+            rollback_query = {"id": update["player_id"]}
+            if team_update:
+                rollback_query["equipo_id"] = team_update["new_team_id"]
+            rollback_set = {"updated_at": now_iso()}
+            rollback_unset = {}
+            if team_update and team_update.get("previous_team_id"):
+                rollback_set["equipo_id"] = team_update["previous_team_id"]
+            elif team_update:
+                rollback_unset["equipo_id"] = ""
+            if equipment_update and equipment_update.get("before") is not None:
+                rollback_set["equipacion_por_temporada"] = equipment_update["before"]
+            elif equipment_update:
+                rollback_unset["equipacion_por_temporada"] = ""
+            rollback_document = {"$set": rollback_set}
+            if rollback_unset:
+                rollback_document["$unset"] = rollback_unset
+            if team_update and team_update.get("previous_team_id"):
                 await db.players.update_one(
                     rollback_query,
-                    {"$set": {"equipo_id": update["previous_team_id"], "updated_at": now_iso()}},
+                    rollback_document,
                 )
-            else:
+            elif team_update or equipment_update:
                 await db.players.update_one(
                     rollback_query,
-                    {"$unset": {"equipo_id": ""}, "$set": {"updated_at": now_iso()}},
+                    rollback_document,
                 )
         if created_membership_ids:
             await db[TEAM_MEMBERSHIPS_COLLECTION].delete_many({"id": {"$in": created_membership_ids}})
@@ -7610,9 +7751,10 @@ async def get_catalog_options():
     """Catálogos operativos reutilizables sin exponer toda la configuración admin."""
     doc = await db.settings.find_one(
         {"id": SETTINGS_ID},
-        {"_id": 0, "temporadas": 1, "campos": 1, "entrenadores": 1},
+        {"_id": 0, "temporada_actual": 1, "temporadas": 1, "campos": 1, "entrenadores": 1},
     ) or {}
     return {
+        "temporada_actual": doc.get("temporada_actual"),
         "temporadas": sorted({str(value) for value in doc.get("temporadas", []) if value}),
         "campos": sorted({str(value) for value in doc.get("campos", []) if value}),
         "entrenadores": sorted({str(value) for value in doc.get("entrenadores", []) if value}),
@@ -8345,17 +8487,39 @@ async def seed_demo():
 # ================= EQUIPMENT =================
 
 @api_router.get("/equipment")
-async def get_equipment(equipo_id: Optional[str] = None, entregada: Optional[str] = None):
-    """Devuelve todos los jugadores con sus datos de equipación."""
-    query: Dict[str, Any] = {}
-    if equipo_id:
-        query["equipo_id"] = equipo_id
+async def get_equipment(equipo_id: Optional[str] = None, entregada: Optional[str] = None,
+                        temporada: Optional[str] = None, q: Optional[str] = None):
+    """Devuelve la equipación de la plantilla seleccionada, con legado compatible."""
+    season = str(temporada or "").strip()
+    if season:
+        players = await get_players(equipo_id=equipo_id, temporada=season, q=q)
+        teams = {
+            t["id"]: t["nombre"]
+            for t in await list_docs("teams", {"temporada": season})
+        }
+    else:
+        query: Dict[str, Any] = {}
+        if equipo_id:
+            query["equipo_id"] = equipo_id
+        if q:
+            players = await list_docs("players", query)
+            query_text = q.casefold()
+            players = [
+                player for player in players
+                if query_text in f"{player.get('nombre', '')} {player.get('apellidos', '')}".casefold()
+            ]
+        else:
+            players = await list_docs("players", query)
+        teams = {t["id"]: t["nombre"] for t in await list_docs("teams")}
     if entregada is not None:
-        query["equipacion_entregada"] = (entregada.lower() == "true")
-    players = await list_docs("players", query)
-    teams = {t["id"]: t["nombre"] for t in await list_docs("teams")}
+        delivered = entregada.lower() == "true"
+        players = [
+            player for player in players
+            if bool(_season_equipment(player, season).get("equipacion_entregada")) == delivered
+        ]
     result = []
     for p in players:
+        equipment = _season_equipment(p, season)
         result.append({
             "id": p["id"],
             "nombre": p.get("nombre", ""),
@@ -8363,17 +8527,18 @@ async def get_equipment(equipo_id: Optional[str] = None, entregada: Optional[str
             "categoria": p.get("categoria"),
             "equipo_id": p.get("equipo_id"),
             "equipo_nombre": teams.get(p.get("equipo_id"), "—"),
-            "dorsal": p.get("dorsal"),
-            "nombre_camiseta": p.get("nombre_camiseta"),
-            "talla_camiseta": p.get("talla_camiseta"),
-            "talla_pantalon": p.get("talla_pantalon"),
-            "talla_chandal": p.get("talla_chandal"),
-            "talla_medias": p.get("talla_medias"),
-            "talla_calzado": p.get("talla_calzado"),
-            "equipacion_entregada": p.get("equipacion_entregada", False),
-            "fecha_entrega_equipacion": p.get("fecha_entrega_equipacion"),
-            "observaciones_material": p.get("observaciones_material"),
-            "segunda_equipacion": p.get("segunda_equipacion") or {},
+            "temporada": p.get("temporada") or season or None,
+            "dorsal": equipment.get("dorsal"),
+            "nombre_camiseta": equipment.get("nombre_camiseta"),
+            "talla_camiseta": equipment.get("talla_camiseta"),
+            "talla_pantalon": equipment.get("talla_pantalon"),
+            "talla_chandal": equipment.get("talla_chandal"),
+            "talla_medias": equipment.get("talla_medias"),
+            "talla_calzado": equipment.get("talla_calzado"),
+            "equipacion_entregada": equipment.get("equipacion_entregada", False),
+            "fecha_entrega_equipacion": equipment.get("fecha_entrega_equipacion"),
+            "observaciones_material": equipment.get("observaciones_material"),
+            "segunda_equipacion": equipment.get("segunda_equipacion") or {},
             "historial_equipacion": p.get("historial_equipacion") or {},
             "estado": p.get("estado"),
         })
@@ -8381,14 +8546,14 @@ async def get_equipment(equipo_id: Optional[str] = None, entregada: Optional[str
 
 
 @api_router.put("/equipment/{player_id}")
-async def update_equipment(player_id: str, data: Dict[str, Any]):
+async def update_equipment(player_id: str, data: Dict[str, Any], temporada: Optional[str] = None):
     """Actualiza solo los campos de equipación de un jugador."""
-    allowed = {
-        "dorsal", "nombre_camiseta", "talla_camiseta", "talla_pantalon", "talla_chandal",
-        "talla_medias", "talla_calzado", "equipacion_entregada",
-        "fecha_entrega_equipacion", "observaciones_material"
-    }
+    allowed = set(EQUIPMENT_SEASON_FIELDS) - {"segunda_equipacion"}
     update = {k: v for k, v in data.items() if k in allowed}
+    season = str(temporada or "").strip()
+    if season:
+        player = await _player_for_equipment(player_id)
+        return await _store_season_equipment(player, season, update)
     return await update_doc("players", player_id, update)
 
 
