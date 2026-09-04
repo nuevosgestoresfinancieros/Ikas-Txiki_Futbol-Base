@@ -13,6 +13,7 @@ import {
 import { PageHeader, EmptyState, initials } from "@/components/shared";
 import { Field, Area, SelectField } from "@/components/form";
 import ExerciseLibrary from "@/components/ExerciseLibrary";
+import TrainingLibrary from "@/components/TrainingLibrary";
 import TrainingExercisePlanner from "@/components/TrainingExercisePlanner";
 import TrainingEvaluations from "@/components/TrainingEvaluations";
 import GoogleMapsLinks from "@/components/GoogleMapsLinks";
@@ -26,6 +27,8 @@ const Trainings = () => {
   const canCreate = usePermission("trainings", "create");
   const canEvaluate = usePermission("training-evaluations", "read");
   const canReadExercises = usePermission("exercises", "read");
+  const canReadTrainingLibrary = usePermission("training-library", "read");
+  const canSyncTrainingLibrary = usePermission("training-library", "administer");
   const { t, lang } = useI18n();
   const [params, setParams] = useSearchParams();
   const [items, setItems] = useState([]);
@@ -68,7 +71,20 @@ const Trainings = () => {
   useEffect(() => { if (teams.length || teamFilter === "all") load(); /* eslint-disable-line react-hooks/exhaustive-deps */ }, [teamFilter]);
 
   const set = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
-  const openNew = () => { setForm({ asistencia: [], equipo_id: "", planned_exercises: [] }); setDialog(true); };
+  const openNew = (libraryItem = null) => {
+    setForm({
+      asistencia: [], equipo_id: "", planned_exercises: [],
+      library_training_id: libraryItem?.id || "",
+      library_training: libraryItem || null,
+      library_training_snapshot: libraryItem ? {
+        id: libraryItem.id, title: libraryItem.title, block: libraryItem.block,
+        block_label: libraryItem.block_label, subblock: libraryItem.subblock,
+        subblock_label: libraryItem.subblock_label, source_path: libraryItem.source_path,
+        filename: libraryItem.filename,
+      } : null,
+    });
+    setDialog(true);
+  };
   const openEdit = (i) => { setForm({ ...i, asistencia: i.asistencia || [], planned_exercises: i.planned_exercises || [] }); setDialog(true); };
 
   const teamPlayers = players.filter((p) => p.equipo_id === form.equipo_id);
@@ -114,6 +130,8 @@ const Trainings = () => {
         {canReadExercises && <button type="button" role="tab" aria-selected={view === "library"} onClick={() => setView("library")}
           className={`flex min-h-10 flex-1 items-center justify-center gap-2 rounded-lg px-3 text-sm font-semibold ${view === "library" ? "bg-white text-primary shadow-sm" : "text-slate-600"}`}><Library className="h-4 w-4" />{t("exerciseLibrary")}</button>
         }
+        {canReadTrainingLibrary && <button type="button" role="tab" aria-selected={view === "prepared"} onClick={() => setView("prepared")}
+          className={`flex min-h-10 flex-1 items-center justify-center gap-2 rounded-lg px-3 text-sm font-semibold ${view === "prepared" ? "bg-white text-primary shadow-sm" : "text-slate-600"}`}><FileText className="h-4 w-4" />{t("preparedTrainingLibrary")}</button>}
       </div>
 
       {view === "library" ? <ExerciseLibrary teams={teams} canManage={canCreate} onCatalogChange={setExercises}
@@ -122,7 +140,7 @@ const Trainings = () => {
           if (returnToTrainingAfterExercise) {
             setReturnToTrainingAfterExercise(false); setView("sessions"); setDialog(true);
           }
-        }} /> : <>
+        }} /> : view === "prepared" ? <TrainingLibrary canSync={canSyncTrainingLibrary} onUse={canCreate ? openNew : null} /> : <>
 
       <section className="surface-card mb-5 p-4" aria-label={t("attendance")}>
         <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -149,6 +167,7 @@ const Trainings = () => {
                 <div>
                   <p className="font-semibold text-slate-800">{i.equipo_nombre}</p>
                   <p className="text-xs text-slate-500">{i.fecha} · {i.hora || "--:--"} · {i.campo || "—"}</p>
+                  {i.library_training?.title && <p className="mt-1 flex items-center gap-1 text-xs font-medium text-primary"><FileText className="h-3.5 w-3.5" />{i.library_training.title}</p>}
                   <GoogleMapsLinks sources={i} className="mt-2" />
                 </div>
               </div>
@@ -169,6 +188,14 @@ const Trainings = () => {
         <DialogContent className="max-w-2xl max-h-[92vh] overflow-y-auto">
           <DialogHeader><DialogTitle className="font-heading">{form.id ? t("manageAttendance") : t("trainings")}</DialogTitle>
             <DialogDescription>{t("trainingFormDescription")}</DialogDescription></DialogHeader>
+          {!form.id && canReadTrainingLibrary && <div className="rounded-xl border border-primary/20 bg-primary/5 p-3">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div><p className="text-sm font-semibold text-slate-900">{form.library_training?.title || t("noPreparedTrainingSelected")}</p>
+                {form.library_training?.block_label && <p className="mt-1 text-xs text-slate-500">{form.library_training.block_label}{form.library_training.subblock_label ? ` · ${form.library_training.subblock_label}` : ""}</p>}
+              </div>
+              <Button type="button" variant="outline" size="sm" onClick={() => { setDialog(false); setView("prepared"); }}><FileText className="h-4 w-4" />{t("choosePreparedTraining")}</Button>
+            </div>
+          </div>}
           <Datalist id="training-fields-list" values={fieldOptions} />
           <div className="space-y-4 pt-2">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

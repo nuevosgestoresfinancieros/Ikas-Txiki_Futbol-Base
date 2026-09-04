@@ -39,7 +39,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.worksheet.table import Table as ExcelTable, TableStyleInfo
 from openpyxl.utils import get_column_letter
-from pymongo import ReturnDocument
+from pymongo import ReturnDocument, UpdateOne
 from pymongo.errors import DuplicateKeyError
 
 from authz import (
@@ -112,6 +112,10 @@ from exercise_service import (
     ExerciseValidationError, exercise_statistics, normalize_exercise,
     normalize_planned_exercises, normalize_template, validate_exercise_update,
 )
+from training_library_service import (
+    build_catalog, catalog_summary, find_library_root, public_record as public_library_record,
+    search_key as training_library_search_key, snapshot as training_library_snapshot,
+)
 from user_security_service import (
     INVITATION_TTL_HOURS, LOCK_DURATION_MINUTES, MAX_ACCOUNT_ATTEMPTS,
     generate_temporary_password, invitation_status, issue_token, legacy_session_allowed,
@@ -131,6 +135,9 @@ from family_duplicate_service import candidates as family_duplicate_candidates, 
 ROOT_DIR = Path(__file__).parent
 UPLOADS_DIR = ROOT_DIR / "uploads"
 UPLOADS_DIR.mkdir(exist_ok=True)
+TRAINING_LIBRARY_COLLECTION = "training_library"
+_training_library_sync_lock = asyncio.Lock()
+_training_library_state: dict[str, Any] = {"signature": None, "summary": None}
 load_dotenv(ROOT_DIR / '.env')
 
 mongo_url = os.environ['MONGO_URL']
@@ -5284,6 +5291,150 @@ async def confirm_import_staging(draft_id: str, request: StagingConfirmRequest):
     return {"ok": True, "job_id": job_id, "status": "applied", "operations": len(operations)}
 
 
+# ================= PREPARED TRAINING LIBRARY =================
+def _training_library_signature(root: Optional[Path]) -> Optional[tuple]:
+    if not root or not root.exists():
+        return None
+    count = 0
+    total_size = 0
+    latest_mtime = 0
+    try:
+        for path in root.rglob("*"):
+            if not path.is_file() or path.suffix.casefold() != ".pdf":
+                continue
+            stat = path.stat()
+            count += 1
+            total_size += stat.st_size
+            latest_mtime = max(latest_mtime, stat.st_mtime_ns)
+        index_path = root / "00_Índice_y_plantillas" / "indice_entrenamientos.csv"
+        index_mtime = index_path.stat().st_mtime_ns if index_path.exists() else 0
+        return root.name, count, total_size, latest_mtime, index_mtime
+    except OSError:
+        return None
+
+
+async def sync_training_library(*, force: bool = False) -> dict[str, Any]:
+    """Index the PDF folder without storing the binary files in MongoDB."""
+    root = find_library_root(UPLOADS_DIR)
+    signature = _training_library_signature(root)
+    if not force and signature == _training_library_state.get("signature") and _training_library_state.get("summary"):
+        return _training_library_state["summary"]
+    async with _training_library_sync_lock:
+        root = find_library_root(UPLOADS_DIR)
+        signature = _training_library_signature(root)
+        if not force and signature == _training_library_state.get("signature") and _training_library_state.get("summary"):
+            return _training_library_state["summary"]
+        if not root:
+            summary = catalog_summary([], root=None)
+            _training_library_state.update({"signature": None, "summary": summary})
+            return summary
+        result = build_catalog(root, UPLOADS_DIR)
+        records = result["records"]
+        if records:
+            operations = []
+            for record in records:
+                created_at = record.pop("created_at")
+                operations.append(UpdateOne(
+                    {"source_path": record["source_path"]},
+                    {"$set": record, "$setOnInsert": {"created_at": created_at}},
+                    upsert=True,
+                ))
+            await db[TRAINING_LIBRARY_COLLECTION].bulk_write(operations, ordered=False)
+        indexed_paths = [record["source_path"] for record in records]
+        await db[TRAINING_LIBRARY_COLLECTION].update_many(
+            {"$and": [
+                {"source_path": {"$regex": f"^{re.escape(root.name)}/"}},
+                {"source_path": {"$nin": indexed_paths}},
+            ]},
+            {"$set": {"status": "missing", "updated_at": now_iso()}},
+        )
+        stored = await db[TRAINING_LIBRARY_COLLECTION].find(
+            {"status": "active"}, {"_id": 0}
+        ).to_list(5000)
+        summary = catalog_summary(
+            stored, expected=result.get("expected"), invalid_count=len(result.get("invalid") or []),
+            root=result.get("root"),
+        )
+        summary["invalid_files"] = result.get("invalid") or []
+        _training_library_state.update({"signature": signature, "summary": summary})
+        return summary
+
+
+async def training_library_doc(identifier: str) -> dict:
+    await sync_training_library()
+    document = await db[TRAINING_LIBRARY_COLLECTION].find_one(
+        {"id": identifier, "status": "active"}, {"_id": 0}
+    )
+    if not document:
+        raise HTTPException(status_code=404, detail="Entrenamiento preparado no encontrado")
+    return document
+
+
+def _training_library_file(document: Mapping[str, Any]) -> Path:
+    relative_path = str(document.get("relative_path") or "")
+    uploads_root = UPLOADS_DIR.resolve()
+    path = (UPLOADS_DIR / relative_path).resolve()
+    try:
+        path.relative_to(uploads_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Archivo no disponible") from exc
+    if not path.is_file() or path.suffix.casefold() != ".pdf":
+        raise HTTPException(status_code=404, detail="Archivo no disponible")
+    return path
+
+
+@api_router.get("/training-library/meta")
+async def training_library_meta():
+    return await sync_training_library()
+
+
+@api_router.post("/training-library/sync")
+async def training_library_sync():
+    return await sync_training_library(force=True)
+
+
+@api_router.get("/training-library")
+async def list_training_library(
+    search: str = "", block: Optional[str] = None, subblock: Optional[str] = None,
+    collection: Optional[str] = None, page: int = Query(1, ge=1),
+    page_size: int = Query(24, ge=1, le=100),
+):
+    await sync_training_library()
+    query: dict[str, Any] = {"status": "active"}
+    if search.strip():
+        query["search_text_normalized"] = {"$regex": re.escape(training_library_search_key(search.strip()))}
+    for field, value in (("block", block), ("subblock", subblock), ("collection", collection)):
+        if value and value != "all":
+            query[field] = value
+    total = await db[TRAINING_LIBRARY_COLLECTION].count_documents(query)
+    rows = await db[TRAINING_LIBRARY_COLLECTION].find(query, {"_id": 0}).sort("title", 1).skip(
+        (page - 1) * page_size
+    ).limit(page_size).to_list(page_size)
+    return {
+        "items": [public_library_record(row) for row in rows],
+        "page": page, "page_size": page_size, "total": total,
+    }
+
+
+@api_router.get("/training-library/{training_id}")
+async def get_training_library_item(training_id: str):
+    return public_library_record(await training_library_doc(training_id))
+
+
+@api_router.get("/training-library/{training_id}/file")
+async def get_training_library_file(training_id: str):
+    document = await training_library_doc(training_id)
+    path = _training_library_file(document)
+    filename = quote(str(document.get("filename") or path.name))
+    return FileResponse(
+        path=str(path), media_type="application/pdf",
+        headers={
+            "Content-Disposition": f"inline; filename*=UTF-8''{filename}",
+            "Cache-Control": "private, max-age=300",
+        },
+    )
+
+
 # ================= EXERCISE LIBRARY =================
 EXERCISE_PUBLIC_FIELDS = {
     "_id": 0, "id": 1, "name": 1, "category": 1, "objective": 1, "description": 1,
@@ -5661,6 +5812,8 @@ class Training(BaseModel):
     ejercicios: Optional[str] = None
     planned_exercises: List[PlannedExercisePayload] = []
     session_template_id: Optional[str] = None
+    library_training_id: Optional[str] = None
+    library_training_snapshot: Optional[Dict[str, Any]] = None
     observaciones: Optional[str] = None
     callup_id: Optional[str] = None
 
@@ -5997,6 +6150,11 @@ async def export_attendance_excel(desde: Optional[str] = None, hasta: Optional[s
 @api_router.post("/trainings")
 async def create_training(tr: Training):
     payload = tr.model_dump()
+    if payload.get("library_training_id"):
+        library_item = await training_library_doc(payload["library_training_id"])
+        payload["library_training_snapshot"] = training_library_snapshot(library_item)
+    else:
+        payload["library_training_snapshot"] = None
     exercise_ids = [row["exercise_id"] for row in payload.get("planned_exercises") or []]
     exercises = await accessible_exercise_map(exercise_ids)
     validate_exercises_for_training(exercises, exercise_ids, payload.get("equipo_id"))
@@ -6020,21 +6178,47 @@ async def get_trainings(equipo_id: Optional[str] = None):
     query = {"equipo_id": equipo_id} if equipo_id else {}
     trs = await list_docs("trainings", query)
     teams = {t["id"]: t["nombre"] for t in await list_docs("teams")}
+    can_read_training_library = has_permission(current_user_context.get() or {}, "training-library", "read")
+    library_ids = {tr.get("library_training_id") for tr in trs if tr.get("library_training_id")} if can_read_training_library else set()
+    library_map = {}
+    if library_ids:
+        await sync_training_library()
+        library_map = {
+            row["id"]: public_library_record(row)
+            for row in await db[TRAINING_LIBRARY_COLLECTION].find(
+                {"id": {"$in": list(library_ids)}}, {"_id": 0}
+            ).to_list(len(library_ids))
+        }
     for tr in trs:
         tr["equipo_nombre"] = teams.get(tr.get("equipo_id"), "—")
         a = tr.get("asistencia", [])
         tr["presentes"] = len([x for x in a if x.get("estado") == "presente"])
         tr["total_asistencia"] = len(a)
+        if can_read_training_library and tr.get("library_training_id"):
+            tr["library_training"] = library_map.get(tr["library_training_id"])
+        elif not can_read_training_library:
+            tr.pop("library_training_id", None)
+            tr.pop("library_training_snapshot", None)
     return trs
 
 
 @api_router.get("/trainings/{tr_id}")
 async def get_training(tr_id: str):
     tr = await get_doc("trainings", tr_id)
+    if has_permission(current_user_context.get() or {}, "training-library", "read") and tr.get("library_training_id"):
+        await sync_training_library()
+        library_item = await db[TRAINING_LIBRARY_COLLECTION].find_one(
+            {"id": tr["library_training_id"]}, {"_id": 0}
+        )
+        if library_item:
+            tr["library_training"] = public_library_record(library_item)
     players = {p["id"]: p for p in await list_docs("players")}
     for item in tr.get("asistencia", []):
         p = players.get(item["player_id"], {})
         item["nombre"] = f"{p.get('nombre','')} {p.get('apellidos','')}".strip()
+    if not has_permission(current_user_context.get() or {}, "training-library", "read"):
+        tr.pop("library_training_id", None)
+        tr.pop("library_training_snapshot", None)
     return tr
 
 
@@ -6042,6 +6226,14 @@ async def get_training(tr_id: str):
 async def edit_training(tr_id: str, tr: Training):
     existing = await get_doc("trainings", tr_id)
     payload = tr.model_dump()
+    library_id = payload.get("library_training_id") or existing.get("library_training_id")
+    if library_id:
+        library_item = await training_library_doc(library_id)
+        payload["library_training_id"] = library_id
+        payload["library_training_snapshot"] = training_library_snapshot(library_item)
+    else:
+        payload["library_training_id"] = None
+        payload["library_training_snapshot"] = None
     exercise_ids = [row["exercise_id"] for row in payload.get("planned_exercises") or []]
     exercises = await accessible_exercise_map(exercise_ids)
     validate_exercises_for_training(exercises, exercise_ids, payload.get("equipo_id"))
@@ -6095,10 +6287,15 @@ async def duplicate_training(tr_id: str, data: Dict[str, Any]):
             for row in source.get("planned_exercises") or []
         ],
         "session_template_id": source.get("session_template_id"),
+        "library_training_id": source.get("library_training_id"),
+        "library_training_snapshot": source.get("library_training_snapshot"),
         "observaciones": data.get("observaciones"), "callup_id": None,
     }
     model = Training(**payload)
     duplicate_payload = model.model_dump()
+    if duplicate_payload.get("library_training_id"):
+        library_item = await training_library_doc(duplicate_payload["library_training_id"])
+        duplicate_payload["library_training_snapshot"] = training_library_snapshot(library_item)
     exercise_ids = [row["exercise_id"] for row in duplicate_payload.get("planned_exercises") or []]
     exercises = await accessible_exercise_map(exercise_ids)
     validate_exercises_for_training(exercises, exercise_ids, duplicate_payload.get("equipo_id"))
@@ -8859,6 +9056,18 @@ logger = logging.getLogger(__name__)
 @app.on_event("startup")
 async def initialize_training_evaluation_indexes():
     await ensure_training_evaluation_indexes()
+
+
+@app.on_event("startup")
+async def initialize_training_library():
+    await db[TRAINING_LIBRARY_COLLECTION].create_index("source_path", unique=True, name="source_path_unique")
+    await db[TRAINING_LIBRARY_COLLECTION].create_index("file_sha256", name="file_sha256")
+    await db[TRAINING_LIBRARY_COLLECTION].create_index([("block", 1), ("subblock", 1), ("title", 1)], name="catalog_filters")
+    try:
+        summary = await sync_training_library()
+        logger.info("Training library indexed: %s PDF", summary.get("total", 0))
+    except Exception:
+        logger.exception("Training library indexing failed; the catalog can be retried from the app")
 
 
 @app.on_event("shutdown")

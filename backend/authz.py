@@ -14,7 +14,7 @@ RESOURCES = (
     "matches", "callups", "attendance", "payments", "authorizations",
     "inscriptions", "communications", "reports", "stats", "search",
     "equipment", "settings", "modalities", "data", "calendar", "portal", "notifications", "assistant",
-    "exercises", "training-evaluations", "match-reports",
+    "exercises", "training-library", "training-evaluations", "match-reports",
 )
 
 
@@ -45,6 +45,7 @@ ROLE_PERMISSIONS: Dict[str, Dict[str, Set[str]]] = {
         "modalities": _actions("read"),
         "assistant": _actions("read", "create", "edit"),
         "exercises": _actions("read", "create", "edit", "delete", "export"),
+        "training-library": _actions("read", "administer", "export"),
         "training-evaluations": _actions("read", "create", "edit"),
         "match-reports": _actions("read", "create", "edit", "export"),
     },
@@ -66,6 +67,7 @@ ROLE_PERMISSIONS: Dict[str, Dict[str, Set[str]]] = {
         "modalities": _actions("read"),
         "assistant": _actions("read", "create", "edit"),
         "exercises": _actions("read", "create", "edit", "delete", "export"),
+        "training-library": _actions("read", "export"),
         "training-evaluations": _actions("read", "create", "edit"),
         "match-reports": _actions("read", "create", "edit", "export"),
     },
@@ -121,7 +123,7 @@ PATH_RESOURCES = {
     "users": "users", "categories": "teams", "compute-category": "players", "calendar": "calendar", "portal": "portal", "notifications": "notifications", "modalities": "modalities",
     "inscription-imports": "data", "assistant": "assistant",
     "account-provisioning": "users", "family-access": "users", "family-access-campaigns": "users",
-    "exercises": "exercises", "training-templates": "exercises", "statistics": "stats",
+    "exercises": "exercises", "training-templates": "exercises", "training-library": "training-library", "statistics": "stats",
     "training-evaluations": "training-evaluations",
     "match-reports": "match-reports",
     "export-excel": "data", "export-csv": "data", "import-excel": "data", "clear-all": "data",
@@ -208,6 +210,8 @@ def route_permission(request: Request) -> tuple[str, str]:
         return "match-reports", "edit"
     if first == "exercises" and "duplicate" in parts:
         return "exercises", "create"
+    if first == "training-library" and "sync" in parts:
+        return "training-library", "administer"
     if first in {"clear-all", "seed-demo", "import-excel", "inscription-imports"}:
         return resource, "administer"
     if first in {"export-excel", "export-csv"} or "pdf" in parts or "signed-file" in parts or any(part.endswith((".pdf", ".xlsx", ".ics", ".zip")) for part in parts):
