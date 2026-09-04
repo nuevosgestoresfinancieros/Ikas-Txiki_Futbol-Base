@@ -16,7 +16,7 @@ const empty = {
   nueva_incorporacion: false, segundo_hermano: false, equipacion_entregada: false, descuento: 0,
 };
 
-const PlayerDialog = ({ open, onClose, player, teams, onSaved }) => {
+const PlayerDialog = ({ open, onClose, player, teams, onSaved, season = "" }) => {
   const { t, lang } = useI18n();
   const [form, setForm] = useState(empty);
   const [tab, setTab] = useState("personal");
@@ -55,8 +55,9 @@ const PlayerDialog = ({ open, onClose, player, teams, onSaved }) => {
     }
     setSaving(true);
     try {
-      if (player?.id) await api.put(`/players/${player.id}`, form);
-      else await api.post("/players", form);
+      const requestOptions = season ? { params: { temporada: season } } : undefined;
+      if (player?.id) await api.put(`/players/${player.id}`, form, requestOptions);
+      else await api.post("/players", form, requestOptions);
       toast.success(t("saved"));
       setDirty(false);
       onSaved();
@@ -73,7 +74,8 @@ const PlayerDialog = ({ open, onClose, player, teams, onSaved }) => {
     onClose();
   };
 
-  const teamOptions = [{ value: "none", label: t("none") }, ...teams.map((tm) => ({ value: tm.id, label: tm.nombre }))];
+  const seasonTeams = season ? teams.filter((tm) => tm.temporada === season) : teams;
+  const teamOptions = [{ value: "none", label: t("none") }, ...seasonTeams.map((tm) => ({ value: tm.id, label: tm.nombre }))];
   const statusLabel = (status) => STATUS_LABELS[lang]?.[status] || status;
 
   return (

@@ -1,13 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Shield, Plus, Pencil, Trash2, Users, UserRound, Hash, MapPin, CalendarDays, Search, ChevronRight, RotateCcw } from "lucide-react";
+import { Shield, Plus, Pencil, Trash2, Users, UserRound, Hash, MapPin, CalendarDays, Search, ChevronRight, RotateCcw, CopyPlus } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
 import { PermissionGate, usePermission } from "@/auth";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { PageHeader, StatusBadge, EmptyState } from "@/components/shared";
 import { Field, SelectField } from "@/components/form";
 
@@ -31,6 +31,9 @@ const Teams = () => {
   const [categories, setCategories] = useState([]);
   const [settings, setSettings] = useState({ temporadas: [], campos: [], entrenadores: [] });
   const [dialog, setDialog] = useState(false);
+  const [seasonCopyDialog, setSeasonCopyDialog] = useState(false);
+  const [seasonCopying, setSeasonCopying] = useState(false);
+  const [seasonCopyForm, setSeasonCopyForm] = useState({ source_season: "", target_season: "" });
   const [squadDialog, setSquadDialog] = useState(false);
   const [selectedTeam, setSelectedTeam] = useState(null);
   const [loadingSquad, setLoadingSquad] = useState(false);
@@ -64,6 +67,44 @@ const Teams = () => {
 
   const set = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
   const openNew = () => { setForm(empty); setDialog(true); };
+  const nextSeason = (value) => {
+    const text = String(value || "").trim();
+    const parts = text.split("-", 2);
+    if (parts.length === 2 && parts.every((part) => /^\d+$/.test(part))) return `${Number(parts[1])}-${Number(parts[1]) + 1}`;
+    if (/^\d+$/.test(text)) return String(Number(text) + 1);
+    return "";
+  };
+  const openSeasonCopy = () => {
+    const source = activeSeason && activeSeason !== UNASSIGNED_SEASON
+      && seasonCards.some((card) => card.value === activeSeason && card.teams > 0)
+      ? activeSeason
+      : seasonCards.find((card) => card.value !== UNASSIGNED_SEASON && card.teams > 0)?.value || "";
+    setSeasonCopyForm({ source_season: source, target_season: nextSeason(source) });
+    setSeasonCopyDialog(true);
+  };
+  const copySeason = async () => {
+    const source = seasonCopyForm.source_season.trim();
+    const target = seasonCopyForm.target_season.trim();
+    if (!source || !target) { toast.error(t("seasonCopyRequired")); return; }
+    if (source === target) { toast.error(t("seasonCopyDifferent")); return; }
+    if (seasonCards.some((card) => card.value === target)) { toast.error(t("seasonAlreadyExists")); return; }
+    if (!window.confirm(t("seasonCopyConfirm"))) return;
+    setSeasonCopying(true);
+    try {
+      const { data } = await api.post("/teams/season-copy", { source_season: source, target_season: target });
+      toast.success(`${t("seasonCopySuccess")} ${data.teams_created} ${t("teamsCount")} · ${data.players_assigned} ${t("playersCount")}`);
+      setSeasonCopyDialog(false);
+      setSelectedSeason(target);
+      const next = new URLSearchParams(params);
+      next.set("temporada", target);
+      setParams(next, { replace: true });
+      await load();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || t("seasonCopyError"));
+    } finally {
+      setSeasonCopying(false);
+    }
+  };
   const openEdit = (t) => { setForm(t); setDialog(true); };
   const save = async () => {
     if (!form.nombre?.trim()) { toast.error("Nombre obligatorio"); return; }
@@ -161,7 +202,7 @@ const Teams = () => {
   return (
     <div data-testid="teams-page">
       <PageHeader title={t("teams")} subtitle={t("teamsIntro")} icon={Shield}
-        action={canCreate ? <Button data-testid="add-team-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("newTeam")}</Button> : null} />
+        action={canCreate ? <div className="flex flex-wrap justify-end gap-2"><Button data-testid="create-season-btn" onClick={openSeasonCopy} variant="outline" className="h-11 border-[#93C8EE] bg-white px-4 text-[#1B5C8F] hover:bg-[#F5FAFE]"><CopyPlus className="h-5 w-5" />{t("createNextSeason")}</Button><Button data-testid="add-team-btn" onClick={openNew} className="h-11 px-5"><Plus className="h-5 w-5" />{t("newTeam")}</Button></div> : null} />
 
       {loading ? (
         <div className="space-y-4" role="status" aria-label={t("loading")}>
@@ -348,6 +389,24 @@ const Teams = () => {
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialog(false)}>{t("cancel")}</Button>
             <Button onClick={save} data-testid="team-save-btn" className="h-11 px-6">{t("save")}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={seasonCopyDialog} onOpenChange={(open) => !seasonCopying && setSeasonCopyDialog(open)}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-3 font-heading"><span className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#EAF6FD] text-[#1B5C8F]"><CopyPlus className="h-5 w-5" /></span>{t("createNextSeasonTitle")}</DialogTitle>
+            <DialogDescription>{t("createNextSeasonDescription")}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 pt-2">
+            <SelectField label={t("sourceSeason")} value={seasonCopyForm.source_season} onChange={(value) => setSeasonCopyForm((current) => ({ ...current, source_season: value, target_season: nextSeason(value) }))} options={seasonCards.filter((card) => card.value !== UNASSIGNED_SEASON && card.teams > 0).map((card) => ({ value: card.value, label: card.value }))} testid="season-copy-source" />
+            <Field label={t("targetSeason")} value={seasonCopyForm.target_season} onChange={(value) => setSeasonCopyForm((current) => ({ ...current, target_season: value }))} testid="season-copy-target" placeholder="2027-2028" />
+            <div className="rounded-2xl border border-[#CFE9FA] bg-[#F5FAFE] p-4 text-sm leading-relaxed text-slate-600">{t("seasonCopyWarning")}</div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSeasonCopyDialog(false)} disabled={seasonCopying}>{t("cancel")}</Button>
+            <Button onClick={copySeason} disabled={seasonCopying} data-testid="season-copy-submit" className="h-11 px-6"><CopyPlus className="h-4 w-4" />{seasonCopying ? t("copyingSeason") : t("createNextSeason")}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

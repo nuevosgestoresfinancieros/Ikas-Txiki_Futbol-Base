@@ -112,6 +112,7 @@ from exercise_service import (
     ExerciseValidationError, exercise_statistics, normalize_exercise,
     normalize_planned_exercises, normalize_template, validate_exercise_update,
 )
+from season_roster_service import build_season_copy
 from training_library_service import (
     build_catalog, catalog_summary, find_library_root, public_record as public_library_record,
     search_key as training_library_search_key, snapshot as training_library_snapshot,
@@ -136,6 +137,7 @@ ROOT_DIR = Path(__file__).parent
 UPLOADS_DIR = ROOT_DIR / "uploads"
 UPLOADS_DIR.mkdir(exist_ok=True)
 TRAINING_LIBRARY_COLLECTION = "training_library"
+TEAM_MEMBERSHIPS_COLLECTION = "team_memberships"
 _training_library_sync_lock = asyncio.Lock()
 _training_library_state: dict[str, Any] = {"signature": None, "summary": None}
 load_dotenv(ROOT_DIR / '.env')
@@ -760,6 +762,124 @@ async def delete_doc(coll: str, _id: str):
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="No encontrado")
     return {"ok": True}
+
+
+# ---------- Seasonal team rosters ----------
+async def _team_memberships(
+    *, team_ids: Optional[list[str]] = None, player_id: Optional[str] = None,
+    season: Optional[str] = None, active_only: bool = True,
+) -> list[dict]:
+    query: dict[str, Any] = {}
+    if team_ids is not None:
+        query["team_id"] = {"$in": list(ids(team_ids))}
+    if player_id:
+        query["player_id"] = str(player_id)
+    if season:
+        query["temporada"] = str(season)
+    if active_only:
+        query["active"] = {"$ne": False}
+    return await db[TEAM_MEMBERSHIPS_COLLECTION].find(query, {"_id": 0}).to_list(20000)
+
+
+async def _team_roster_rows(team: Mapping[str, Any]) -> list[dict]:
+    """Return a team's roster, preferring the season snapshot when available."""
+    team_id = str(team.get("id") or "")
+    all_memberships = await _team_memberships(team_ids=[team_id], active_only=False)
+    memberships = [row for row in all_memberships if row.get("active") is not False]
+    membership_pairs = {
+        (team_id, str(row.get("player_id") or "")) for row in all_memberships
+    }
+    player_ids = ids(row.get("player_id") for row in memberships)
+    player_rows = await db.players.find(
+        {"$or": [{"id": {"$in": player_ids}}, {"equipo_id": team_id}]},
+        {"_id": 0},
+    ).to_list(5000)
+    players = {str(row.get("id")): row for row in player_rows if row.get("id")}
+    rows: list[dict] = []
+    included: set[str] = set()
+    for membership in memberships:
+        player_id = str(membership.get("player_id") or "")
+        player = players.get(player_id)
+        if not player:
+            continue
+        row = dict(player)
+        row["equipo_id"] = team_id
+        row["temporada"] = team.get("temporada")
+        for field in ("categoria", "dorsal", "posicion", "estado"):
+            if field in membership and membership[field] is not None:
+                row[field] = membership[field]
+        rows.append(row)
+        included.add(player_id)
+    # Keep legacy assignments visible if they were created outside the new
+    # season flow and have not yet received a membership record.
+    for player in player_rows:
+        player_id = str(player.get("id") or "")
+        if (
+            player.get("equipo_id") == team_id
+            and player_id not in included
+            and (team_id, player_id) not in membership_pairs
+        ):
+            rows.append(dict(player))
+    return rows
+
+
+async def _upsert_team_membership(team: Mapping[str, Any], player: Mapping[str, Any]) -> None:
+    team_id = str(team.get("id") or "")
+    player_id = str(player.get("id") or "")
+    season = str(team.get("temporada") or "").strip()
+    if not team_id or not player_id or not season:
+        return
+    timestamp = now_iso()
+    values = {
+        "player_id": player_id, "team_id": team_id, "temporada": season,
+        "active": True,
+        "categoria": player.get("categoria"), "dorsal": player.get("dorsal"), "posicion": player.get("posicion"),
+        "estado": player.get("estado"), "updated_at": timestamp,
+    }
+    await db[TEAM_MEMBERSHIPS_COLLECTION].update_one(
+        {"team_id": team_id, "player_id": player_id},
+        {"$set": values, "$setOnInsert": {"id": new_id(), "created_at": timestamp}},
+        upsert=True,
+    )
+
+
+async def _deactivate_team_memberships(player_id: str, *, team_id: Optional[str] = None,
+                                       season: Optional[str] = None) -> None:
+    query: dict[str, Any] = {"player_id": str(player_id), "active": {"$ne": False}}
+    if team_id:
+        query["team_id"] = str(team_id)
+    if season:
+        query["temporada"] = str(season)
+    await db[TEAM_MEMBERSHIPS_COLLECTION].update_many(
+        query, {"$set": {"active": False, "updated_at": now_iso()}},
+    )
+
+
+async def _sync_player_team_membership(
+    existing: Mapping[str, Any], updated: Mapping[str, Any], *, season: Optional[str] = None,
+) -> None:
+    """Keep the canonical current assignment and seasonal memberships aligned."""
+    old_team_id = str(existing.get("equipo_id") or "")
+    new_team_id = str(updated.get("equipo_id") or "")
+    requested_season = str(season or "").strip()
+    old_team = await db.teams.find_one({"id": old_team_id}, {"_id": 0}) if old_team_id else None
+    new_team = await db.teams.find_one({"id": new_team_id}, {"_id": 0}) if new_team_id else None
+
+    if new_team:
+        membership_season = requested_season or str(new_team.get("temporada") or "").strip()
+        if old_team_id and old_team_id != new_team_id and str(old_team.get("temporada") or "") == membership_season:
+            await _deactivate_team_memberships(updated["id"], team_id=old_team_id)
+        await _upsert_team_membership({**new_team, "temporada": membership_season}, updated)
+        return
+
+    if old_team_id:
+        # Removing the current assignment must not erase another season's
+        # historical membership. Only the requested/current season is closed.
+        current_settings = await db.settings.find_one({"id": SETTINGS_ID}, {"_id": 0, "temporada_actual": 1}) or {}
+        membership_season = requested_season or str(current_settings.get("temporada_actual") or "").strip()
+        old_season = str((old_team or {}).get("temporada") or "").strip()
+        if not membership_season or old_season == membership_season:
+            await _deactivate_team_memberships(updated["id"], team_id=old_team_id)
 
 
 # ================= USERS / RBAC =================
@@ -1498,7 +1618,12 @@ class Player(BaseModel):
 
 
 @api_router.post("/players")
-async def create_player(player: Player):
+async def create_player(player: Player, temporada: Optional[str] = None):
+    requested_season = str(temporada or "").strip()
+    if requested_season and player.equipo_id:
+        team = await get_doc("teams", player.equipo_id)
+        if team.get("temporada") and str(team.get("temporada")) != requested_season:
+            raise HTTPException(status_code=422, detail="El equipo no pertenece a la temporada seleccionada")
     data = player.model_dump()
     if not data.get("fecha_inscripcion"):
         data["fecha_inscripcion"] = now_iso()
@@ -1506,12 +1631,16 @@ async def create_player(player: Player):
         data["categoria"] = compute_category(data["fecha_nacimiento"])
     created_family_id = await _link_player_family_on_create(data)
     try:
-        return await insert_doc("players", data)
+        created = await insert_doc("players", data)
+        await _sync_player_team_membership(created, created, season=requested_season)
+        return created
     except Exception:
         # The player has not been created, so only undo the new family created
         # by this request. Existing families are never modified or removed.
         if created_family_id:
             await db.families.delete_one({"id": created_family_id})
+        if data.get("id"):
+            await db.players.delete_one({"id": data["id"]})
         raise
 
 
@@ -1520,21 +1649,55 @@ async def get_players(equipo_id: Optional[str] = None, estado: Optional[str] = N
                       categoria: Optional[str] = None, temporada: Optional[str] = None,
                       documentacion_pendiente: bool = False, q: Optional[str] = None):
     query: Dict[str, Any] = {}
-    if equipo_id:
-        query["equipo_id"] = equipo_id
     if estado:
         query["estado"] = estado
     if categoria:
         query["categoria"] = categoria
     if documentacion_pendiente:
         query["estado_documental"] = {"$ne": "completo"}
-    docs = await list_docs("players", query)
     if temporada:
-        season_team_ids = {
-            team.get("id") for team in await list_docs("teams", {"temporada": temporada})
-            if team.get("id")
+        season_teams = await list_docs("teams", {"temporada": temporada})
+        season_team_ids = ids(team.get("id") for team in season_teams)
+        if equipo_id:
+            season_team_ids = [team_id for team_id in season_team_ids if team_id == str(equipo_id)]
+        memberships = await _team_memberships(team_ids=season_team_ids, season=temporada)
+        membership_by_player: dict[str, dict] = {}
+        for membership in memberships:
+            membership_by_player.setdefault(str(membership.get("player_id")), membership)
+
+        # A seasonal membership is allowed to point at the same canonical
+        # player whose current equipo_id now belongs to another season.
+        membership_player_ids = set(membership_by_player)
+        legacy_rows = await db.players.find(
+            {"equipo_id": {"$in": season_team_ids}}, {"_id": 0, "id": 1},
+        ).to_list(5000)
+        candidate_player_ids = membership_player_ids | {
+            str(row.get("id")) for row in legacy_rows if row.get("id")
         }
-        docs = [player for player in docs if player.get("equipo_id") in season_team_ids]
+        seasonal_query = dict(query)
+        seasonal_query.pop("estado", None)
+        scoped_query = merge_query(seasonal_query, {"id": {"$in": list(candidate_player_ids)}})
+        base_docs = await db.players.find(scoped_query, {"_id": 0}).to_list(5000)
+        docs = []
+        for player in base_docs:
+            player_id = str(player.get("id") or "")
+            membership = membership_by_player.get(player_id)
+            if membership:
+                row = dict(player)
+                row["equipo_id"] = membership.get("team_id")
+                row["temporada"] = temporada
+                for field in ("categoria", "dorsal", "posicion", "estado"):
+                    if field in membership and membership[field] is not None:
+                        row[field] = membership[field]
+                docs.append(row)
+            elif player.get("equipo_id") in season_team_ids and player_id not in membership_player_ids:
+                docs.append(dict(player))
+        if estado:
+            docs = [player for player in docs if player.get("estado") == estado]
+    else:
+        if equipo_id:
+            query["equipo_id"] = equipo_id
+        docs = await list_docs("players", query)
     if q:
         ql = q.lower()
         docs = [d for d in docs if ql in (f"{d.get('nombre','')} {d.get('apellidos','')}").lower()]
@@ -1547,16 +1710,23 @@ async def get_player(player_id: str):
 
 
 @api_router.put("/players/{player_id}")
-async def edit_player(player_id: str, player: Player):
+async def edit_player(player_id: str, player: Player, temporada: Optional[str] = None):
     data = player.model_dump()
     if data.get("fecha_nacimiento"):
         data["categoria"] = compute_category(data["fecha_nacimiento"])
     existing = await get_doc("players", player_id)
+    requested_season = str(temporada or "").strip()
+    if requested_season and data.get("equipo_id"):
+        team = await get_doc("teams", data["equipo_id"])
+        if team.get("temporada") and str(team.get("temporada")) != requested_season:
+            raise HTTPException(status_code=422, detail="El equipo no pertenece a la temporada seleccionada")
     created_family_id = None
     if not existing.get("familia_id") and not data.get("familia_id"):
         created_family_id = await _link_player_family_on_create(data)
     try:
-        return await update_doc("players", player_id, data)
+        updated = await update_doc("players", player_id, data)
+        await _sync_player_team_membership(existing, updated, season=requested_season)
+        return updated
     except Exception:
         if created_family_id:
             await db.families.delete_one({"id": created_family_id})
@@ -2101,11 +2271,136 @@ class Team(BaseModel):
     estado: str = "activo"  # activo, cerrado, pendiente
 
 
+class SeasonCopyRequest(BaseModel):
+    source_season: str = Field(min_length=1, max_length=32)
+    target_season: str = Field(min_length=1, max_length=32)
+
+    @model_validator(mode="after")
+    def seasons_must_differ(self):
+        self.source_season = self.source_season.strip()
+        self.target_season = self.target_season.strip()
+        if not self.source_season or not self.target_season:
+            raise ValueError("Las temporadas son obligatorias")
+        if self.source_season == self.target_season:
+            raise ValueError("La temporada de destino debe ser diferente")
+        return self
+
+
 @api_router.post("/teams")
 async def create_team(team: Team):
     if normalized_key(team.nombre) == "no aplica":
         raise HTTPException(status_code=422, detail="NO APLICA no es un equipo gestionable")
     return await insert_doc("teams", team.model_dump())
+
+
+@api_router.post("/teams/season-copy")
+async def copy_team_season(request: SeasonCopyRequest):
+    actor = current_user_context.get() or {}
+    if actor.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Solo administración puede crear una temporada completa")
+
+    source_season = request.source_season
+    target_season = request.target_season
+    source_teams = await list_docs("teams", {"temporada": source_season})
+    if not source_teams:
+        raise HTTPException(status_code=404, detail="No hay equipos en la temporada de origen")
+    target_teams = await list_docs("teams", {"temporada": target_season})
+    if target_teams:
+        raise HTTPException(status_code=409, detail="La temporada de destino ya tiene equipos")
+
+    source_team_ids = ids(team.get("id") for team in source_teams)
+    source_memberships = await _team_memberships(
+        team_ids=source_team_ids, season=source_season, active_only=False,
+    )
+    player_ids = ids(row.get("player_id") for row in source_memberships)
+    source_players = await db.players.find(
+        {"$or": [
+            {"equipo_id": {"$in": source_team_ids}},
+            {"id": {"$in": player_ids}},
+        ]},
+        {"_id": 0},
+    ).to_list(10000)
+    timestamp = now_iso()
+    plan = build_season_copy(
+        source_teams, source_players, source_memberships, target_season,
+        timestamp=timestamp, id_factory=new_id,
+    )
+    created_team_ids = [str(team["id"]) for team in plan["teams"]]
+    created_membership_ids = [
+        str(row["id"]) for row in [*plan["source_memberships"], *plan["memberships"]]
+    ]
+    updated_players: list[dict] = []
+
+    try:
+        await db.teams.insert_many(plan["teams"])
+        memberships = [*plan["source_memberships"], *plan["memberships"]]
+        if memberships:
+            await db[TEAM_MEMBERSHIPS_COLLECTION].insert_many(memberships)
+        for update in plan["player_updates"]:
+            player_id = str(update["player_id"])
+            previous_team_id = update.get("previous_team_id")
+            result = await db.players.update_one(
+                {"id": player_id},
+                {"$set": {"equipo_id": update["new_team_id"], "updated_at": timestamp}},
+            )
+            if result.matched_count:
+                updated_players.append({
+                    "player_id": player_id,
+                    "previous_team_id": previous_team_id,
+                    "new_team_id": update["new_team_id"],
+                })
+    except Exception as error:
+        # The source season is never changed. If a new-season write fails,
+        # remove only the records created by this operation and restore the
+        # canonical current assignment for the affected players.
+        for update in reversed(updated_players):
+            rollback_query = {"id": update["player_id"], "equipo_id": update["new_team_id"]}
+            if update.get("previous_team_id"):
+                await db.players.update_one(
+                    rollback_query,
+                    {"$set": {"equipo_id": update["previous_team_id"], "updated_at": now_iso()}},
+                )
+            else:
+                await db.players.update_one(
+                    rollback_query,
+                    {"$unset": {"equipo_id": ""}, "$set": {"updated_at": now_iso()}},
+                )
+        if created_membership_ids:
+            await db[TEAM_MEMBERSHIPS_COLLECTION].delete_many({"id": {"$in": created_membership_ids}})
+        if created_team_ids:
+            await db.teams.delete_many({"id": {"$in": created_team_ids}})
+        logging.getLogger(__name__).exception("Season copy failed and was rolled back")
+        raise HTTPException(status_code=500, detail="No se pudo crear la temporada; no se han conservado cambios parciales") from error
+
+    try:
+        await db.settings.update_one(
+            {"id": SETTINGS_ID},
+            {"$addToSet": {"temporadas": target_season}, "$set": {"updated_at": now_iso()}},
+            upsert=True,
+        )
+    except Exception:
+        # The teams and rosters are already valid; settings is only a
+        # convenience catalogue and the Teams screen also derives seasons
+        # directly from the created teams.
+        logging.getLogger(__name__).warning("New season could not be added to the settings catalogue")
+
+    try:
+        await db.internal_events.insert_one({
+            "id": new_id(), "type": "season.copied", "actor_user_id": actor.get("id"),
+            "actor_role": actor.get("role"), "source_season": source_season,
+            "target_season": target_season, "teams_created": plan["teams_created"],
+            "players_assigned": plan["players_assigned"],
+            "source_memberships_created": plan["source_memberships_created"],
+            "created_at": timestamp,
+        })
+    except Exception:
+        logging.getLogger(__name__).warning("Season copy audit could not be persisted")
+    return {
+        "ok": True, "source_season": source_season, "target_season": target_season,
+        "teams_created": plan["teams_created"], "players_assigned": plan["players_assigned"],
+        "source_memberships_created": plan["source_memberships_created"],
+        "team_map": plan["team_map"],
+    }
 
 
 @api_router.get("/teams")
@@ -2114,17 +2409,27 @@ async def get_teams():
         team for team in await list_docs("teams")
         if normalized_key(team.get("nombre")) != "no aplica"
     ]
-    players = await list_docs("players")
+    team_ids = ids(team.get("id") for team in teams)
+    all_memberships = await _team_memberships(team_ids=team_ids, active_only=False)
+    memberships = [row for row in all_memberships if row.get("active") is not False]
+    membership_pairs = {(str(row.get("team_id")), str(row.get("player_id"))) for row in all_memberships}
+    membership_counts: dict[str, int] = defaultdict(int)
+    for membership in memberships:
+        membership_counts[str(membership.get("team_id"))] += 1
+    players = await db.players.find({"equipo_id": {"$in": team_ids}}, {"_id": 0, "id": 1, "equipo_id": 1}).to_list(10000)
+    for player in players:
+        pair = (str(player.get("equipo_id")), str(player.get("id")))
+        if pair not in membership_pairs:
+            membership_counts[pair[0]] += 1
     for t in teams:
-        t["num_jugadores"] = len([p for p in players if p.get("equipo_id") == t["id"]])
+        t["num_jugadores"] = membership_counts.get(str(t.get("id")), 0)
     return teams
 
 
 @api_router.get("/teams/{team_id}")
 async def get_team(team_id: str):
     team = await get_doc("teams", team_id)
-    players = await list_docs("players", {"equipo_id": team_id})
-    team["jugadores"] = players
+    team["jugadores"] = await _team_roster_rows(team)
     return team
 
 
@@ -2132,12 +2437,20 @@ async def get_team(team_id: str):
 async def edit_team(team_id: str, team: Team):
     if normalized_key(team.nombre) == "no aplica":
         raise HTTPException(status_code=422, detail="NO APLICA no es un equipo gestionable")
-    return await update_doc("teams", team_id, team.model_dump())
+    updated = await update_doc("teams", team_id, team.model_dump())
+    if updated.get("temporada"):
+        await db[TEAM_MEMBERSHIPS_COLLECTION].update_many(
+            {"team_id": team_id},
+            {"$set": {"temporada": updated["temporada"], "updated_at": now_iso()}},
+        )
+    return updated
 
 
 @api_router.delete("/teams/{team_id}")
 async def remove_team(team_id: str):
-    return await delete_doc("teams", team_id)
+    result = await delete_doc("teams", team_id)
+    await db[TEAM_MEMBERSHIPS_COLLECTION].delete_many({"team_id": team_id})
+    return result
 
 
 # ================= MATCHES =================
@@ -7888,7 +8201,7 @@ async def root():
 
 
 # ================= DEMO SEED / CLEAR =================
-ALL_COLLECTIONS = ["players", "families", "teams", "matches", "callups", "payments",
+ALL_COLLECTIONS = ["players", "families", "teams", TEAM_MEMBERSHIPS_COLLECTION, "matches", "callups", "payments",
                    "authorizations", "inscriptions", "trainings", "training_evaluations", "stats", "communications"]
 
 
@@ -9063,6 +9376,20 @@ async def initialize_training_library():
     await db[TRAINING_LIBRARY_COLLECTION].create_index("source_path", unique=True, name="source_path_unique")
     await db[TRAINING_LIBRARY_COLLECTION].create_index("file_sha256", name="file_sha256")
     await db[TRAINING_LIBRARY_COLLECTION].create_index([("block", 1), ("subblock", 1), ("title", 1)], name="catalog_filters")
+
+
+@app.on_event("startup")
+async def initialize_team_memberships():
+    await db[TEAM_MEMBERSHIPS_COLLECTION].create_index(
+        [("team_id", 1), ("player_id", 1)], unique=True, name="team_player_unique",
+    )
+    await db[TEAM_MEMBERSHIPS_COLLECTION].create_index(
+        [("temporada", 1), ("team_id", 1), ("active", 1)], name="season_team_active",
+    )
+    await db[TEAM_MEMBERSHIPS_COLLECTION].create_index(
+        [("player_id", 1), ("temporada", 1)], unique=True,
+        partialFilterExpression={"active": True}, name="player_season_active_unique",
+    )
     try:
         summary = await sync_training_library()
         logger.info("Training library indexed: %s PDF", summary.get("total", 0))

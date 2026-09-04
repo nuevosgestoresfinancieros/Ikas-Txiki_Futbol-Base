@@ -232,7 +232,7 @@ const Players = () => {
         </>
       )}
 
-      <PlayerDialog open={dialog} onClose={() => setDialog(false)} player={editing} teams={teams} onSaved={load} />
+      <PlayerDialog open={dialog} onClose={() => setDialog(false)} player={editing} teams={teams} season={temporada} onSaved={load} />
     </div>
   );
 };

@@ -217,7 +217,7 @@ Todas las rutas llevan el prefijo **`/api`**.
 | Panel | `GET /api/dashboard` |
 | Jugadores | `GET/POST /api/players`, `GET/PUT/DELETE /api/players/{id}` |
 | Familias | `GET/POST /api/families`, `PUT/DELETE /api/families/{id}` |
-| Equipos | `GET/POST /api/teams`, `GET/PUT/DELETE /api/teams/{id}` |
+| Equipos | `GET/POST /api/teams`, `GET/PUT/DELETE /api/teams/{id}`, `POST /api/teams/season-copy` (administración) |
 | Partidos | `GET/POST /api/matches`, `GET/PUT/DELETE /api/matches/{id}` |
 | Convocatorias | `GET/POST /api/callups`, `GET/PUT/DELETE /api/callups/{id}` |
 | Entrenamientos | `GET/POST /api/trainings`, `GET/PUT/DELETE /api/trainings/{id}` |
