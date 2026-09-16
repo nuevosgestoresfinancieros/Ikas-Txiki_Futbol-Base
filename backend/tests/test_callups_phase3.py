@@ -77,6 +77,15 @@ def test_bulk_response_model_rejects_pending_status():
         server.CallupBulkResponse(status="pending")
 
 
+def test_bulk_response_model_accepts_confirmation_and_optional_decline_reason():
+    assert server.CallupBulkResponse.model_validate({"status": "confirmed"}).model_dump(exclude_none=True) == {
+        "status": "confirmed",
+    }
+    assert server.CallupBulkResponse.model_validate({"status": "declined", "reason": "Viaje"}).model_dump() == {
+        "status": "declined", "reason": "Viaje",
+    }
+
+
 def test_family_and_player_only_receive_respond_permission():
     for role in ("family", "player"):
         assert "respond" in ROLE_PERMISSIONS[role]["callups"]

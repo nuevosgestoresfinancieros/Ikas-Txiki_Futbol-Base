@@ -97,9 +97,10 @@ const Callups = () => {
   const respondBulk = async (callup, status) => {
     const confirmationKey = status === "confirmed" ? "confirmAllPendingQuestion" : "declineAllPendingQuestion";
     if (!window.confirm(t(confirmationKey))) return;
-    const reason = status === "declined" ? window.prompt(t("declineReasonOptional")) : null;
+    const payload = { status };
+    if (status === "declined") payload.reason = window.prompt(t("declineReasonOptional"));
     try {
-      const response = await api.patch(`/callups/${callup.id}/respond-bulk`, { status, reason });
+      const response = await api.patch(`/callups/${callup.id}/respond-bulk`, payload);
       toast.success(t("bulkResponseSaved").replace("{count}", response.data?.updated_count ?? 0)); await load();
     } catch (err) { toast.error(err.response?.data?.detail || t("bulkResponseError")); }
   };
@@ -132,7 +133,7 @@ const Callups = () => {
         <div className="mt-3 flex flex-wrap gap-3 text-sm"><span><Users className="mr-1 inline h-4 w-4" />{callup.convocados.length}</span>{Object.entries(STATUS_ICON).map(([status, Icon]) => <span key={status} className={STATUS_CLASS[status].split(" ")[1]}><Icon className="mr-1 inline h-4 w-4" />{callup.response_counts?.[status] || 0} {t(status)}</span>)}</div>
         {callup.response_deadline && <p className={`mt-3 text-xs ${callup.deadline_expired ? "font-semibold text-red-600" : "text-slate-500"}`}>{t("responseDeadline")}: {new Date(callup.response_deadline).toLocaleString(lang === "eu" ? "eu-ES" : "es-ES")}{callup.deadline_expired ? ` · ${t("deadlineExpired")}` : ""}</p>}
         <div className="mt-3 flex flex-wrap gap-2">{callup.convocados.map((item) => { const Icon = STATUS_ICON[item.estado] || Clock; return <span key={item.player_id} className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs ${STATUS_CLASS[item.estado]}`}><Icon className="h-3 w-3" />{item.nombre || pName(item.player_id)}</span>; })}</div>
-        {canRespond && <div className="mt-4 flex flex-wrap gap-2 border-t border-slate-100 pt-3"><Button type="button" data-testid={`bulk-confirm-${callup.id}`} className="min-h-11" disabled={pendingCount(callup) === 0 || callup.deadline_expired} onClick={() => respondBulk(callup, "confirmed")}><Check className="h-4 w-4" />{t("confirmAllPending")}</Button><Button type="button" data-testid={`bulk-decline-${callup.id}`} variant="outline" className="min-h-11 text-red-600" disabled={pendingCount(callup) === 0 || callup.deadline_expired} onClick={() => respondBulk(callup, "declined")}><X className="h-4 w-4" />{t("declineAllPending")}</Button></div>}
+        {canRespond && <div data-testid={`bulk-actions-${callup.id}`} className="mt-4 flex flex-col gap-2 border-t border-slate-100 pt-3 sm:flex-row"><Button type="button" data-testid={`bulk-confirm-${callup.id}`} className="min-h-11 w-full sm:w-auto" disabled={pendingCount(callup) === 0 || callup.deadline_expired} onClick={() => respondBulk(callup, "confirmed")}><Check className="h-4 w-4" />{t("confirmAllPending")}</Button><Button type="button" data-testid={`bulk-decline-${callup.id}`} variant="outline" className="min-h-11 w-full text-red-600 sm:w-auto" disabled={pendingCount(callup) === 0 || callup.deadline_expired} onClick={() => respondBulk(callup, "declined")}><X className="h-4 w-4" />{t("declineAllPending")}</Button></div>}
         {canRespond && callup.convocados.map((item) => <div key={`respond-${item.player_id}`} className="mt-3 rounded-xl border border-slate-200 p-3 sm:flex sm:items-center sm:justify-between"><div><p className="font-medium">{item.nombre || pName(item.player_id)}</p>{item.motivo && <p className="text-xs text-red-600">{t("reason")}: {item.motivo}</p>}</div><div className="mt-3 grid grid-cols-2 gap-2 sm:mt-0"><Button className="min-h-11" disabled={callup.deadline_expired} onClick={() => respond(callup, item.player_id, "confirmed")}><Check className="h-4 w-4" />{t("confirmAttendance")}</Button><Button variant="outline" className="min-h-11 text-red-600" disabled={callup.deadline_expired} onClick={() => respond(callup, item.player_id, "declined")}><X className="h-4 w-4" />{t("declineAttendance")}</Button></div></div>)}
       </article>)}
     </div>}

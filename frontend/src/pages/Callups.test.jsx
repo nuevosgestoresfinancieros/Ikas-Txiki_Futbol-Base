@@ -74,15 +74,21 @@ test("adds bulk response actions and keeps them disabled without pending players
   await act(async () => root.render(<AuthProvider user={user}><I18nProvider><Callups /></I18nProvider></AuthProvider>));
   await flush();
 
-  expect(container.querySelector('[data-testid="bulk-confirm-callup-active"]').disabled).toBe(false);
-  expect(container.querySelector('[data-testid="bulk-decline-callup-active"]').disabled).toBe(false);
+  const activeConfirm = container.querySelector('[data-testid="bulk-confirm-callup-active"]');
+  const activeDecline = container.querySelector('[data-testid="bulk-decline-callup-active"]');
+  expect(activeConfirm).not.toBeNull();
+  expect(activeDecline).not.toBeNull();
+  expect(activeConfirm.textContent).toContain("Confirmar pendientes");
+  expect(activeDecline.textContent).toContain("Rechazar pendientes");
+  expect(activeConfirm.disabled).toBe(false);
+  expect(activeDecline.disabled).toBe(false);
   expect(container.querySelector('[data-testid="bulk-confirm-callup-complete"]').disabled).toBe(true);
   expect(container.querySelector('[data-testid="bulk-decline-callup-expired"]').disabled).toBe(true);
 
   await act(async () => container.querySelector('[data-testid="bulk-confirm-callup-active"]').click());
   await flush();
   expect(window.confirm).toHaveBeenCalledWith("¿Quieres confirmar todos los jugadores pendientes de esta convocatoria?");
-  expect(api.patch).toHaveBeenCalledWith("/callups/callup-active/respond-bulk", { status: "confirmed", reason: null });
+  expect(api.patch).toHaveBeenCalledWith("/callups/callup-active/respond-bulk", { status: "confirmed" });
 
   await act(async () => container.querySelector('[data-testid="bulk-decline-callup-active"]').click());
   await flush();
