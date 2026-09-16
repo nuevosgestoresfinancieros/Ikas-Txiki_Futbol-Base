@@ -101,8 +101,9 @@ from assistant_service import (
     public_proposal, session_fingerprint,
 )
 from user_admin_service import (
-    ACCOUNT_STATUSES, account_status, effective_scope, link_is_complete, normalized_key, normalized_text,
-    safe_audit_detail, security_state, status_is_active, user_search_text, user_view, validate_password_strength,
+    ACCOUNT_STATUSES, account_status, effective_scope, family_parent, family_parent_identity,
+    family_parent_name, link_is_complete, normalized_key, normalized_text, safe_audit_detail,
+    security_state, status_is_active, user_search_text, user_view, validate_password_strength,
 )
 from communication_recipient_service import (
     communication_record_active, consented_contacts, recipient_summary, usable_account,
@@ -982,8 +983,8 @@ class UserCreate(BaseModel):
     username: str
     password: Optional[str] = None
     password_confirmation: Optional[str] = None
-    first_name: str
-    last_name: str
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
     email: Optional[str] = None
     phone: Optional[str] = None
     role: str
@@ -992,6 +993,7 @@ class UserCreate(BaseModel):
     assigned_category_ids: List[str] = Field(default_factory=list)
     player_id: Optional[str] = None
     family_id: Optional[str] = None
+    family_contact_slot: Optional[int] = Field(default=None, ge=1, le=2)
     language: str = "es"
     notification_preferences: NotificationPreferences = Field(default_factory=NotificationPreferences)
     access_method: str = "password"
@@ -1014,11 +1016,16 @@ class UserCreate(BaseModel):
         if self.access_method == "password":
             if not self.password or self.password != self.password_confirmation:
                 raise ValueError("Las contraseñas no coinciden")
+        if self.role != "family" or not self.family_id:
+            if not self.first_name or not self.last_name:
+                raise ValueError("Nombre y apellidos son obligatorios")
         return self
 
     @field_validator("first_name", "last_name")
     @classmethod
-    def validate_identity(cls, value: str):
+    def validate_identity(cls, value: Optional[str]):
+        if value is None:
+            return None
         value = normalized_text(value)
         if len(value) < 2:
             raise ValueError("Nombre y apellidos son obligatorios")
@@ -1080,6 +1087,7 @@ class UserUpdate(BaseModel):
     assigned_category_ids: Optional[List[str]] = None
     player_id: Optional[str] = None
     family_id: Optional[str] = None
+    family_contact_slot: Optional[int] = Field(default=None, ge=1, le=2)
     language: Optional[str] = None
     notification_preferences: Optional[NotificationPreferences] = None
 
@@ -1128,7 +1136,7 @@ class UserUpdate(BaseModel):
         return value or None
 
 
-async def validate_user_relationships(data: dict) -> dict:
+async def validate_user_relationships(data: dict, *, derive_family_identity: bool = False) -> dict:
     role = data.get("role")
     allow_incomplete = data.get("account_status") in {"pending_activation", "incomplete_link", "deactivated"}
     team_ids = sorted(set(ids(data.get("assigned_team_ids") or [])))
@@ -1158,11 +1166,32 @@ async def validate_user_relationships(data: dict) -> dict:
         if compatible != set(team_ids):
             raise HTTPException(status_code=422, detail="Hay equipos incompatibles con las categorías asignadas")
     if role == "family" and data.get("family_id"):
-        family = await db.families.find_one({"id": data.get("family_id")}, {"_id": 0, "id": 1})
+        family = await db.families.find_one({"id": data.get("family_id")}, {
+            "_id": 0, "id": 1,
+            "progenitor1_nombre": 1, "progenitor1_telefono": 1, "progenitor1_email": 1,
+            "progenitor2_nombre": 1, "progenitor2_telefono": 1, "progenitor2_email": 1,
+            "contacto_principal": 1,
+        })
         if not family:
             raise HTTPException(status_code=422, detail="La familia asociada no existe")
         data["linked_player_ids"] = ids(await db.players.distinct("id", {"familia_id": data["family_id"]}))
         data["player_id"], team_ids, category_ids = None, [], []
+        requested_slot = data.get("family_contact_slot")
+        identity = family_parent_identity(family, requested_slot, data)
+        data["family_contact_slot"] = identity["family_contact_slot"]
+        if derive_family_identity:
+            for field in ("first_name", "last_name", "email", "phone"):
+                if identity.get(field):
+                    data[field] = identity[field]
+        else:
+            # Legacy family accounts may not have a slot. Complete only missing
+            # identity fields so an administrative edit does not rewrite a
+            # deliberately customised account name.
+            for field in ("first_name", "last_name", "email", "phone"):
+                if not normalized_text(data.get(field)) and identity.get(field):
+                    data[field] = identity[field]
+    elif role != "family":
+        data["family_contact_slot"] = None
     if role == "player" and data.get("player_id"):
         player = await db.players.find_one({"id": data.get("player_id")}, {"_id": 0, "id": 1})
         if not player:
@@ -1199,6 +1228,7 @@ def system_admin_public() -> dict:
 
 def secured_public_user(user: dict) -> dict:
     return {**public_user(user), **security_public(user),
+            "family_contact_slot": user.get("family_contact_slot"),
             "security_state": security_state(user), "link_complete": link_is_complete(user)}
 
 
@@ -1277,7 +1307,8 @@ async def create_user(user: UserCreate):
     data["username"] = normalized_text(data["username"])
     data["username_normalized"] = normalized_key(data["username"])
     data["email_normalized"] = normalized_key(data.get("email")) or None
-    data = await validate_user_relationships(data)
+    data = await validate_user_relationships(data, derive_family_identity=True)
+    data["email_normalized"] = normalized_key(data.get("email")) or None
     if data["username"] == ADMIN_USER or await db.users.find_one({"username_normalized": data["username_normalized"]}):
         raise HTTPException(status_code=409, detail="El nombre de usuario ya existe")
     if data.get("email_normalized") and await db.users.find_one({"email_normalized": data["email_normalized"]}):
@@ -1365,7 +1396,11 @@ async def get_user_administration_options():
     usable_teams = [team for team in teams if normalized_key(team.get("nombre")) not in {"", "no aplica"}
                     and normalized_key(team.get("estado") or "activo") not in {"inactivo", "archivado", "cerrado"}]
     players = await db.players.find({}, {"_id": 0, "id": 1, "nombre": 1, "apellidos": 1, "familia_id": 1, "equipo_id": 1}).to_list(5000)
-    families = await db.families.find({}, {"_id": 0, "id": 1, "progenitor1_nombre": 1, "contacto_principal": 1}).to_list(5000)
+    families = await db.families.find({}, {
+        "_id": 0, "id": 1, "contacto_principal": 1,
+        "progenitor1_nombre": 1, "progenitor1_email": 1,
+        "progenitor2_nombre": 1, "progenitor2_email": 1,
+    }).to_list(5000)
     return {"teams": usable_teams, "players": players, "families": families}
 
 
@@ -1438,7 +1473,18 @@ async def edit_user(user_id: str, changes: UserUpdate):
             "id": {"$ne": user_id}, "email_normalized": data["email_normalized"],
         }):
             raise HTTPException(status_code=409, detail="El correo ya está asociado a otra cuenta")
-    candidate = await validate_user_relationships({**existing, **data})
+    candidate = await validate_user_relationships(
+        {**existing, **data},
+        derive_family_identity=("family_contact_slot" in data or (
+            "family_id" in data and data.get("family_id") != existing.get("family_id")
+        )),
+    )
+    candidate["email_normalized"] = normalized_key(candidate.get("email")) or None
+    if candidate["email_normalized"] and candidate["email_normalized"] != existing.get("email_normalized"):
+        if await db.users.find_one({
+            "id": {"$ne": user_id}, "email_normalized": candidate["email_normalized"],
+        }):
+            raise HTTPException(status_code=409, detail="El correo ya está asociado a otra cuenta")
     if "account_status" in data:
         candidate["active"] = status_is_active(candidate["account_status"])
     await ensure_admin_protection(existing, candidate)
@@ -1450,7 +1496,7 @@ async def edit_user(user_id: str, changes: UserUpdate):
     changed = set(data)
     if "role" in changed:
         audit_action = "role_changed"
-    elif changed & {"assigned_team_ids", "assigned_category_ids", "player_id", "family_id", "linked_player_ids"}:
+    elif changed & {"assigned_team_ids", "assigned_category_ids", "player_id", "family_id", "family_contact_slot", "linked_player_ids"}:
         audit_action = "scope_changed"
     elif "account_status" in changed:
         audit_action = {
@@ -4012,12 +4058,35 @@ class Payment(BaseModel):
     confirmed_debt: bool = False
 
 
+async def _family_holder_for_player(player_id: Optional[str]) -> Optional[str]:
+    """Resolve the account holder from canonical family data or legacy player data."""
+    if not player_id:
+        return None
+    player = await db.players.find_one({"id": player_id}, {
+        "_id": 0, "id": 1, "familia_id": 1,
+        "progenitor1_nombre": 1, "progenitor1_telefono": 1, "progenitor1_email": 1,
+        "progenitor2_nombre": 1, "progenitor2_telefono": 1, "progenitor2_email": 1,
+    })
+    if not player:
+        return None
+    family = None
+    if player.get("familia_id"):
+        family = await db.families.find_one({"id": player["familia_id"]}, {
+            "_id": 0, "id": 1,
+            "progenitor1_nombre": 1, "progenitor1_telefono": 1, "progenitor1_email": 1,
+            "progenitor2_nombre": 1, "progenitor2_telefono": 1, "progenitor2_email": 1,
+            "contacto_principal": 1,
+        })
+    return family_parent_name(family, legacy=player)
+
+
 @api_router.post("/payments")
 async def create_payment(payment: Payment):
     data = payment.model_dump()
     base = data.get("importe_base") or 0
     desc = data.get("descuento_hermano") or 0
     data["importe_final"] = round(base - desc, 2)
+    data["titular_cuenta"] = normalized_text(data.get("titular_cuenta")) or await _family_holder_for_player(data.get("player_id"))
     return await insert_doc("payments", data)
 
 
@@ -4025,9 +4094,15 @@ async def create_payment(payment: Payment):
 async def get_payments(estado: Optional[str] = None):
     query = {"estado": estado} if estado else {}
     payments = await list_docs("payments", query)
-    players = {p["id"]: f"{p.get('nombre','')} {p.get('apellidos','')}".strip() for p in await list_docs("players")}
+    player_records = await list_docs("players")
+    players = {p["id"]: p for p in player_records}
+    families = {f["id"]: f for f in await list_docs("families")}
     for p in payments:
-        p["player_nombre"] = players.get(p.get("player_id"), "—")
+        player = players.get(p.get("player_id"), {})
+        p["player_nombre"] = f"{player.get('nombre', '')} {player.get('apellidos', '')}".strip() or "—"
+        p["titular_cuenta"] = normalized_text(p.get("titular_cuenta")) or family_parent_name(
+            families.get(player.get("familia_id")), legacy=player,
+        )
         p.pop("iban_encrypted", None)
         if p.get("iban_last4"):
             p["iban"] = masked_iban(p.get("iban_last4"))
@@ -4040,6 +4115,10 @@ async def edit_payment(payment_id: str, payment: Payment):
     base = data.get("importe_base") or 0
     desc = data.get("descuento_hermano") or 0
     data["importe_final"] = round(base - desc, 2)
+    existing = await get_doc("payments", payment_id)
+    data["titular_cuenta"] = normalized_text(data.get("titular_cuenta")) or normalized_text(existing.get("titular_cuenta"))
+    if not data["titular_cuenta"]:
+        data["titular_cuenta"] = await _family_holder_for_player(data.get("player_id") or existing.get("player_id"))
     return await update_doc("payments", payment_id, data)
 
 
@@ -7912,6 +7991,7 @@ async def report_context() -> dict:
         "families": await projected("families", {
             "id", "progenitor1_nombre", "progenitor1_telefono", "progenitor1_email",
             "progenitor2_nombre", "progenitor2_telefono", "progenitor2_email",
+            "contacto_principal",
         }),
         "teams": await projected("teams", {
             "id", "nombre", "categoria", "modalidad", "temporada", "estado", "active",
@@ -7938,7 +8018,7 @@ async def report_context() -> dict:
         }),
         "payments": await projected("payments", {
             "id", "player_id", "created_at", "concepto", "importe_final", "forma_pago",
-            "estado", "fecha_pago",
+            "estado", "fecha_pago", "titular_cuenta",
         }),
         "stats": await projected("stats", {
             "id", "player_id", "temporada", "partidos_convocado", "partidos_jugados",
@@ -8813,6 +8893,7 @@ async def _excel_export_data() -> dict[str, list[dict]]:
 def _visual_export_rows(data: dict[str, list[dict]]) -> dict[str, tuple[list[dict], list[str]]]:
     players = data.get("players", [])
     teams = {row.get("id"): row for row in data.get("teams", [])}
+    families = {row.get("id"): row for row in data.get("families", [])}
     payments_by_player = defaultdict(list)
     authorizations_by_player = defaultdict(dict)
 
@@ -8838,6 +8919,9 @@ def _visual_export_rows(data: dict[str, list[dict]]) -> dict[str, tuple[list[dic
         name = f"{_display_value(player.get('nombre'))} {_display_value(player.get('apellidos'))}".strip()
         player_bank_rows = payments_by_player.get(player.get("id"), [])
         auths = authorizations_by_player.get(player.get("id"), {})
+        family = families.get(player.get("familia_id"), {})
+        parent_one = family_parent(family, slot=1, legacy=player)
+        parent_two = family_parent(family, slot=2, legacy=player)
         missing_notes = _missing_notes(player, player_bank_rows, auths, team)
         complete_auths = sum(1 for row in auths.values() if _display_value(row.get("estado")).lower() in {"firmada", "validada"})
         pending_auths = max(0, 6 - complete_auths)
@@ -8863,7 +8947,7 @@ def _visual_export_rows(data: dict[str, list[dict]]) -> dict[str, tuple[list[dic
             "IBAN visible": f"****{_display_value(player_bank_rows[0].get('iban_last4'))}" if player_bank_rows and _display_value(player_bank_rows[0].get("iban_last4")) else "",
             "Equipación 2ª": "Sí" if second_kit else "No",
             "Tallas básicas": "Sí" if _display_value(player.get("talla_camiseta")) and _display_value(player.get("talla_medias")) else "No",
-            "Contacto familiar": "Sí" if _display_value(player.get("progenitor1_email")) or _display_value(player.get("progenitor1_telefono")) or _display_value(player.get("progenitor2_email")) or _display_value(player.get("progenitor2_telefono")) else "No",
+            "Contacto familiar": "Sí" if parent_one.get("email") or parent_one.get("phone") or parent_two.get("email") or parent_two.get("phone") else "No",
             "Qué falta": missing_notes,
         })
         equipment_rows.append({
@@ -8905,18 +8989,18 @@ def _visual_export_rows(data: dict[str, list[dict]]) -> dict[str, tuple[list[dic
             "Jugador": name,
             "Familia": _display_value(player.get("familia_id")),
             "Domicilio": _display_value(player.get("domicilio")),
-            "Progenitor 1": _display_value(player.get("progenitor1_nombre")),
-            "Teléfono 1": _display_value(player.get("progenitor1_telefono")),
-            "Email 1": _display_value(player.get("progenitor1_email")),
-            "Progenitor 2": _display_value(player.get("progenitor2_nombre")),
-            "Teléfono 2": _display_value(player.get("progenitor2_telefono")),
-            "Email 2": _display_value(player.get("progenitor2_email")),
+            "Progenitor 1": _display_value(parent_one.get("name")),
+            "Teléfono 1": _display_value(parent_one.get("phone")),
+            "Email 1": _display_value(parent_one.get("email")),
+            "Progenitor 2": _display_value(parent_two.get("name")),
+            "Teléfono 2": _display_value(parent_two.get("phone")),
+            "Email 2": _display_value(parent_two.get("email")),
         })
         for payment in player_bank_rows:
             full_iban = _decrypt_iban(payment.get("iban_encrypted")) or _display_value(payment.get("iban"))
             bank_rows.append({
                 "Jugador": name,
-                "Titular cuenta": _display_value(payment.get("titular_cuenta")),
+                "Titular cuenta": _display_value(payment.get("titular_cuenta") or family_parent_name(family, legacy=player)),
                 "IBAN completo": full_iban,
                 "IBAN enmascarado": f"****{_display_value(payment.get('iban_last4'))}" if _display_value(payment.get("iban_last4")) else "",
                 "IBAN validado": _display_value(payment.get("iban_validado")),

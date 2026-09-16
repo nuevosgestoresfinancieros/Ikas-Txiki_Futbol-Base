@@ -9,6 +9,7 @@ from typing import Any, Callable, Iterable, Mapping
 from attendance_service import attendance_summary, attendance_trend, player_percentages
 from callup_service import normalize_status
 from modality_service import ModalityDefinition, normalize_modality
+from user_admin_service import family_parent, family_parent_name
 
 
 ALL_REPORT_ROLES = frozenset({"admin", "coordinator", "coach", "family", "player"})
@@ -117,7 +118,7 @@ REPORTS = {
                                  ["date_from", "date_to", "category", "team_id", "player_id",
                                   "status", "payment_method", "group_by"],
                                  ["name", "team", "concept", "expected", "paid", "pending",
-                                  "payment_method", "payment_date", "status"],
+                                  "payment_method", "payment_date", "account_holder", "status"],
                                  ["pendingPaymentsReport"]),
 }
 
@@ -260,6 +261,7 @@ def build_attendance(players: Iterable[dict], teams: Iterable[dict], trainings: 
 
 def _simple_rows(report_id: str, context: Mapping[str, Any], filters: Mapping[str, Any], role: str) -> tuple[list[dict], dict]:
     players, teams = _maps(context)
+    family_map = {item.get("id"): item for item in context.get("families", []) if item.get("id")}
     modalities = context.get("modalities", [])
     player_filters = dict(filters)
     if report_id in {"match_results", "callup_responses", "authorizations", "inscriptions",
@@ -447,18 +449,14 @@ def _simple_rows(report_id: str, context: Mapping[str, Any], filters: Mapping[st
                              "tracksuit_size": player.get("talla_chandal"), "delivered": delivered,
                              "delivery_date": _date(player.get("fecha_entrega_equipacion"))})
     elif report_id == "family_contacts":
-        family_map = {item.get("id"): item for item in context.get("families", []) if item.get("id")}
         for player in scoped_players:
             family = family_map.get(player.get("familia_id"), {})
             contacts = [
-                (family.get("progenitor1_nombre") or player.get("progenitor1_nombre"),
-                 family.get("progenitor1_telefono") or player.get("progenitor1_telefono"),
-                 family.get("progenitor1_email") or player.get("progenitor1_email")),
-                (family.get("progenitor2_nombre") or player.get("progenitor2_nombre"),
-                 family.get("progenitor2_telefono") or player.get("progenitor2_telefono"),
-                 family.get("progenitor2_email") or player.get("progenitor2_email")),
+                family_parent(family, slot=1, legacy=player),
+                family_parent(family, slot=2, legacy=player),
             ]
-            for contact_name, phone, email in contacts:
+            for contact in contacts:
+                contact_name, phone, email = contact.get("name"), contact.get("phone"), contact.get("email")
                 contact_type = filters.get("contact_type")
                 if contact_type == "phone" and not phone:
                     continue
@@ -501,7 +499,9 @@ def _simple_rows(report_id: str, context: Mapping[str, Any], filters: Mapping[st
             rows.append({"name": _name(player), "team": teams.get(player.get("equipo_id"), {}).get("nombre"),
                          "concept": item.get("concepto"), "expected": expected, "paid": paid, "pending": pending,
                          "payment_method": item.get("forma_pago"), "payment_date": _date(item.get("fecha_pago")),
-                         "status": status})
+                         "account_holder": item.get("titular_cuenta") or family_parent_name(
+                             family_map.get(player.get("familia_id")), legacy=player,
+                         ), "status": status})
 
     rows.sort(key=lambda row: tuple(str(row.get(key) or "").casefold() for key in ("date", "period_label", "team", "surname", "name")))
     totals: dict[str, Any] = {"rows": len(rows)}

@@ -18,9 +18,16 @@ async def provision(db: Any, families: list[Mapping], actor: Mapping, secret: st
     for family in families:
         family_id, review, seen = str(family["id"]), False, set()
         children = [str(x) for x in await db.players.distinct("id", {"familia_id": family_id}) if x]
+        legacy = None
+        if hasattr(db.players, "find"):
+            legacy_players = await db.players.find({"familia_id": family_id}, {
+                "_id": 0, "progenitor1_nombre": 1, "progenitor1_telefono": 1, "progenitor1_email": 1,
+                "progenitor2_nombre": 1, "progenitor2_telefono": 1, "progenitor2_email": 1,
+            }).to_list(100)
+            legacy = legacy_players[0] if legacy_players else None
         await ensure_family_authorizations(db, family_id, player_ids=children)
         for slot in (1, 2):
-            parent = parent_data(family, slot)
+            parent = parent_data(family, slot, legacy)
             email = parent["email"]
             if not email or not valid_email(email):
                 review, outcome = True, "missing_or_invalid_email"

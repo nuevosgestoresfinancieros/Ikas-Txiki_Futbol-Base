@@ -22,7 +22,7 @@ from pymongo import ReturnDocument
 
 from pymongo.errors import DuplicateKeyError
 from authorization_service import ensure_family_authorizations
-from user_admin_service import account_status, family_access_state, normalized_key, normalized_text
+from user_admin_service import account_status, family_access_state, family_parent, normalized_key, normalized_text
 from notification_service import delivery_log
 from user_security_service import (
     INVITATION_TTL_HOURS, generate_temporary_password, invitation_status,
@@ -72,13 +72,14 @@ def slot_fields(slot: int) -> dict[str, str]:
     }
 
 
-def parent_data(family: Mapping[str, Any], slot: int) -> dict[str, Any]:
+def parent_data(family: Mapping[str, Any], slot: int, legacy: Mapping[str, Any] | None = None) -> dict[str, Any]:
     fields = slot_fields(slot)
+    parent = family_parent(family, slot=slot, legacy=legacy)
     return {
         "slot": slot,
-        "name": normalized_text(family.get(fields["name"])),
-        "phone": normalized_text(family.get(fields["phone"])) or None,
-        "email": normalized_key(family.get(fields["email"])) or None,
+        "name": normalized_text(parent.get("name")),
+        "phone": normalized_text(parent.get("phone")) or None,
+        "email": normalized_key(parent.get("email")) or None,
         "requested": bool(family.get(fields["requested"], False)),
         "email_confirmed": bool(family.get(fields["confirmed"], False)),
     }
@@ -104,12 +105,12 @@ def _equivalent(user: Mapping[str, Any], family_id: str, slot: int, email: str |
 
 def classify_parent(
     family: Mapping[str, Any], slot: int, family_users: list[Mapping[str, Any]],
-    email_owners: list[Mapping[str, Any]],
+    email_owners: list[Mapping[str, Any]], legacy: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Clasifica un slot sin exponer información del propietario de conflictos."""
-    parent = parent_data(family, slot)
+    parent = parent_data(family, slot, legacy)
     family_id = str(family.get("id") or "")
-    sibling = parent_data(family, 2 if slot == 1 else 1)
+    sibling = parent_data(family, 2 if slot == 1 else 1, legacy)
     base = {**parent, "family_id": family_id, "user_id": None, "state": "no_access"}
     # Las cuentas históricas inequívocas se muestran aunque el nuevo interruptor
     # todavía no exista en la ficha familiar.
@@ -174,14 +175,22 @@ def public_access(decision: Mapping[str, Any], user: Mapping[str, Any] | None = 
 async def decisions_for_family(db: Any, family: Mapping[str, Any]) -> list[dict[str, Any]]:
     family_id = str(family.get("id") or "")
     family_users = await db.users.find({"role": "family", "family_id": family_id}, {"_id": 0}).to_list(100)
+    legacy = None
+    players = getattr(db, "players", None)
+    if players is not None and hasattr(players, "find"):
+        legacy_players = await players.find({"familia_id": family_id}, {
+            "_id": 0, "progenitor1_nombre": 1, "progenitor1_telefono": 1, "progenitor1_email": 1,
+            "progenitor2_nombre": 1, "progenitor2_telefono": 1, "progenitor2_email": 1,
+        }).to_list(100)
+        legacy = next((row for row in legacy_players if family_parent({}, legacy=row).get("name")), None)
     decisions = []
     for slot in (1, 2):
-        email = parent_data(family, slot)["email"]
+        email = parent_data(family, slot, legacy)["email"]
         owners = []
         if email:
             owners = await db.users.find({"email_normalized": email}, {"_id": 0}).to_list(20)
             owners = [owner for owner in owners if not _equivalent(owner, family_id, slot, email)]
-        decisions.append(classify_parent(family, slot, family_users, owners))
+        decisions.append(classify_parent(family, slot, family_users, owners, legacy))
     return decisions
 
 

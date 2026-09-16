@@ -25,6 +25,8 @@ Al modificar comportamiento de usuario, módulos, interfaces de API, flujos de d
 ## Accesos familiares e invitaciones
 
 - Las cuentas familiares independientes se vinculan mediante family_id y family_contact_slot; cada progenitor puede usar un correo distinto.
+- Al crear una cuenta familiar, el backend toma el nombre y contacto del progenitor titular desde la ficha de Familia y calcula linked_player_ids con todos los jugadores de ese family_id. Los pagos guardan ese titular cuando se crean y lo reconstruyen al leer registros antiguos que no lo tenían.
+- Los informes financieros y las exportaciones operativas muestran el progenitor titular y los dos contactos desde la ficha de Familia; si un registro antiguo no tiene familia canónica, usan los campos históricos del jugador como fallback.
 - La cuenta se guarda antes del intento de correo. Las invitaciones solo persisten un digest, mantienen hasta tres enlaces pendientes no caducados y se activan mediante `/activar?token=...`; los enlaces antiguos `/login?invitation=...` siguen redirigiendo.
 - delivery_logs usa estados sent, pending, failed o delivered_unknown y conserva recipient, status, error, created_at, sent_at, message_id, user_id y purpose, sin tokens ni contraseñas.
 - Un envío sin destinatario se registra como pending con error recipient_missing; un formato inválido distinto sigue siendo failed/recipient_invalid.

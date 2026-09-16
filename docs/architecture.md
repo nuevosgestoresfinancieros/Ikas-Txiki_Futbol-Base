@@ -32,6 +32,18 @@ con temporada escriben únicamente la instantánea seleccionada. Al crear una
 temporada nueva se copia la equipación disponible de la temporada de origen,
 dejando después sus cambios aislados.
 
+## Identidad familiar y titularidad
+
+La cuenta de rol `family` conserva la relación canónica con `families.id` y
+guarda `family_contact_slot` para identificar al progenitor titular. Al crear o
+re-vincular la cuenta, el backend resuelve el nombre, correo y teléfono desde
+ese slot y recalcula `linked_player_ids` desde `players.familia_id`; el cliente
+no puede elegir hijos fuera de la familia. `payments.titular_cuenta`, los
+informes financieros y las exportaciones operativas reutilizan la misma
+resolución. Para registros antiguos, la lectura cae de forma segura a los
+campos de progenitores conservados en `players`, sin exigir una migración ni
+modificar MongoDB durante este cambio.
+
 ## Ciclo de vida de invitaciones
 
 La provisión familiar y la administración de usuarios comparten el contrato de entrega SMTP. Primero se guarda la cuenta y el digest de la invitación; después se intenta enviar el mensaje. El resultado se registra con message_id y un purpose explícito. Los errores de transporte no deshacen el alta y permiten reenviar. La ficha de Familias ofrece un guardado explícito desde la tarjeta cuando hay cambios pendientes y una confirmación explícita del correo cuando aún no está confirmada, pero el envío solo se habilita tras confirmar la persistencia. La URL pública de activación entra por `/activar?token=...`; los enlaces heredados `/login?invitation=...` siguen redirigiendo al formulario. El token permanece válido mientras no caduque, se use o se cancele.

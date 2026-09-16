@@ -103,17 +103,21 @@ const Reports = () => {
       headers = [t("name"), t("category"), t("team"), t("number"), t("status")];
       rows = players.map(p => [`${p.nombre} ${p.apellidos||""}`.trim(), p.categoria||"—", teamName(p.equipo_id), p.dorsal||"—", p.estado]);
     } else if (report === "familyPhones") {
-      const players = (await api.get("/players")).data;
+      const [playersResponse, familiesResponse] = await Promise.all([api.get("/players"), api.get("/families")]);
+      const players = playersResponse.data;
+      const families = Object.fromEntries(familiesResponse.data.map((family) => [family.id, family]));
       headers = [t("name"), `${t("parent1")}`, `${t("phone")} 1`, `${t("phone")} 2`];
-      rows = players.map(p => [`${p.nombre} ${p.apellidos||""}`.trim(), p.progenitor1_nombre||"—", p.progenitor1_telefono||"—", p.progenitor2_telefono||"—"]);
+      rows = players.map(p => { const family = families[p.familia_id] || {}; return [`${p.nombre} ${p.apellidos||""}`.trim(), family.progenitor1_nombre || p.progenitor1_nombre || family.progenitor2_nombre || p.progenitor2_nombre || "—", family.progenitor1_telefono || p.progenitor1_telefono || "—", family.progenitor2_telefono || p.progenitor2_telefono || "—"]; });
     } else if (report === "familyEmails") {
-      const players = (await api.get("/players")).data;
+      const [playersResponse, familiesResponse] = await Promise.all([api.get("/players"), api.get("/families")]);
+      const players = playersResponse.data;
+      const families = Object.fromEntries(familiesResponse.data.map((family) => [family.id, family]));
       headers = [t("name"), `${t("email")} 1`, `${t("email")} 2`];
-      rows = players.map(p => [`${p.nombre} ${p.apellidos||""}`.trim(), p.progenitor1_email||"—", p.progenitor2_email||"—"]);
+      rows = players.map(p => { const family = families[p.familia_id] || {}; return [`${p.nombre} ${p.apellidos||""}`.trim(), family.progenitor1_email || p.progenitor1_email || family.progenitor2_email || p.progenitor2_email || "—", family.progenitor2_email || p.progenitor2_email || "—"]; });
     } else if (report === "pendingPaymentsReport") {
       let pays = (await api.get("/payments")).data.filter(p => ["pendiente","parcial"].includes(p.estado));
-      headers = [t("name"), t("concept"), t("finalAmount"), t("status")];
-      rows = pays.map(p => [p.player_nombre, p.concepto, `${(p.importe_final||0).toFixed(2)} €`, p.estado]);
+      headers = [t("name"), t("accountHolder"), t("concept"), t("finalAmount"), t("status")];
+      rows = pays.map(p => [p.player_nombre, p.titular_cuenta || "—", p.concepto, `${(p.importe_final||0).toFixed(2)} €`, p.estado]);
     } else if (report === "pendingAuthsReport") {
       let auths = (await api.get("/authorizations")).data.filter(a => a.estado !== "firmada");
       headers = [t("name"), t("authType"), t("status")];

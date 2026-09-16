@@ -80,7 +80,7 @@ class Collection:
 
 
 def communication_db():
-    return SimpleNamespace(
+    return Database(
         teams=Collection([{"id": "team-own", "nombre": "Equipo permitido", "categoria": "Alevín"},
                           {"id": "team-other", "nombre": "Equipo ajeno", "categoria": "Cadete"}]),
         players=Collection([{
@@ -95,7 +95,13 @@ def communication_db():
         families=Collection([{"id": "family-own", "communication_consents": {"email": "yes"}}]),
         users=Collection([]),
         internal_events=Collection([]),
+        team_memberships=Collection([]),
     )
+
+
+class Database(SimpleNamespace):
+    def __getitem__(self, collection):
+        return getattr(self, collection)
 
 
 def coach():

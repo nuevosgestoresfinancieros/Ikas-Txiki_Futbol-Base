@@ -21,6 +21,8 @@ COMMON_PASSWORDS = {
     "password", "password123", "contraseña", "qwerty123", "admin123",
     "ikas-txiki", "ikastxiki", "123456789012",
 }
+FAMILY_PARENT_SLOTS = (1, 2)
+_FAMILY_CONTACT_PLACEHOLDERS = frozenset({"familia", "family", "progenitor", "tutor"})
 
 
 def now_iso() -> str:
@@ -33,6 +35,102 @@ def normalized_text(value: Any) -> str:
 
 def normalized_key(value: Any) -> str:
     return normalized_text(value).casefold()
+
+
+def _first_value(*values: Any) -> str | None:
+    for value in values:
+        value = normalized_text(value)
+        if value:
+            return value
+    return None
+
+
+def _parent_has_data(parent: Mapping[str, Any]) -> bool:
+    return bool(parent.get("name") or parent.get("phone") or parent.get("email"))
+
+
+def family_parent_slot(family: Mapping[str, Any] | None = None, preferred: Any = None,
+                       legacy: Mapping[str, Any] | None = None) -> int:
+    """Choose the parent slot while keeping old player-shaped records usable."""
+    if preferred in FAMILY_PARENT_SLOTS or str(preferred or "").strip() in {"1", "2"}:
+        return int(preferred)
+    family, legacy = family or {}, legacy or {}
+    legacy_email = normalized_key(legacy.get("email"))
+    if legacy_email:
+        for slot in FAMILY_PARENT_SLOTS:
+            if normalized_key(family.get(f"progenitor{slot}_email")) == legacy_email:
+                return slot
+            if normalized_key(legacy.get(f"progenitor{slot}_email")) == legacy_email:
+                return slot
+    for slot in FAMILY_PARENT_SLOTS:
+        if _parent_has_data({
+            "name": _first_value(family.get(f"progenitor{slot}_nombre"), legacy.get(f"progenitor{slot}_nombre")),
+            "phone": _first_value(family.get(f"progenitor{slot}_telefono"), legacy.get(f"progenitor{slot}_telefono")),
+            "email": _first_value(family.get(f"progenitor{slot}_email"), legacy.get(f"progenitor{slot}_email")),
+        }):
+            return slot
+    return 1
+
+
+def family_parent(family: Mapping[str, Any] | None = None, slot: Any = None,
+                  legacy: Mapping[str, Any] | None = None) -> dict:
+    """Return one canonical parent, falling back to legacy player fields."""
+    family, legacy = family or {}, legacy or {}
+    resolved_slot = family_parent_slot(family, slot, legacy)
+
+    def read_parent(candidate: int) -> dict:
+        name = _first_value(
+            family.get(f"progenitor{candidate}_nombre"),
+            legacy.get(f"progenitor{candidate}_nombre"),
+        )
+        phone = _first_value(
+            family.get(f"progenitor{candidate}_telefono"),
+            legacy.get(f"progenitor{candidate}_telefono"),
+        )
+        email = _first_value(
+            family.get(f"progenitor{candidate}_email"),
+            legacy.get(f"progenitor{candidate}_email"),
+        )
+        return {"slot": candidate, "name": name, "phone": phone, "email": email}
+
+    parent = read_parent(resolved_slot)
+    if not _parent_has_data(parent) and slot is None:
+        for candidate in FAMILY_PARENT_SLOTS:
+            parent = read_parent(candidate)
+            if _parent_has_data(parent):
+                break
+    if not parent.get("name"):
+        contact = _first_value(family.get("contacto_principal"), legacy.get("contacto_principal"))
+        if contact and normalized_key(contact) not in _FAMILY_CONTACT_PLACEHOLDERS:
+            parent["name"] = contact
+    parent["phone"] = normalized_text(parent.get("phone")) or None
+    parent["email"] = normalized_key(parent.get("email")) or None
+    return parent
+
+
+def family_parent_identity(family: Mapping[str, Any] | None = None, slot: Any = None,
+                           legacy: Mapping[str, Any] | None = None) -> dict:
+    """Build account identity from the selected parent without losing legacy data."""
+    legacy = legacy or {}
+    parent = family_parent(family, slot, legacy)
+    name_parts = normalized_text(parent.get("name")).split(" ", 1)
+    first_name = name_parts[0] if name_parts and name_parts[0] else normalized_text(legacy.get("first_name"))
+    last_name = name_parts[1] if len(name_parts) > 1 else normalized_text(legacy.get("last_name"))
+    return {
+        "family_contact_slot": parent.get("slot"),
+        "first_name": first_name or None,
+        "last_name": last_name or "Familia",
+        "email": normalized_key(parent.get("email") or legacy.get("email")) or None,
+        "phone": normalized_text(parent.get("phone") or legacy.get("phone")) or None,
+        "holder": parent.get("name") or normalized_text(" ".join(
+            part for part in (legacy.get("first_name"), legacy.get("last_name")) if part
+        )) or None,
+    }
+
+
+def family_parent_name(family: Mapping[str, Any] | None = None, slot: Any = None,
+                       legacy: Mapping[str, Any] | None = None) -> str | None:
+    return family_parent(family, slot, legacy).get("name")
 
 
 def user_search_text(user: Mapping[str, Any]) -> str:
@@ -127,7 +225,7 @@ def safe_audit_detail(action: str, changed_fields: list[str] | None = None,
     allowed = {
         "first_name", "last_name", "email", "phone", "language", "role", "account_status",
         "assigned_team_ids", "assigned_category_ids", "player_id", "family_id",
-        "linked_player_ids", "active",
+        "linked_player_ids", "family_contact_slot", "active",
     }
     detail = {
         "action": action,

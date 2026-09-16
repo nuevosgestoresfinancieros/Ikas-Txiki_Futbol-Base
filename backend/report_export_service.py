@@ -54,6 +54,7 @@ REPORT_LABELS = {
         "matches_played": "Partidos disputados", "wins": "Victorias", "draws": "Empates", "losses": "Derrotas",
         "concept": "Concepto", "expected": "Previsto", "paid": "Cobrado",
         "pending": "Pendiente", "payment_method": "Forma de pago", "payment_date": "Fecha de pago",
+        "account_holder": "Titular cuenta",
         "contact_type": "Tipo de contacto", "delivery": "Entrega", "movement_filter": "Movimiento",
     },
     "eu": {
@@ -90,6 +91,7 @@ REPORT_LABELS = {
         "matches_played": "Jokatutako partidak", "wins": "Garaipenak", "draws": "Berdinketak", "losses": "Porrotak",
         "concept": "Kontzeptua", "expected": "Aurreikusita", "paid": "Kobratuta",
         "pending": "Zain", "payment_method": "Ordainketa modua", "payment_date": "Ordainketa-data",
+        "account_holder": "Kontu titularra",
         "contact_type": "Kontaktu mota", "delivery": "Entrega", "movement_filter": "Mugimendua",
     },
 }
