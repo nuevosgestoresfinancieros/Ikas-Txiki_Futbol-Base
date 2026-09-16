@@ -4080,13 +4080,122 @@ async def _family_holder_for_player(player_id: Optional[str]) -> Optional[str]:
     return family_parent_name(family, legacy=player)
 
 
+def _payment_holder_options(family: Mapping[str, Any] | None = None,
+                            legacy: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Build the canonical account-holder choices without exposing credentials."""
+    family = family or {}
+    legacy = legacy or {}
+    default_name = family_parent_name(family, legacy=legacy)
+    options = []
+    seen = set()
+    for slot in (1, 2):
+        parent = family_parent(family, slot=slot, legacy=legacy)
+        name = normalized_text(parent.get("name"))
+        key = normalized_key(name)
+        if not name or not key or key in seen:
+            continue
+        seen.add(key)
+        options.append({
+            "value": name,
+            "label": name,
+            "slot": slot,
+            "is_default": bool(default_name and key == normalized_key(default_name)),
+        })
+    return options
+
+
+def _payment_holder_catalog_from_records(family: Mapping[str, Any] | None,
+                                          player: Mapping[str, Any]) -> dict[str, Any]:
+    family = family or {}
+    options = _payment_holder_options(family, player)
+    default = next((item["value"] for item in options if item.get("is_default")), None)
+    return {"options": options, "default": default}
+
+
+async def _payment_holder_catalog(player_id: Optional[str]) -> dict[str, Any]:
+    """Return holder choices for one player, including legacy contact fallback."""
+    if not player_id:
+        return {"options": [], "default": None}
+    player = await db.players.find_one({"id": player_id}, {
+        "_id": 0, "id": 1, "familia_id": 1,
+        "progenitor1_nombre": 1, "progenitor1_telefono": 1, "progenitor1_email": 1,
+        "progenitor2_nombre": 1, "progenitor2_telefono": 1, "progenitor2_email": 1,
+    })
+    if not player:
+        return {"options": [], "default": None}
+    family = {}
+    if player.get("familia_id"):
+        family = await db.families.find_one({"id": player["familia_id"]}, {
+            "_id": 0, "id": 1,
+            "progenitor1_nombre": 1, "progenitor1_telefono": 1, "progenitor1_email": 1,
+            "progenitor2_nombre": 1, "progenitor2_telefono": 1, "progenitor2_email": 1,
+            "contacto_principal": 1,
+        }) or {}
+    return _payment_holder_catalog_from_records(family, player)
+
+
+async def _resolve_payment_holder(player_id: Optional[str], requested: Any = None,
+                                  existing: Mapping[str, Any] | None = None,
+                                  preserve_existing: bool = False) -> Optional[str]:
+    """Validate a selected holder and derive one when the family has a canonical choice."""
+    catalog = await _payment_holder_catalog(player_id)
+    requested_name = normalized_text(requested)
+    existing_name = normalized_text((existing or {}).get("titular_cuenta"))
+    if requested_name:
+        canonical = next(
+            (item["value"] for item in catalog["options"]
+             if normalized_key(item["value"]) == normalized_key(requested_name)),
+            None,
+        )
+        if canonical:
+            return canonical
+        # Historical bank references may intentionally preserve an imported
+        # holder that is no longer present in the canonical family record.
+        if (existing and existing.get("historical_bank_reference")
+                and normalized_key(existing_name) == normalized_key(requested_name)):
+            return existing_name
+        if not catalog["options"]:
+            return requested_name
+        raise HTTPException(status_code=422, detail="El titular seleccionado no pertenece a la familia del jugador")
+    if preserve_existing and existing_name:
+        return existing_name
+    return catalog.get("default")
+
+
+def _masked_payment_iban(payment: Mapping[str, Any]) -> Optional[str]:
+    """Mask both protected IBANs and legacy plaintext values on the API read path."""
+    last4 = normalized_text(payment.get("iban_last4"))
+    if not last4:
+        raw = re.sub(r"\s+", "", str(payment.get("iban") or ""))
+        match = re.search(r"([A-Za-z0-9]{4})$", raw)
+        last4 = match.group(1) if match else ""
+    return masked_iban(last4)
+
+
+@api_router.get("/payments/holders")
+async def get_payment_holders():
+    """Return canonical account-holder choices keyed by player id."""
+    players = await list_docs("players")
+    families = {family.get("id"): family for family in await list_docs("families")}
+    result = {}
+    for player in players:
+        player_id = player.get("id")
+        if player_id:
+            result[player_id] = _payment_holder_catalog_from_records(
+                families.get(player.get("familia_id")), player,
+            )
+    return result
+
+
 @api_router.post("/payments")
 async def create_payment(payment: Payment):
     data = payment.model_dump()
     base = data.get("importe_base") or 0
     desc = data.get("descuento_hermano") or 0
     data["importe_final"] = round(base - desc, 2)
-    data["titular_cuenta"] = normalized_text(data.get("titular_cuenta")) or await _family_holder_for_player(data.get("player_id"))
+    data["titular_cuenta"] = await _resolve_payment_holder(
+        data.get("player_id"), data.get("titular_cuenta"),
+    )
     return await insert_doc("payments", data)
 
 
@@ -4104,21 +4213,28 @@ async def get_payments(estado: Optional[str] = None):
             families.get(player.get("familia_id")), legacy=player,
         )
         p.pop("iban_encrypted", None)
-        if p.get("iban_last4"):
-            p["iban"] = masked_iban(p.get("iban_last4"))
+        masked = _masked_payment_iban(p)
+        if masked:
+            p["iban"] = masked
+        else:
+            p.pop("iban", None)
     return payments
 
 
 @api_router.put("/payments/{payment_id}")
 async def edit_payment(payment_id: str, payment: Payment):
-    data = payment.model_dump()
+    existing = await get_doc("payments", payment_id)
+    supplied = payment.model_dump(exclude_unset=True)
+    data = {**existing, **supplied}
+    data["player_id"] = data.get("player_id") or existing.get("player_id")
     base = data.get("importe_base") or 0
     desc = data.get("descuento_hermano") or 0
     data["importe_final"] = round(base - desc, 2)
-    existing = await get_doc("payments", payment_id)
-    data["titular_cuenta"] = normalized_text(data.get("titular_cuenta")) or normalized_text(existing.get("titular_cuenta"))
-    if not data["titular_cuenta"]:
-        data["titular_cuenta"] = await _family_holder_for_player(data.get("player_id") or existing.get("player_id"))
+    player_changed = data.get("player_id") != existing.get("player_id")
+    data["titular_cuenta"] = await _resolve_payment_holder(
+        data.get("player_id"), data.get("titular_cuenta"), existing=existing,
+        preserve_existing=("titular_cuenta" not in supplied and not player_changed),
+    )
     return await update_doc("payments", payment_id, data)
 
 

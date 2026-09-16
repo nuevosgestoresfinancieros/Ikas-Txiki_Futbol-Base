@@ -38,9 +38,12 @@ La cuenta de rol `family` conserva la relación canónica con `families.id` y
 guarda `family_contact_slot` para identificar al progenitor titular. Al crear o
 re-vincular la cuenta, el backend resuelve el nombre, correo y teléfono desde
 ese slot y recalcula `linked_player_ids` desde `players.familia_id`; el cliente
-no puede elegir hijos fuera de la familia. `payments.titular_cuenta`, los
-informes financieros y las exportaciones operativas reutilizan la misma
-resolución. Para registros antiguos, la lectura cae de forma segura a los
+no puede elegir hijos fuera de la familia. `payments.titular_cuenta`, el
+selector administrativo de titulares por jugador, los informes financieros y
+las exportaciones operativas reutilizan la misma resolución. El backend
+rechaza un titular nuevo que no pertenezca a la familia canónica; una
+referencia bancaria histórica se puede conservar aunque el contacto ya no
+exista. Para registros antiguos, la lectura cae de forma segura a los
 campos de progenitores conservados en `players`, sin exigir una migración ni
 modificar MongoDB durante este cambio.
 

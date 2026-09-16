@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { PageHeader, StatusBadge, EmptyState } from "@/components/shared";
 import { Field, Area, SelectField, SwitchField } from "@/components/form";
 
-const empty = { concepto: "Cuota temporada", estado: "pendiente", importe_base: 0, descuento_hermano: 0, iban_validado: false, recibo_generado: false };
+const empty = { concepto: "Cuota temporada", estado: "pendiente", importe_base: 0, descuento_hermano: 0, titular_cuenta: "", iban_validado: false, recibo_generado: false };
 
 const Payments = () => {
   const canCreate = usePermission("payments", "create");
@@ -18,6 +18,7 @@ const Payments = () => {
   const [params, setParams] = useSearchParams();
   const [payments, setPayments] = useState([]);
   const [players, setPlayers] = useState([]);
+  const [holderCatalog, setHolderCatalog] = useState({});
   const [dialog, setDialog] = useState(false);
   const [form, setForm] = useState(empty);
 
@@ -25,13 +26,27 @@ const Payments = () => {
   useEffect(() => {
     load();
     api.get("/players").then((r) => setPlayers(r.data));
+    api.get("/payments/holders").then((r) => setHolderCatalog(r.data || {})).catch(() => setHolderCatalog({}));
     if (params.get("new") && canCreate) { setForm(empty); setDialog(true); params.delete("new"); setParams(params); }
     // eslint-disable-next-line
   }, []);
 
   const set = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
   const openNew = () => { setForm(empty); setDialog(true); };
-  const openEdit = (p) => { setForm(p); setDialog(true); };
+  const holderData = (playerId) => holderCatalog[playerId] || { options: [], default: "" };
+  const defaultHolder = (playerId) => holderData(playerId).default || holderData(playerId).options?.[0]?.value || "";
+  const openEdit = (p) => { setForm({ ...p, titular_cuenta: p.titular_cuenta || defaultHolder(p.player_id) }); setDialog(true); };
+  const setPlayer = (playerId) => setForm((f) => ({
+    ...f,
+    player_id: playerId,
+    titular_cuenta: f.player_id === playerId ? f.titular_cuenta : defaultHolder(playerId),
+  }));
+  useEffect(() => {
+    if (!dialog || !form.player_id || form.titular_cuenta) return;
+    const playerHolderData = holderCatalog[form.player_id] || { options: [], default: "" };
+    const holder = playerHolderData.default || playerHolderData.options?.[0]?.value || "";
+    if (holder) setForm((current) => current.titular_cuenta ? current : { ...current, titular_cuenta: holder });
+  }, [dialog, form.player_id, form.titular_cuenta, holderCatalog]);
   const save = async () => {
     if (form.id) await api.put(`/payments/${form.id}`, form);
     else await api.post("/payments", form);
@@ -41,6 +56,10 @@ const Payments = () => {
 
   const final = (Number(form.importe_base) || 0) - (Number(form.descuento_hermano) || 0);
   const playerOptions = players.map((p) => ({ value: p.id, label: `${p.nombre} ${p.apellidos || ""}`.trim() }));
+  const canonicalHolderOptions = holderData(form.player_id).options || [];
+  const holderOptions = form.titular_cuenta && !canonicalHolderOptions.some((item) => item.value === form.titular_cuenta)
+    ? [{ value: form.titular_cuenta, label: `${form.titular_cuenta} · histórico` }, ...canonicalHolderOptions]
+    : canonicalHolderOptions;
   const totalPend = payments.filter(p => ["pendiente","parcial"].includes(p.estado)).reduce((s, p) => s + (p.importe_final || 0), 0);
 
   return (
@@ -61,7 +80,8 @@ const Payments = () => {
             <table className="w-full text-sm">
               <thead className="bg-slate-50 text-left text-xs font-bold uppercase tracking-wider text-slate-500">
                 <tr>
-                  <th className="px-4 py-3">{t("name")}</th>
+                  <th className="px-4 py-3">{t("paymentPlayerColumn")}</th>
+                  <th className="px-4 py-3">{t("accountHolder")}</th>
                   <th className="px-4 py-3 hidden sm:table-cell">{t("concept")}</th>
                   <th className="px-4 py-3">{t("finalAmount")}</th>
                   <th className="px-4 py-3 hidden md:table-cell">{t("paymentMethod")}</th>
@@ -74,10 +94,11 @@ const Payments = () => {
                 {payments.map((p) => (
                   <tr key={p.id} data-testid={`payment-row-${p.id}`} className="hover:bg-slate-50">
                     <td className="px-4 py-3 font-semibold text-slate-800">{p.player_nombre}</td>
+                    <td className="px-4 py-3 font-semibold text-slate-800">{p.titular_cuenta || "—"}</td>
                     <td className="px-4 py-3 hidden sm:table-cell text-slate-600">{p.concepto}</td>
                     <td className="px-4 py-3 font-heading font-bold text-slate-900">{(p.importe_final || 0).toFixed(2)} €</td>
                     <td className="px-4 py-3 hidden md:table-cell text-slate-600 capitalize">{p.forma_pago || "—"}</td>
-                    <td className="px-4 py-3"><div className="font-mono text-xs text-slate-700">{p.iban || "—"}</div>{p.titular_cuenta && <div className="mt-1 text-xs text-slate-400">{p.titular_cuenta}</div>}{p.historical_bank_reference && <div className="mt-1 text-[10px] font-bold uppercase text-sky-700">Referencia histórica · sin deuda</div>}</td>
+                    <td className="px-4 py-3"><div className="font-mono text-xs text-slate-700">{p.iban || "—"}</div>{p.historical_bank_reference && <div className="mt-1 text-[10px] font-bold uppercase text-sky-700">Referencia histórica · sin deuda</div>}</td>
                     <td className="px-4 py-3"><StatusBadge status={p.estado} /></td>
                     <td className="px-4 py-3">
                       <div className="flex justify-end gap-1">
@@ -98,7 +119,8 @@ const Payments = () => {
         <DialogContent className="max-w-2xl max-h-[92vh] overflow-y-auto">
           <DialogHeader><DialogTitle className="font-heading">{form.id ? t("payments") : t("newPayment")}</DialogTitle></DialogHeader>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
-            <div className="sm:col-span-2"><SelectField label={t("name")} value={form.player_id} onChange={set("player_id")} options={playerOptions} testid="payment-player" /></div>
+            <div className="sm:col-span-2"><SelectField label={t("paymentPlayer")} value={form.player_id} onChange={setPlayer} options={playerOptions} testid="payment-player" /></div>
+            <div className="sm:col-span-2"><SelectField label={t("accountHolder")} value={form.titular_cuenta} onChange={set("titular_cuenta")} options={holderOptions} testid="payment-holder" /></div>
             <Field label={t("concept")} value={form.concepto} onChange={set("concepto")} testid="payment-concepto" />
             <SelectField label={t("paymentMethod")} value={form.forma_pago} onChange={set("forma_pago")} options={["domiciliacion","transferencia","efectivo","bizum"].map(s=>({value:s,label:s}))} testid="payment-forma" />
             <Field label={t("baseAmount")} type="number" value={form.importe_base} onChange={set("importe_base")} testid="payment-base" />

@@ -16,8 +16,12 @@ desde la familia, lo usa como identidad de la cuenta y calcula todos los
 `titular_cuenta`; los pagos antiguos se enriquecen al leerlos, sin escritura
 automática ni migración de datos.
 
-Los informes y las exportaciones usan la misma resolución: familia canónica
-primero y campos históricos del jugador como fallback. Si una cuenta antigua no
+Los pagos administrativos mantienen siempre `player_id` como relación con el
+jugador y ofrecen `titular_cuenta` como nombre seleccionado de los contactos
+canónicos de su familia. El servidor valida esa selección y deriva el primer
+progenitor disponible cuando no se informa. Los informes y las exportaciones
+usan la misma resolución: familia canónica primero y campos históricos del
+jugador como fallback. Si una cuenta antigua no
 tiene slot, se infiere por coincidencia de correo o por el primer progenitor
 con datos, preservando su identidad personalizada cuando solo se edita la
 cuenta.

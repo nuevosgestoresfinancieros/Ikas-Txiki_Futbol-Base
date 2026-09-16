@@ -1,6 +1,9 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
+from fastapi import HTTPException
+
 import server
 from family_access_service import parent_data
 from report_service import build_report
@@ -137,3 +140,96 @@ def test_new_payment_stores_canonical_parent_holder(monkeypatch):
     monkeypatch.setattr(server, "insert_doc", fake_insert)
     asyncio.run(server.create_payment(server.Payment(player_id="player-1", importe_base=90)))
     assert captured["titular_cuenta"] == "Ana Primera"
+
+
+def test_payment_holders_are_scoped_to_the_player_family(monkeypatch):
+    monkeypatch.setattr(server, "db", family_database())
+    async def fake_list_docs(collection, query=None):
+        if collection == "players":
+            return [{"id": "player-1", "familia_id": "family-1"}]
+        assert collection == "families"
+        return [{"id": "family-1", "progenitor1_nombre": "Ana Primera",
+                 "progenitor2_nombre": "Bea Segunda"}]
+    monkeypatch.setattr(server, "list_docs", fake_list_docs)
+    result = asyncio.run(server.get_payment_holders())
+    assert [item["value"] for item in result["player-1"]["options"]] == ["Ana Primera", "Bea Segunda"]
+    assert result["player-1"]["default"] == "Ana Primera"
+
+
+def test_create_payment_accepts_selected_parent_and_rejects_other_family(monkeypatch):
+    database = family_database()
+    captured = {}
+    monkeypatch.setattr(server, "db", database)
+
+    async def fake_insert(collection, data):
+        captured.update(data)
+        return data
+
+    monkeypatch.setattr(server, "insert_doc", fake_insert)
+    asyncio.run(server.create_payment(server.Payment(
+        player_id="player-1", titular_cuenta="Bea Segunda", importe_base=90,
+    )))
+    assert captured["player_id"] == "player-1"
+    assert captured["titular_cuenta"] == "Bea Segunda"
+
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(server.create_payment(server.Payment(
+            player_id="player-1", titular_cuenta="Otra Familia", importe_base=90,
+        )))
+    assert error.value.status_code == 422
+
+
+def test_edit_payment_changes_holder_without_losing_player_link(monkeypatch):
+    monkeypatch.setattr(server, "db", family_database())
+    existing = {"id": "payment-1", "player_id": "player-1", "importe_base": 90,
+                "descuento_hermano": 0, "titular_cuenta": "Ana Primera"}
+    captured = {}
+
+    async def fake_get_doc(collection, document_id):
+        assert collection == "payments" and document_id == "payment-1"
+        return dict(existing)
+
+    async def fake_update_doc(collection, document_id, data):
+        captured.update(data)
+        return data
+
+    monkeypatch.setattr(server, "get_doc", fake_get_doc)
+    monkeypatch.setattr(server, "update_doc", fake_update_doc)
+    result = asyncio.run(server.edit_payment("payment-1", server.Payment(
+        titular_cuenta="Bea Segunda", importe_base=100,
+    )))
+    assert result["player_id"] == "player-1"
+    assert captured["player_id"] == "player-1"
+    assert captured["titular_cuenta"] == "Bea Segunda"
+
+
+def test_historical_payment_without_holder_uses_fallback_and_keeps_masked_iban(monkeypatch):
+    player = {"id": "player-1", "nombre": "Ane", "apellidos": "Histórica", "familia_id": "family-1"}
+    family = {"id": "family-1", "progenitor1_nombre": "Ana Primera"}
+    payment = {"id": "payment-1", "player_id": "player-1", "importe_final": 100,
+               "iban_encrypted": "ciphertext", "iban_last4": "1332"}
+
+    async def fake_list_docs(collection, query=None):
+        return {"payments": [dict(payment)], "players": [player], "families": [family]}[collection]
+
+    monkeypatch.setattr(server, "list_docs", fake_list_docs)
+    result = asyncio.run(server.get_payments())
+    assert result[0]["titular_cuenta"] == "Ana Primera"
+    assert result[0]["iban"] == "ES•• •••• •••• •••• •••• 1332"
+    assert "iban_encrypted" not in result[0]
+
+
+def test_exports_keep_explicit_payment_holder_and_player_relationship():
+    context = {
+        "players": [{"id": "player-1", "nombre": "Ane", "apellidos": "Histórica", "familia_id": "family-1"}],
+        "teams": [{"id": "team-1", "nombre": "Equipo"}],
+        "families": [{"id": "family-1", "progenitor1_nombre": "Ana Primera", "progenitor2_nombre": "Bea Segunda"}],
+        "payments": [{"id": "payment-1", "player_id": "player-1", "titular_cuenta": "Bea Segunda",
+                       "concepto": "Cuota", "importe_final": 100, "estado": "pendiente"}],
+    }
+    _, report_rows, _ = build_report("financial_summary", context, {}, "admin")
+    assert report_rows[0]["name"] == "Ane Histórica"
+    assert report_rows[0]["account_holder"] == "Bea Segunda"
+    bank = server._visual_export_rows({**context, "authorizations": []})["Cuentas bancarias"][0][0]
+    assert bank["Jugador"] == "Ane Histórica"
+    assert bank["Titular cuenta"] == "Bea Segunda"
