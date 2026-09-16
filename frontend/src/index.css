@@ -249,9 +249,10 @@
 
 #cibermedida-badge {
     top: max(12px, env(safe-area-inset-top)) !important;
-    right: max(12px, env(safe-area-inset-right)) !important;
+    left: 50% !important;
+    right: auto !important;
     bottom: auto !important;
-    left: auto !important;
+    transform: translateX(-50%) !important;
     padding: 6px !important;
     background: linear-gradient(135deg, #0e3554 0%, #2b75b0 100%) !important;
     box-shadow: 0 6px 20px rgba(14, 53, 84, 0.3) !important;
@@ -328,7 +329,7 @@
 @media (min-width: 1024px) {
     #cibermedida-badge {
         top: 16px !important;
-        right: 16px !important;
+        left: 50% !important;
         padding: 6px 14px 6px 8px !important;
     }
     #cibermedida-badge .cibermedida-badge-label { display: inline; }
