@@ -45,7 +45,7 @@ from pymongo.errors import DuplicateKeyError
 from authz import (
     ROLES, ROLE_PERMISSIONS, current_user_context, enforce_permission, enforce_related_scope,
     has_permission, ids,
-    merge_query, public_user, route_permission,
+    merge_query, public_user, route_permission as authz_route_permission,
 )
 from dashboard_service import pending_callups, player_callup_status, prioritized_alerts, weekly_attendance
 from attendance_service import (
@@ -508,6 +508,13 @@ async def public_branding(response: Response):
 
 
 api_router = APIRouter(prefix="/api")
+
+
+def route_permission(request: Request) -> tuple[str, str]:
+    parts = [part for part in request.url.path.split("/") if part]
+    if len(parts) > 3 and parts[0] == "api" and parts[1] == "callups" and "respond-bulk" in parts[2:]:
+        return "callups", "respond"
+    return authz_route_permission(request)
 
 
 async def authorize_request(request: Request, user: dict = Depends(get_current_user)):
@@ -3773,6 +3780,13 @@ class ConvocadoItem(BaseModel):
         return normalized
 
 
+def _validate_callup_response_status(value: str) -> str:
+    normalized = normalize_status(value)
+    if normalized not in {"confirmed", "declined"}:
+        raise ValueError("La respuesta debe ser confirmed o declined")
+    return normalized
+
+
 class Callup(BaseModel):
     match_id: str
     equipo_id: Optional[str] = None
@@ -3793,10 +3807,29 @@ class CallupResponse(BaseModel):
     @field_validator("status")
     @classmethod
     def validate_status(cls, value: str):
-        normalized = normalize_status(value)
-        if normalized not in {"confirmed", "declined"}:
-            raise ValueError("La respuesta debe ser confirmed o declined")
-        return normalized
+        return _validate_callup_response_status(value)
+
+
+class CallupBulkResponse(BaseModel):
+    status: str
+    reason: Optional[str] = None
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, value: str):
+        return _validate_callup_response_status(value)
+
+
+async def _ensure_callup_response_deadline(callup_id: str, callup: dict) -> None:
+    if not is_late(callup.get("response_deadline")):
+        return
+    await db.internal_events.update_one(
+        {"type": "callup.deadline_expired", "callup_id": callup_id},
+        {"$setOnInsert": {"id": new_id(), "type": "callup.deadline_expired",
+                           "callup_id": callup_id, "created_at": now_iso(), "delivered": False}},
+        upsert=True,
+    )
+    raise HTTPException(status_code=409, detail="El plazo de respuesta ha finalizado")
 
 
 @api_router.post("/callups")
@@ -3945,14 +3978,7 @@ async def respond_callup(callup_id: str, response: CallupResponse):
                   if item.get("player_id") == response.player_id), None)
     if index is None:
         raise HTTPException(status_code=404, detail="El jugador no está convocado")
-    if is_late(callup.get("response_deadline")):
-        await db.internal_events.update_one(
-            {"type": "callup.deadline_expired", "callup_id": callup_id},
-            {"$setOnInsert": {"id": new_id(), "type": "callup.deadline_expired",
-                               "callup_id": callup_id, "created_at": now_iso(), "delivered": False}},
-            upsert=True,
-        )
-        raise HTTPException(status_code=409, detail="El plazo de respuesta ha finalizado")
+    await _ensure_callup_response_deadline(callup_id, callup)
     old_status = normalize_status(callup["convocados"][index].get("estado"))
     updated, history = apply_response(
         callup["convocados"][index], response.status, response.reason,
@@ -3973,6 +3999,58 @@ async def respond_callup(callup_id: str, response: CallupResponse):
                                 {"callup_id": callup_id, "player_id": response.player_id},
                                 f"callup.response:{callup_id}:{response.player_id}:{updated.get('responded_at')}")
     return {"player_id": response.player_id, **updated}
+
+
+@api_router.patch("/callups/{callup_id}/respond-bulk")
+async def respond_callup_bulk(callup_id: str, response: CallupBulkResponse):
+    user = current_user_context.get() or {}
+    callup = await get_doc("callups", callup_id)
+    allowed_players = set(await user_player_ids(user))
+    if user.get("role") == "player" and not callup.get("player_self_response_allowed", False):
+        raise HTTPException(status_code=403, detail="La respuesta directa del jugador no está autorizada")
+    await _ensure_callup_response_deadline(callup_id, callup)
+
+    scope = await scope_for_collection("callups", user)
+    updated_count = 0
+    response_events = []
+    moment = datetime.now(timezone.utc)
+    pending_statuses = {"pending", "pendiente"}
+    for index, item in enumerate(callup.get("convocados", [])):
+        player_id = item.get("player_id")
+        if player_id not in allowed_players or normalize_status(item.get("estado")) != "pending":
+            continue
+        updated, history = apply_response(
+            item, response.status, response.reason, user,
+            callup.get("response_deadline"), moment,
+        )
+        query = merge_query({
+            "id": callup_id,
+            f"convocados.{index}.player_id": player_id,
+            f"convocados.{index}.estado": {"$in": [*pending_statuses, None]},
+        }, scope)
+        result = await db.callups.update_one(query, {"$set": {
+            f"convocados.{index}": updated, "updated_at": moment.isoformat(),
+        }})
+        if result.modified_count != 1:
+            continue
+        updated_count += 1
+        response_events.append((player_id, updated, history))
+
+    if response_events:
+        await db.internal_events.insert_many([{
+            "id": new_id(), "type": "callup.response_registered", "callup_id": callup_id,
+            "player_id": player_id, "actor_user_id": user.get("id"),
+            "history": history, "created_at": now_iso(), "delivered": False,
+        } for player_id, _updated, history in response_events])
+        staff = await notification_users([callup.get("equipo_id")], include_admins=True)
+        for player_id, updated, _history in response_events:
+            await enqueue_notifications(
+                staff, "callup.response", "Respuesta de convocatoria / Deialdiaren erantzuna",
+                response.status, "/convocatorias", "normal",
+                {"callup_id": callup_id, "player_id": player_id},
+                f"callup.response:{callup_id}:{player_id}:{updated.get('responded_at')}",
+            )
+    return {"updated_count": updated_count}
 
 
 @api_router.get("/callups/{callup_id}/pdf")

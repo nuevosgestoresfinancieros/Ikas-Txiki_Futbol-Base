@@ -12,6 +12,7 @@ Este documento describe únicamente información que puede verificarse en el rep
 - La pantalla de Equipamiento parte de una vista visual por tarjetas, con resumen de entrega, progreso por equipo, búsqueda, temporada, estado de entrega y tallas pendientes. Mantiene una vista de tabla compacta y la exportación CSV como alternativas. Al editar con una temporada seleccionada, las tallas, el dorsal, la entrega, la fecha y las observaciones se guardan en la instantánea de esa temporada; los datos históricos no se sobrescriben.
 - `scripts/publish-safe.sh` valida, prepara y publica cambios de código de forma controlada; admite `--dry-run` para validar sin commit, push, cambio de build ni reinicio de servicios.
 - El distintivo corporativo de Cibermedida se posiciona globalmente en el centro de la franja superior mediante `#cibermedida-badge`, con adaptación responsive y sin ocupar la zona superior derecha de las notificaciones.
+- Convocatorias mantiene las respuestas individuales y ofrece a las familias o jugadores autorizados confirmar o rechazar en bloque los participantes pendientes de cada convocatoria. La ruta `PATCH /api/callups/{id}/respond-bulk` respeta el ámbito vinculado, el permiso de respuesta y la fecha límite, registra el motivo opcional de rechazo, audita cada cambio y devuelve el número de participantes actualizados.
 
 ## Limitaciones conocidas
 
