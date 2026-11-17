@@ -1153,6 +1153,7 @@ export const translations = {
     accountHolder: "Titular de la cuenta",
     paymentMethod: "Forma de pago",
     iban: "Cuenta bancaria / IBAN",
+    ibanProtectedHelp: "El IBAN se guarda cifrado; solo se muestran el país y los 4 últimos dígitos. Para cambiarlo, escribe el IBAN completo; déjalo vacío para quitar la cuenta.",
     paymentDate: "Fecha de pago",
     // Authorization
     authType: "Tipo de autorización",
@@ -2461,6 +2462,7 @@ export const translations = {
     accountHolder: "Kontu titularra",
     paymentMethod: "Ordainketa modua",
     iban: "Banku-kontua / IBAN",
+    ibanProtectedHelp: "IBANa zifratuta gordetzen da; herrialdea eta azken 4 digituak baino ez dira erakusten. Aldatzeko, idatzi IBAN osoa; utzi hutsik kontua kentzeko.",
     paymentDate: "Ordainketa data",
     authType: "Baimen mota",
     authorizedPerson: "Jasotzeko baimendua",

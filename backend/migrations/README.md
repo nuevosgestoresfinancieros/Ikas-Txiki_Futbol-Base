@@ -160,3 +160,23 @@ Solo cuando el preflight no encuentre duplicados se puede crear el índice
 ../venv/bin/python migrations/010_family_authorization_indexes.py --apply \
   --confirm PREPARE-FAMILY-AUTHORIZATION-INDEX
 ```
+
+## Cifrado de IBAN en pagos
+
+`011_encrypt_payment_ibans.py` busca pagos con el IBAN guardado en claro, lo
+cifra y conserva solo el país y los cuatro últimos dígitos visibles. Nunca
+imprime IBAN completos. Por defecto solo informa:
+
+```bash
+../venv/bin/python migrations/011_encrypt_payment_ibans.py
+```
+
+Aplicarla requiere una copia lógica previa de `payments` y autorización
+explícita:
+
+```bash
+../venv/bin/python migrations/011_encrypt_payment_ibans.py --apply \
+  --confirm ENCRYPT-PAYMENT-IBANS
+```
+
+Para revertir, restaure la colección `payments` desde esa copia.

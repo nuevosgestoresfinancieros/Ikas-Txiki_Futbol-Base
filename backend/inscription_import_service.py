@@ -433,6 +433,9 @@ def encrypt_iban(iban: str, secret: str) -> dict:
             "iban_last4": normalized[-4:]}
 
 
-def masked_iban(last4: Any) -> Optional[str]:
+def masked_iban(last4: Any, country: Any = None) -> Optional[str]:
     value = normalize_text(last4)
-    return f"ES•• •••• •••• •••• •••• {value}" if value else None
+    prefix = normalize_text(country).upper()
+    if not re.fullmatch(r"[A-Z]{2}", prefix):
+        prefix = "ES"
+    return f"{prefix}•• •••• •••• •••• •••• {value}" if value else None

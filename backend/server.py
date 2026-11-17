@@ -67,7 +67,7 @@ from brand_assets import BRAND_BLUE, BRAND_TEAL, pdf_logo
 from inscription_import_service import (
     SEASON as IMPORT_SEASON, SAFE_PLAYER_FIELDS, ImportValidationError,
     analyze_rows, decode_plan, encode_plan, encrypt_iban, family_key,
-    file_sha256, identity_key, masked_iban, merge_nonempty, normalize_key,
+    file_sha256, identity_key, masked_iban, merge_nonempty, normalize_iban, normalize_key,
     parse_excel, _fernet,
 )
 from import_staging_service import (
@@ -4243,11 +4243,64 @@ async def _resolve_payment_holder(player_id: Optional[str], requested: Any = Non
 def _masked_payment_iban(payment: Mapping[str, Any]) -> Optional[str]:
     """Mask both protected IBANs and legacy plaintext values on the API read path."""
     last4 = normalized_text(payment.get("iban_last4"))
+    country = payment.get("iban_country")
     if not last4:
         raw = re.sub(r"\s+", "", str(payment.get("iban") or ""))
         match = re.search(r"([A-Za-z0-9]{4})$", raw)
         last4 = match.group(1) if match else ""
-    return masked_iban(last4)
+        country = country or (raw[:2] if not _is_masked_iban(raw) else None)
+    return masked_iban(last4, country)
+
+
+PAYMENT_IBAN_RE = re.compile(r"[A-Z]{2}\d{2}[A-Z0-9]{11,30}")
+
+
+def _is_masked_iban(value: Any) -> bool:
+    """Detect the masked value the API returns so it is never stored as an IBAN."""
+    text = str(value or "")
+    return "•" in text or "*" in text
+
+
+def _valid_payment_iban(iban: str) -> bool:
+    """ISO 13616 check for any country: structure plus mod-97 checksum."""
+    if not PAYMENT_IBAN_RE.fullmatch(iban):
+        return False
+    rearranged = iban[4:] + iban[:4]
+    numeric = "".join(str(ord(char) - 55) if char.isalpha() else char for char in rearranged)
+    return int(numeric) % 97 == 1
+
+
+def _protected_iban_fields(iban: str) -> dict[str, Any]:
+    return {**encrypt_iban(iban, JWT_SECRET), "iban_country": iban[:2]}
+
+
+def _protect_payment_iban(data: dict, supplied: Mapping[str, Any],
+                          existing: Optional[Mapping[str, Any]] = None) -> None:
+    """Cifra el IBAN del pago y deja visibles solo país y últimos cuatro dígitos.
+
+    - IBAN nuevo: se valida y se cifra.
+    - Valor enmascarado devuelto por la API o campo omitido: se conserva la cuenta.
+    - Campo vacío enviado explícitamente: se elimina la cuenta del pago.
+    - IBAN heredado en claro: se cifra al guardar el pago, sin bloquear la edición.
+    """
+    existing = existing or {}
+    supplied_raw = supplied.get("iban") if "iban" in supplied else None
+    requested = normalize_iban(supplied_raw) if "iban" in supplied else None
+    if requested and not _is_masked_iban(requested):
+        if not _valid_payment_iban(requested):
+            raise HTTPException(status_code=422, detail="El IBAN no es válido; revisa los dígitos")
+        data.update(_protected_iban_fields(requested))
+    elif "iban" in supplied and not requested:
+        data.update({"iban_encrypted": None, "iban_last4": None, "iban_country": None,
+                     "iban_validado": False})
+    else:
+        for field in ("iban_encrypted", "iban_last4", "iban_country"):
+            if field in existing:
+                data[field] = existing[field]
+        legacy = normalize_iban(existing.get("iban"))
+        if legacy and not _is_masked_iban(legacy) and not existing.get("iban_encrypted"):
+            data.update(_protected_iban_fields(legacy))
+    data["iban"] = None
 
 
 @api_router.get("/payments/holders")
@@ -4274,7 +4327,8 @@ async def create_payment(payment: Payment):
     data["titular_cuenta"] = await _resolve_payment_holder(
         data.get("player_id"), data.get("titular_cuenta"),
     )
-    return await insert_doc("payments", data)
+    _protect_payment_iban(data, payment.model_dump(exclude_unset=True))
+    return _public_payment(await insert_doc("payments", data))
 
 
 @api_router.get("/payments")
@@ -4290,13 +4344,20 @@ async def get_payments(estado: Optional[str] = None):
         p["titular_cuenta"] = normalized_text(p.get("titular_cuenta")) or family_parent_name(
             families.get(player.get("familia_id")), legacy=player,
         )
-        p.pop("iban_encrypted", None)
-        masked = _masked_payment_iban(p)
-        if masked:
-            p["iban"] = masked
-        else:
-            p.pop("iban", None)
+        _public_payment(p)
     return payments
+
+
+def _public_payment(payment: dict) -> dict:
+    """Quita el IBAN cifrado o en claro de la respuesta y expone solo la máscara."""
+    payment["cuenta_protegida"] = bool(payment.get("iban_encrypted"))
+    payment.pop("iban_encrypted", None)
+    masked = _masked_payment_iban(payment)
+    if masked:
+        payment["iban"] = masked
+    else:
+        payment.pop("iban", None)
+    return payment
 
 
 @api_router.put("/payments/{payment_id}")
@@ -4313,7 +4374,8 @@ async def edit_payment(payment_id: str, payment: Payment):
         data.get("player_id"), data.get("titular_cuenta"), existing=existing,
         preserve_existing=("titular_cuenta" not in supplied and not player_changed),
     )
-    return await update_doc("payments", payment_id, data)
+    _protect_payment_iban(data, supplied, existing)
+    return _public_payment(await update_doc("payments", payment_id, data))
 
 
 @api_router.delete("/payments/{payment_id}")

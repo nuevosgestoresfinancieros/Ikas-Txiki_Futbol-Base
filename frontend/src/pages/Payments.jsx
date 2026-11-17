@@ -48,8 +48,14 @@ const Payments = () => {
     if (holder) setForm((current) => current.titular_cuenta ? current : { ...current, titular_cuenta: holder });
   }, [dialog, form.player_id, form.titular_cuenta, holderCatalog]);
   const save = async () => {
-    if (form.id) await api.put(`/payments/${form.id}`, form);
-    else await api.post("/payments", form);
+    try {
+      if (form.id) await api.put(`/payments/${form.id}`, form);
+      else await api.post("/payments", form);
+    } catch (error) {
+      const detail = error.response?.data?.detail;
+      toast.error(typeof detail === "string" ? detail : t("saveError"));
+      return;
+    }
     toast.success(t("saved")); setDialog(false); load();
   };
   const remove = async (p) => { if (!window.confirm(t("confirmDelete"))) return; await api.delete(`/payments/${p.id}`); toast.success(t("deleted")); load(); };
@@ -72,7 +78,7 @@ const Payments = () => {
       ) : (
         <>
         <div className="mb-4 grid gap-3 sm:grid-cols-3">
-          <div className="surface-card p-4"><p className="text-xs font-bold uppercase text-slate-500">Cuentas bancarias protegidas</p><p className="mt-1 text-2xl font-bold text-primary">{payments.filter(p => p.historical_bank_reference && p.iban).length}</p></div>
+          <div className="surface-card p-4"><p className="text-xs font-bold uppercase text-slate-500">Cuentas bancarias protegidas</p><p className="mt-1 text-2xl font-bold text-primary">{payments.filter(p => p.cuenta_protegida).length}</p></div>
           <div className="surface-card p-4 sm:col-span-2"><p className="flex items-center gap-2 text-sm text-slate-600"><Landmark className="h-4 w-4 text-primary" />Los IBAN históricos se muestran enmascarados y no representan deudas ni recibos.</p></div>
         </div>
         <div className="surface-card overflow-hidden">
@@ -130,7 +136,8 @@ const Payments = () => {
               <div className="flex h-11 items-center rounded-md border border-slate-200 bg-slate-50 px-3 font-heading font-bold text-slate-900">{final.toFixed(2)} €</div>
             </div>
             <SelectField label={t("status")} value={form.estado} onChange={set("estado")} options={["pendiente","pagado","parcial","devuelto"].map(s=>({value:s,label:s}))} testid="payment-estado" />
-            <Field label={t("iban")} value={form.iban} onChange={set("iban")} testid="payment-iban" />
+            <Field label={t("iban")} value={form.iban} onChange={set("iban")} testid="payment-iban" placeholder="ES00 0000 0000 0000 0000 0000" />
+            <p className="sm:col-span-2 -mt-2 text-xs text-slate-500" data-testid="payment-iban-help">{t("ibanProtectedHelp")}</p>
             <Field label={t("paymentDate")} type="date" value={form.fecha_pago} onChange={set("fecha_pago")} testid="payment-fecha" />
             <SwitchField label="IBAN validado" checked={form.iban_validado} onChange={set("iban_validado")} testid="payment-iban-val" />
             <SwitchField label="Recibo generado" checked={form.recibo_generado} onChange={set("recibo_generado")} testid="payment-recibo" />

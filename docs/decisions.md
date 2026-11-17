@@ -11,3 +11,4 @@ Cada documento debe indicar contexto, decisión, consecuencias, riesgos o altern
 - [003 — Publicación segura](decisions/003-safe-release.md)
 - [005 — Onboarding y recepción de autorizaciones familiares](decisions/005-family-authorization-onboarding.md)
 - [006 — Selección segura del progenitor firmante](decisions/006-family-authorization-signer-selection.md)
+- [010 — Cifrado de IBAN en pagos](decisions/010-payment-iban-encryption.md)
