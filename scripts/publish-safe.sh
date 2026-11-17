@@ -29,6 +29,7 @@ published_build=0
 backend_changed=0
 backend_released=0
 backend_backup=""
+backend_backup_ref=""
 previous_build_backup=""
 release_stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 
@@ -80,7 +81,9 @@ rollback() {
       tar -xf "$backend_backup" -C .
       echo "Rollback: versiones previas de backend restauradas desde $backend_backup." >&2
     fi
-    systemctl restart ikastxiki-backend.service || echo "Rollback: no se pudo reiniciar ikastxiki-backend.service; reinícialo manualmente." >&2
+    sudo -n systemctl restart ikastxiki-backend.service || echo "Rollback: no se pudo reiniciar ikastxiki-backend.service; reinícialo manualmente." >&2
+    echo "IMPORTANTE: backend/ quedó como la versión anterior, distinta del commit publicado." >&2
+    echo "Antes de volver a publicar ejecuta: git restore -- backend" >&2
   fi
   echo "Rollback terminado. Revisa git status y el health endpoint antes de reintentar." >&2
   exit 1
@@ -112,6 +115,22 @@ for file in $(git diff --cached --name-only --diff-filter=ACMR); do
     die "No se ha hecho commit ni publicación."
   fi
 done
+
+# Si el backend en marcha no corresponde al último commit (por ejemplo, tras un
+# reinicio fallido), se reinicia aunque este commit no toque backend/.
+running_version=$(curl -fsS --max-time 3 http://127.0.0.1:8003/api/health 2>/dev/null \
+  | sed -n 's/.*"version":"\([0-9a-f]\{7,40\}\)".*/\1/p' || true)
+if (( ! backend_changed )) && [[ -n "$running_version" ]] \
+  && git cat-file -e "${running_version}^{commit}" 2>/dev/null \
+  && ! git diff --quiet "$running_version" HEAD -- backend; then
+  backend_changed=1
+  backend_backup_ref=$running_version
+  echo "El backend en marcha (${running_version:0:7}) no coincide con HEAD en backend/: se reiniciará al publicar."
+fi
+if (( backend_changed && ! dry_run )); then
+  say "Contraseña de sudo (se pide ahora para reiniciar el backend al final)"
+  sudo -v || die "Sin permisos de sudo no se puede reiniciar el backend. No se ha hecho commit ni publicación."
+fi
 
 message_file=$(mktemp)
 printf '%s\n' "$message" > "$message_file"
@@ -150,7 +169,7 @@ git push origin main || rollback "falló git push origin main"
 mkdir -p -- "$RELEASE_BACKUPS_DIR"
 if (( backend_changed )); then
   backend_backup="$RELEASE_BACKUPS_DIR/backend-$release_stamp.tar"
-  git archive --format=tar "$previous_commit" backend > "$backend_backup"
+  git archive --format=tar "${backend_backup_ref:-$previous_commit}" backend > "$backend_backup"
 fi
 if [[ -d "$BUILD_DIR" ]]; then
   previous_build_backup="$RELEASE_BACKUPS_DIR/build-$release_stamp"
@@ -161,7 +180,7 @@ temporary_build=""
 published_build=1
 find "$BUILD_DIR" -type d -exec chmod 755 {} +
 find "$BUILD_DIR" -type f -exec chmod 644 {} +
-if (( backend_changed )); then backend_released=1; systemctl restart ikastxiki-backend.service || rollback "falló el reinicio de ikastxiki-backend.service"; fi
+if (( backend_changed )); then backend_released=1; sudo systemctl restart ikastxiki-backend.service || rollback "falló el reinicio de ikastxiki-backend.service"; fi
 # El backend tarda unos segundos en arrancar: reintenta antes de declarar fallo.
 health_ok=0
 for _ in {1..30}; do
