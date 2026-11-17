@@ -1,14 +1,16 @@
 import React, { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Euro, Plus, Pencil, Trash2, Landmark } from "lucide-react";
+import { Euro, Plus, Pencil, Trash2, Landmark, Search } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
 import { PermissionGate, usePermission } from "@/auth";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { PageHeader, StatusBadge, EmptyState } from "@/components/shared";
 import { Field, Area, SelectField, SwitchField } from "@/components/form";
+import { matchesSearch } from "@/lib/textSearch";
 
 const empty = { concepto: "Cuota temporada", estado: "pendiente", importe_base: 0, descuento_hermano: 0, titular_cuenta: "", iban_validado: false, recibo_generado: false };
 
@@ -21,6 +23,7 @@ const Payments = () => {
   const [holderCatalog, setHolderCatalog] = useState({});
   const [dialog, setDialog] = useState(false);
   const [form, setForm] = useState(empty);
+  const [search, setSearch] = useState("");
 
   const load = async () => setPayments((await api.get("/payments")).data);
   useEffect(() => {
@@ -66,6 +69,7 @@ const Payments = () => {
   const holderOptions = form.titular_cuenta && !canonicalHolderOptions.some((item) => item.value === form.titular_cuenta)
     ? [{ value: form.titular_cuenta, label: `${form.titular_cuenta} · histórico` }, ...canonicalHolderOptions]
     : canonicalHolderOptions;
+  const visiblePayments = payments.filter((p) => matchesSearch(search, [p.player_nombre, p.titular_cuenta, p.concepto, p.estado, p.forma_pago]));
   const totalPend = payments.filter(p => ["pendiente","parcial"].includes(p.estado)).reduce((s, p) => s + (p.importe_final || 0), 0);
 
   return (
@@ -81,6 +85,11 @@ const Payments = () => {
           <div className="surface-card p-4"><p className="text-xs font-bold uppercase text-slate-500">Cuentas bancarias protegidas</p><p className="mt-1 text-2xl font-bold text-primary">{payments.filter(p => p.cuenta_protegida).length}</p></div>
           <div className="surface-card p-4 sm:col-span-2"><p className="flex items-center gap-2 text-sm text-slate-600"><Landmark className="h-4 w-4 text-primary" />Los IBAN históricos se muestran enmascarados y no representan deudas ni recibos.</p></div>
         </div>
+        <label className="relative mb-4 block">
+          <span className="sr-only">{t("paymentsSearchPlaceholder")}</span>
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" aria-hidden="true" />
+          <Input data-testid="payment-search" placeholder={t("paymentsSearchPlaceholder")} value={search} onChange={(e) => setSearch(e.target.value)} className="h-11 pl-10" />
+        </label>
         <div className="surface-card overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -97,7 +106,10 @@ const Payments = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {payments.map((p) => (
+                {visiblePayments.length === 0 && (
+                  <tr><td colSpan={8} className="px-4 py-6 text-center text-slate-500" data-testid="payment-search-empty">{t("noSearchResults")}</td></tr>
+                )}
+                {visiblePayments.map((p) => (
                   <tr key={p.id} data-testid={`payment-row-${p.id}`} className="hover:bg-slate-50">
                     <td className="px-4 py-3 font-semibold text-slate-800">{p.player_nombre}</td>
                     <td className="px-4 py-3 font-semibold text-slate-800">{p.titular_cuenta || "—"}</td>

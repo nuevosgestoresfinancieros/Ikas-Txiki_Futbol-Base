@@ -96,3 +96,39 @@ test("edits the account holder while showing player and holder separately", asyn
   }));
   await act(async () => root.unmount());
 });
+
+test("filters payments by player or account holder ignoring accents", async () => {
+  api.get.mockImplementation((url) => {
+    if (url === "/payments") return Promise.resolve({ data: [
+      { id: "p-1", player_id: "player-1", player_nombre: "Ane Histórica", titular_cuenta: "Ana Primera", concepto: "Cuota temporada", estado: "pendiente", importe_final: 10 },
+      { id: "p-2", player_id: "player-2", player_nombre: "Jon Nuevo", titular_cuenta: "Bea Segunda", concepto: "Cuota temporada", estado: "pagado", importe_final: 20 },
+    ] });
+    if (url === "/players") return Promise.resolve({ data: players });
+    if (url === "/payments/holders") return Promise.resolve({ data: holders });
+    return Promise.resolve({ data: [] });
+  });
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  await act(async () => root.render(
+    <AuthProvider user={admin}><I18nProvider><Payments /></I18nProvider></AuthProvider>
+  ));
+  await flush();
+  const input = container.querySelector('[data-testid="payment-search"]');
+  const type = async (value) => {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+    await act(async () => { setter.call(input, value); input.dispatchEvent(new Event("input", { bubbles: true })); });
+  };
+
+  await type("historica");
+  expect(container.querySelector('[data-testid="payment-row-p-1"]')).not.toBeNull();
+  expect(container.querySelector('[data-testid="payment-row-p-2"]')).toBeNull();
+
+  await type("bea");
+  expect(container.querySelector('[data-testid="payment-row-p-1"]')).toBeNull();
+  expect(container.querySelector('[data-testid="payment-row-p-2"]')).not.toBeNull();
+
+  await type("nadie");
+  expect(container.querySelector('[data-testid="payment-search-empty"]')).not.toBeNull();
+  act(() => root.unmount());
+});

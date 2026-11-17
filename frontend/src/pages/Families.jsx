@@ -1,17 +1,19 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Home, Plus, Pencil, Trash2, Phone, Mail } from "lucide-react";
+import { Home, Plus, Pencil, Trash2, Phone, Mail, Search } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/api";
 import { PermissionGate, usePermission } from "@/auth";
 import { useI18n } from "@/i18n";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { FamilyAccessAdministration, FamilyAccesses } from "@/components/families/FamilyAccesses";
 import FamilyCampaignOperations from "@/components/families/FamilyCampaignOperations";
 import FamilyDuplicateReview from "@/components/families/FamilyDuplicateReview";
 import { PageHeader, EmptyState } from "@/components/shared";
 import { Field, Area, SelectField } from "@/components/form";
+import { matchesSearch } from "@/lib/textSearch";
 
 const empty = { preferencia_comunicacion: "email" };
 
@@ -26,6 +28,7 @@ const Families = () => {
   const [dialog, setDialog] = useState(false);
   const [form, setForm] = useState(empty);
   const [isPersisted, setIsPersisted] = useState(false);
+  const [search, setSearch] = useState("");
   const openedSearchResult = useRef("");
 
   const load = async () => setFamilies((await api.get("/families")).data);
@@ -51,6 +54,12 @@ const Families = () => {
   };
   const remove = async (f) => { if (!window.confirm(t("confirmDelete"))) return; await api.delete(`/families/${f.id}`); toast.success(t("deleted")); load(); };
 
+  const visibleFamilies = families.filter((f) => matchesSearch(search, [
+    f.progenitor1_nombre, f.progenitor2_nombre, f.contacto_principal,
+    f.progenitor1_telefono, f.progenitor2_telefono, f.progenitor1_email, f.progenitor2_email,
+    ...(f.hijos || []).map((h) => h.nombre),
+  ]));
+
   const commOptions = [
     { value: "email", label: "Email" }, { value: "telefono", label: t("phone") }, { value: "telegram", label: "Telegram" },
     ...(form.preferencia_comunicacion === "whatsapp" ? [{ value: "whatsapp", label: "WhatsApp (histórico)" }] : []),
@@ -67,8 +76,15 @@ const Families = () => {
       {families.length === 0 ? (
         <EmptyState icon={Home} message={t("noData")} action={canCreate ? <Button onClick={openNew} className="h-11"><Plus className="h-5 w-5" />{t("add")}</Button> : null} />
       ) : (
+        <>
+        <label className="relative mb-4 block">
+          <span className="sr-only">{t("familiesSearchPlaceholder")}</span>
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" aria-hidden="true" />
+          <Input data-testid="family-search" placeholder={t("familiesSearchPlaceholder")} value={search} onChange={(e) => setSearch(e.target.value)} className="h-11 pl-10" />
+        </label>
+        {visibleFamilies.length === 0 && <p className="surface-card p-6 text-center text-sm text-slate-500" data-testid="family-search-empty">{t("noSearchResults")}</p>}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {families.map((f) => (
+          {visibleFamilies.map((f) => (
             <div key={f.id} data-testid={`family-card-${f.id}`} className="surface-card interactive-card p-5">
               <div className="flex items-start justify-between">
                 <div>
@@ -93,6 +109,7 @@ const Families = () => {
             </div>
           ))}
         </div>
+        </>
       )}
 
       <Dialog open={dialog} onOpenChange={setDialog}>
