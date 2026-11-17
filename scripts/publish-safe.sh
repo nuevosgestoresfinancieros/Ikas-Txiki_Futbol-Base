@@ -162,7 +162,13 @@ published_build=1
 find "$BUILD_DIR" -type d -exec chmod 755 {} +
 find "$BUILD_DIR" -type f -exec chmod 644 {} +
 if (( backend_changed )); then backend_released=1; systemctl restart ikastxiki-backend.service || rollback "falló el reinicio de ikastxiki-backend.service"; fi
-curl -fsS http://127.0.0.1:8003/api/health >/dev/null || rollback "falló la comprobación de salud"
+# El backend tarda unos segundos en arrancar: reintenta antes de declarar fallo.
+health_ok=0
+for _ in {1..30}; do
+  if curl -fsS --max-time 3 http://127.0.0.1:8003/api/health >/dev/null; then health_ok=1; break; fi
+  sleep 1
+done
+(( health_ok )) || rollback "falló la comprobación de salud"
 
 say "PUBLICACIÓN COMPLETADA"
 echo "Build publicado: $BUILD_DIR"
