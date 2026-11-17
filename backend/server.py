@@ -2435,11 +2435,23 @@ class SeasonCopyRequest(BaseModel):
         return self
 
 
+async def _team_modality_code(value: Any) -> Optional[str]:
+    """Normaliza la modalidad de un equipo contra el catálogo activo (o ``None``)."""
+    if value is None or not str(value).strip():
+        return None
+    normalized = normalize_modality(value, await _load_modality_catalog())
+    if normalized.status != "recognized" or not normalized.active:
+        raise HTTPException(status_code=422, detail="La modalidad no existe o está inactiva")
+    return normalized.code
+
+
 @api_router.post("/teams")
 async def create_team(team: Team):
     if normalized_key(team.nombre) == "no aplica":
         raise HTTPException(status_code=422, detail="NO APLICA no es un equipo gestionable")
-    return await insert_doc("teams", team.model_dump())
+    data = team.model_dump()
+    data["modalidad"] = await _team_modality_code(data.get("modalidad"))
+    return await insert_doc("teams", data)
 
 
 @api_router.post("/teams/season-copy")
@@ -2631,7 +2643,13 @@ async def get_team(team_id: str):
 async def edit_team(team_id: str, team: Team):
     if normalized_key(team.nombre) == "no aplica":
         raise HTTPException(status_code=422, detail="NO APLICA no es un equipo gestionable")
-    updated = await update_doc("teams", team_id, team.model_dump())
+    data = team.model_dump()
+    if "modalidad" in team.model_fields_set:
+        data["modalidad"] = await _team_modality_code(data.get("modalidad"))
+    else:
+        # Un cliente que no envía la modalidad no debe borrar la existente.
+        data.pop("modalidad", None)
+    updated = await update_doc("teams", team_id, data)
     if updated.get("temporada"):
         await db[TEAM_MEMBERSHIPS_COLLECTION].update_many(
             {"team_id": team_id},
@@ -2844,7 +2862,10 @@ async def _match_report_context(match_id: str) -> dict:
     catalog = await _load_modality_catalog()
     normalized_modality = normalize_modality(match.get("modalidad") or team.get("modalidad"), catalog)
     if normalized_modality.status != "recognized" or not normalized_modality.active:
-        raise HTTPException(status_code=422, detail="El partido no tiene una modalidad F7 o F11 activa")
+        raise HTTPException(status_code=422, detail=(
+            f"El equipo {team.get('nombre') or 'del partido'} no tiene modalidad (F7 o F11). "
+            "Asígnala en Equipos → editar equipo."
+        ))
     try:
         periods = period_configuration(normalized_modality.code)
     except MatchReportValidationError as exc:

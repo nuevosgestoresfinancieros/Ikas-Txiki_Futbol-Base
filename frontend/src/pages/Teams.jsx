@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { PageHeader, StatusBadge, EmptyState } from "@/components/shared";
 import { Field, SelectField } from "@/components/form";
+import { modalitySuggestion, withSuggestedModality } from "@/lib/modality";
 
 const empty = { nombre: "", estado: "activo", limite_jugadores: 20 };
 const UNASSIGNED_SEASON = "__sin_temporada__";
@@ -25,10 +26,11 @@ const Datalist = ({ id, values }) => (
 
 const Teams = () => {
   const canCreate = usePermission("teams", "create");
-  const { t } = useI18n();
+  const { t, lang } = useI18n();
   const [params, setParams] = useSearchParams();
   const [teams, setTeams] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [modalities, setModalities] = useState([]);
   const [settings, setSettings] = useState({ temporadas: [], campos: [], entrenadores: [] });
   const [dialog, setDialog] = useState(false);
   const [seasonCopyDialog, setSeasonCopyDialog] = useState(false);
@@ -61,11 +63,22 @@ const Teams = () => {
     Promise.all([api.get("/categories"), api.get("/catalog-options")])
       .then(([cat, cfg]) => { setCategories(cat.data); setSettings(cfg.data || {}); })
       .catch(() => { /* Los equipos siguen siendo utilizables aunque falle el catálogo auxiliar. */ });
+    api.get("/modalities").then((r) => setModalities(r.data || [])).catch(() => setModalities([]));
     if (params.get("new") && canCreate) { setForm(empty); setDialog(true); params.delete("new"); setParams(params); }
     // eslint-disable-next-line
   }, []);
 
   const set = (k) => (v) => setForm((f) => ({ ...f, [k]: v }));
+  const setCategory = (value) => setForm((f) => ({
+    ...f, categoria: value,
+    // Al cambiar de categoría se propone su modalidad si no se había elegido una a mano.
+    modalidad: !f.modalidad || f.modalidad === modalitySuggestion(f.categoria) ? (modalitySuggestion(value) || f.modalidad || "") : f.modalidad,
+  }));
+  const modalityName = (code) => {
+    const entry = modalities.find((m) => m.code === code);
+    return entry ? (lang === "eu" ? entry.name_eu : entry.name_es) || code : code;
+  };
+  const modalityOptions = [{ value: "none", label: t("noModality") }, ...modalities.map((m) => ({ value: m.code, label: modalityName(m.code) }))];
   const openNew = () => { setForm(empty); setDialog(true); };
   const nextSeason = (value) => {
     const text = String(value || "").trim();
@@ -105,11 +118,17 @@ const Teams = () => {
       setSeasonCopying(false);
     }
   };
-  const openEdit = (t) => { setForm(t); setDialog(true); };
+  const openEdit = (t) => { setForm(withSuggestedModality(t)); setDialog(true); };
   const save = async () => {
     if (!form.nombre?.trim()) { toast.error("Nombre obligatorio"); return; }
-    if (form.id) await api.put(`/teams/${form.id}`, form);
-    else await api.post("/teams", form);
+    try {
+      if (form.id) await api.put(`/teams/${form.id}`, form);
+      else await api.post("/teams", form);
+    } catch (error) {
+      const detail = error.response?.data?.detail;
+      toast.error(typeof detail === "string" ? detail : t("saveError"));
+      return;
+    }
     toast.success(t("saved")); setDialog(false); load();
   };
   const remove = async (tm) => { if (!window.confirm(t("confirmDelete"))) return; await api.delete(`/teams/${tm.id}`); toast.success(t("deleted")); load(); };
@@ -303,6 +322,7 @@ const Teams = () => {
                   <div>
                     <p className="font-heading font-bold text-slate-900">{tm.nombre}</p>
                     <p className="text-xs text-slate-500">{tm.categoria || "—"} · {tm.temporada || "—"}</p>
+                    <span data-testid={`team-modality-${tm.id}`} className={`mt-1 inline-block rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${tm.modalidad ? "bg-sky-100 text-sky-800" : "bg-amber-100 text-amber-800"}`}>{tm.modalidad ? modalityName(tm.modalidad) : t("noModality")}</span>
                   </div>
                 </div>
                 <StatusBadge status={tm.estado} />
@@ -375,7 +395,8 @@ const Teams = () => {
           <Datalist id="team-coaches-list" values={coachOptions} />
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
             <Field label={t("name")} value={form.nombre} onChange={set("nombre")} testid="team-nombre" />
-            <SelectField label={t("category")} value={form.categoria} onChange={set("categoria")} options={categories.map(c=>({value:c.name,label:c.name}))} testid="team-categoria" />
+            <SelectField label={t("category")} value={form.categoria} onChange={setCategory} options={categories.map(c=>({value:c.name,label:c.name}))} testid="team-categoria" />
+            <SelectField label={t("modality")} value={form.modalidad || "none"} onChange={(v) => set("modalidad")(v === "none" ? "" : v)} options={modalityOptions} testid="team-modalidad" />
             <Field label={t("season")} value={form.temporada} onChange={set("temporada")} testid="team-temporada" list="team-seasons-list" placeholder="2026-2027" />
             <SelectField label={t("status")} value={form.estado} onChange={set("estado")} options={["activo","cerrado","pendiente"].map(s=>({value:s,label:s}))} testid="team-estado" />
             <Field label={t("coach")} value={form.entrenador} onChange={set("entrenador")} testid="team-entrenador" list="team-coaches-list" />

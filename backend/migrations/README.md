@@ -180,3 +180,21 @@ explícita:
 ```
 
 Para revertir, restaure la colección `payments` desde esa copia.
+
+## Modalidad de equipos por categoría
+
+`012_team_modality_from_category.py` asigna F7/F11 a los equipos sin modalidad
+según su categoría, con la misma regla que la importación. No cambia
+modalidades ya asignadas, omite el marcador «NO APLICA» y deja las categorías
+no reconocidas para revisión manual. Por defecto solo informa:
+
+```bash
+../venv/bin/python migrations/012_team_modality_from_category.py
+```
+
+Aplicarla requiere una copia lógica previa de `teams` y autorización explícita:
+
+```bash
+../venv/bin/python migrations/012_team_modality_from_category.py --apply \
+  --confirm ASSIGN-TEAM-MODALITY
+```
