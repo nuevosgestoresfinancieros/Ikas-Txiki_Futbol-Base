@@ -2696,9 +2696,20 @@ async def get_matches(equipo_id: Optional[str] = None, estado: Optional[str] = N
     if estado:
         query["estado"] = estado
     matches = await list_docs("matches", query)
-    teams = {t["id"]: t["nombre"] for t in await list_docs("teams")}
+    teams = {t["id"]: t for t in await list_docs("teams")}
+    # Estado del acta (sin datos de participantes) para mostrarlo en la lista.
+    match_ids = [m["id"] for m in matches if m.get("id")]
+    report_status: Dict[str, Any] = {}
+    if match_ids:
+        rows = await db.match_reports.find(
+            {"match_id": {"$in": match_ids}}, {"_id": 0, "match_id": 1, "status": 1},
+        ).to_list(len(match_ids))
+        report_status = {row.get("match_id"): row.get("status") for row in rows}
     for m in matches:
-        m["equipo_nombre"] = teams.get(m.get("equipo_id"), "—")
+        team = teams.get(m.get("equipo_id")) or {}
+        m["equipo_nombre"] = team.get("nombre") or "—"
+        m["equipo_temporada"] = team.get("temporada")
+        m["acta_estado"] = report_status.get(m.get("id"))
     return matches
 
 
