@@ -10,23 +10,26 @@ import { STATUS_LABELS, useI18n } from "@/i18n";
 import { Field, Area, SelectField, SwitchField } from "@/components/form";
 import { initials } from "@/components/shared";
 import { optimizeImage } from "@/lib/image";
+import { selectableTeams, teamLabel } from "@/lib/teamOptions";
 
 const empty = {
   nombre: "", apellidos: "", estado: "pendiente_documentacion", estado_documental: "pendiente",
   nueva_incorporacion: false, segundo_hermano: false, equipacion_entregada: false, descuento: 0,
 };
 
-const PlayerDialog = ({ open, onClose, player, teams, onSaved, season = "" }) => {
+const PlayerDialog = ({ open, onClose, player, teams, onSaved, season = "", currentSeason = "" }) => {
   const { t, lang } = useI18n();
   const [form, setForm] = useState(empty);
   const [tab, setTab] = useState("personal");
   const [nameError, setNameError] = useState("");
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [showAllSeasons, setShowAllSeasons] = useState(false);
 
   useEffect(() => {
     setForm(player ? { ...empty, ...player } : empty);
     setTab("personal");
+    setShowAllSeasons(false);
     setNameError("");
     setDirty(false);
   }, [player, open]);
@@ -74,8 +77,9 @@ const PlayerDialog = ({ open, onClose, player, teams, onSaved, season = "" }) =>
     onClose();
   };
 
-  const seasonTeams = season ? teams.filter((tm) => tm.temporada === season) : teams;
-  const teamOptions = [{ value: "none", label: t("none") }, ...seasonTeams.map((tm) => ({ value: tm.id, label: tm.nombre }))];
+  const listSeason = season || currentSeason;
+  const seasonTeams = selectableTeams(teams, { season: listSeason, selectedId: form.equipo_id, showAll: showAllSeasons });
+  const teamOptions = [{ value: "none", label: t("none") }, ...seasonTeams.map((tm) => ({ value: tm.id, label: teamLabel(tm, t("noSeason")) }))];
   const statusLabel = (status) => STATUS_LABELS[lang]?.[status] || status;
 
   return (
@@ -135,7 +139,10 @@ const PlayerDialog = ({ open, onClose, player, teams, onSaved, season = "" }) =>
 
           <TabsContent value="sport" className="space-y-4 pt-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <SelectField label={t("team")} value={form.equipo_id || "none"} onChange={(v) => set("equipo_id")(v === "none" ? "" : v)} options={teamOptions} testid="player-equipo" />
+              <div className="space-y-2">
+                <SelectField label={t("team")} value={form.equipo_id || "none"} onChange={(v) => set("equipo_id")(v === "none" ? "" : v)} options={teamOptions} testid="player-equipo" />
+                {listSeason && <SwitchField label={t("showOtherSeasonTeams")} checked={showAllSeasons} onChange={setShowAllSeasons} testid="player-equipo-all-seasons" />}
+              </div>
               <SelectField label={t("status")} value={form.estado} onChange={set("estado")}
                 options={["activo","baja","lesionado","pendiente_documentacion","en_prueba"].map(s=>({value:s,label:statusLabel(s)}))} testid="player-estado" />
               <Field label={t("number")} value={form.dorsal} onChange={set("dorsal")} testid="player-dorsal" />

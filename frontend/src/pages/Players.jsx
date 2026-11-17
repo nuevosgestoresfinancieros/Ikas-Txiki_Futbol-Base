@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/select";
 import { PageHeader, StatusBadge, EmptyState, initials } from "@/components/shared";
 import PlayerDialog from "@/pages/PlayerDialog";
+import { sortTeamsBySeason, teamLabel } from "@/lib/teamOptions";
 
 const Players = () => {
   const canCreate = usePermission("players", "create");
@@ -20,6 +21,7 @@ const Players = () => {
   const [players, setPlayers] = useState([]);
   const [teams, setTeams] = useState([]);
   const [categories, setCategories] = useState([]);
+  const [currentSeason, setCurrentSeason] = useState("");
   const [q, setQ] = useState("");
   const [debouncedQ, setDebouncedQ] = useState("");
   const [fEstado, setFEstado] = useState(params.get("estado") || "all");
@@ -58,6 +60,7 @@ const Players = () => {
     const [tm, cat] = await Promise.all([api.get("/teams"), api.get("/categories")]);
     setTeams(tm.data);
     setCategories(cat.data);
+    api.get("/public/branding").then((r) => setCurrentSeason(r.data?.temporada_actual || "")).catch(() => setCurrentSeason(""));
   };
 
   useEffect(() => { loadMeta(); }, []);
@@ -119,7 +122,7 @@ const Players = () => {
           <SelectTrigger className="h-11 sm:w-44" data-testid="filter-equipo"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">{t("team")}: {t("all")}</SelectItem>
-            {teams.filter((tm) => !temporada || tm.temporada === temporada).map(tm=><SelectItem key={tm.id} value={tm.id}>{tm.nombre}</SelectItem>)}
+            {sortTeamsBySeason(teams.filter((tm) => !temporada || tm.temporada === temporada), temporada || currentSeason).map(tm=><SelectItem key={tm.id} value={tm.id}>{teamLabel(tm, t("noSeason"))}</SelectItem>)}
           </SelectContent>
         </Select>
         <Select value={fCat} onValueChange={setFCat}>
@@ -232,7 +235,7 @@ const Players = () => {
         </>
       )}
 
-      <PlayerDialog open={dialog} onClose={() => setDialog(false)} player={editing} teams={teams} season={temporada} onSaved={load} />
+      <PlayerDialog open={dialog} onClose={() => setDialog(false)} player={editing} teams={teams} season={temporada} currentSeason={currentSeason} onSaved={load} />
     </div>
   );
 };
